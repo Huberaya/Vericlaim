@@ -3,6 +3,7 @@ import type {
   ApiKeyListResponse,
   AuditContext,
   AuditHistoryResponse,
+  AuditVerificationResponse,
   CatalogBatchRequest,
   CatalogBatchResponse,
   ContractAddendumResponse,
@@ -493,4 +494,14 @@ export async function generateContractAddendum(params: {
     throw new Error(detail);
   }
   return (await response.json()) as ContractAddendumResponse;
+}
+
+export async function verifyAuditPublic(auditId: string): Promise<AuditVerificationResponse> {
+  const response = await fetch(requestUrl(`/api/v1/engine/verify/${encodeURIComponent(auditId)}`), {
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    throw new Error(`Échec de vérification (${response.status})`);
+  }
+  return (await response.json()) as AuditVerificationResponse;
 }

@@ -33,7 +33,7 @@ pytest -v
 
 Le fichier `backend/pytest.ini` résout automatiquement le `PYTHONPATH`. Si PostgreSQL n'est pas démarré, le backend bascule automatiquement sur SQLite local (`vericlaim.db`) sans configuration requise.
 
-Résultat validé dans le workspace : **35 tests passants (100% de réussite)**.
+Résultat validé dans le workspace : **36 tests passants (100% de réussite)**.
 
 ### Export PDF de l'attestation d'audit
 
@@ -119,6 +119,12 @@ L'architecture supporte le cloisonnement étanche multi-organisations via l'en-t
 
 - **Webhooks d'Alerte (`app/core/webhooks.py`)** : émission automatique d'alertes signées par HMAC-SHA256 (`t={timestamp},v1={hash}`) lors de la détection d'infractions critiques (`audit.violation_detected`) ou à l'achèvement d'audits (`audit.completed`). Gestion complète des abonnements et ping de test.
 - **Générateur d'Avenant Fournisseur Anti-Greenwashing** : endpoint `POST /api/v1/engine/remediation/contract-addendum` et interface dédiée pour produire instantanément l'avenant contractuel exécutoire complet (garantie d'éviction, prise en charge intégrale des amendes DGCCRF jusqu'à 1 500 000 € ou 10 % du CA, pénalités forfaitaires de 15 000 € par SKU non conforme).
+
+### Portail Public de Vérification & Sceau d'Opposabilité
+
+- **Vérification d'authenticité (`/api/v1/engine/verify/{audit_id}`)** : permet à toute autorité de contrôle (DGCCRF, auditeur externe, distributeur, client final) de vérifier publiquement l'authenticité d'une attestation PDF ou d'un rapport d'audit.
+- **Détection des altérations et ruptures de chaîne** : re-calcul à la volée du chaînage de blocs cryptographiques du ledger (`record_hash`) et comparaison de l'empreinte SHA-256 du texte source et du rapport pour détecter toute falsification (`TAMPERED` vs `CERTIFIED`).
+- **Interface UI dédiée** : onglet « Vérification d'Attestation » dans le dashboard pour contrôler en un clic n'importe quel identifiant d'audit ou certificat.
 
 ### Intégration Continue (CI/CD GitHub Actions)
 

@@ -34,6 +34,7 @@ from app.core.security import (
     require_scopes,
 )
 from app.core.webhooks import dispatch_webhook_event, generate_webhook_secret
+from app.engine.audit_verifier import verify_audit_record
 from app.engine.document_extractor import DocumentExtractionError, DocumentTextExtractor
 from app.engine.legal_remediation import generate_supplier_contract_addendum
 from app.engine.pdf_exporter import generate_audit_pdf
@@ -52,6 +53,8 @@ from app.models.schemas import (
     AuditContext,
     AuditHistoryItem,
     AuditHistoryResponse,
+    AuditVerificationRequest,
+    AuditVerificationResponse,
     CatalogBatchRequest,
     CatalogBatchResponse,
     CatalogItemInput,
@@ -1202,3 +1205,20 @@ def generate_contract_addendum_endpoint(
         contract_reference=body.contract_reference,
     )
     return ContractAddendumResponse(**addendum)
+
+
+@router.get("/verify/{audit_id}", response_model=AuditVerificationResponse)
+def verify_audit_public(audit_id: str, db: Session = Depends(get_db)) -> AuditVerificationResponse:
+    """Portail public de vérification cryptographique et d'opposabilité d'une attestation d'audit."""
+    result = verify_audit_record(db, audit_id)
+    return AuditVerificationResponse(**result.to_dict())
+
+
+@router.post("/verify", response_model=AuditVerificationResponse)
+def verify_audit_dossier(
+    body: AuditVerificationRequest,
+    db: Session = Depends(get_db),
+) -> AuditVerificationResponse:
+    """Vérifie l'intégrité intégrale d'un rapport d'audit et détecte toute altération du texte ou des métadonnées."""
+    result = verify_audit_record(db, body.audit_id, supplied_report_json=body.report_json)
+    return AuditVerificationResponse(**result.to_dict())

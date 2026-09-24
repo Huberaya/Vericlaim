@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -278,3 +279,25 @@ class ContractAddendumResponse(BaseModel):
     total_exposure_eur: int
     articles_count: int
     markdown_content: str
+
+
+class AuditVerificationRequest(BaseModel):
+    audit_id: str = Field(min_length=8, max_length=64)
+    report_json: dict[str, Any] | None = None
+
+
+class AuditVerificationResponse(BaseModel):
+    audit_id: str
+    is_valid: bool
+    status: str
+    message: str
+    created_at_utc: datetime | None = None
+    organization_id: str | None = None
+    source_sha256: str | None = None
+    report_sha256: str | None = None
+    record_hash: str | None = None
+    chain_verified: bool = False
+    overall_compliance: str | None = None
+    risk_score: int | None = None
+    violations_count: int | None = None
+    verification_timestamp_utc: datetime

@@ -460,3 +460,20 @@ export type ContractAddendumResponse = {
   articles_count: number;
   markdown_content: string;
 };
+
+export type AuditVerificationResponse = {
+  audit_id: string;
+  is_valid: boolean;
+  status: "CERTIFIED" | "TAMPERED" | "NOT_FOUND";
+  message: string;
+  created_at_utc: string | null;
+  organization_id: string | null;
+  source_sha256: string | null;
+  report_sha256: string | null;
+  record_hash: string | null;
+  chain_verified: boolean;
+  overall_compliance: OverallCompliance | null;
+  risk_score: number | null;
+  violations_count: number | null;
+  verification_timestamp_utc: string;
+};

@@ -1119,3 +1119,61 @@ def test_supplier_contract_addendum_generation():
         assert "sans produit chimique" in md
 
 
+def test_cryptographic_audit_verification_portal():
+    from app.main import app
+
+    with TestClient(app) as client:
+        # 1. Génération d'un audit réel
+        audit_resp = client.post(
+            "/api/v1/engine/evaluate",
+            json={
+                "source_text": "Flacon 100% biodégradable.",
+                "context": {"supplier_name": "Test Lab", "product_identifier": "SKU-V-01"},
+            },
+        )
+        assert audit_resp.status_code == 200
+        audit_data = audit_resp.json()
+        audit_id = audit_data["audit_trail"]["audit_id"]
+        original_hash = audit_data["audit_trail"]["record_hash"]
+
+        # 2. Vérification publique par audit_id
+        verify_pub = client.get(f"/api/v1/engine/verify/{audit_id}")
+        assert verify_pub.status_code == 200
+        pub_data = verify_pub.json()
+        assert pub_data["is_valid"] is True
+        assert pub_data["status"] == "CERTIFIED"
+        assert pub_data["chain_verified"] is True
+        assert pub_data["record_hash"] == original_hash
+        assert pub_data["overall_compliance"] == "NON_COMPLIANT"
+
+        # 3. Vérification avec document officiel intègre
+        verify_exact = client.post(
+            "/api/v1/engine/verify",
+            json={"audit_id": audit_id, "report_json": audit_data},
+        )
+        assert verify_exact.status_code == 200
+        assert verify_exact.json()["is_valid"] is True
+        assert verify_exact.json()["status"] == "CERTIFIED"
+
+        # 4. Détection d'altération (Tampering) : tentative de falsification du rapport
+        tampered_data = dict(audit_data)
+        tampered_data["overall_compliance"] = "COMPLIANT"
+        tampered_data["risk_score"] = 0
+        verify_tampered = client.post(
+            "/api/v1/engine/verify",
+            json={"audit_id": audit_id, "report_json": tampered_data},
+        )
+        assert verify_tampered.status_code == 200
+        t_res = verify_tampered.json()
+        assert t_res["is_valid"] is False
+        assert t_res["status"] == "TAMPERED"
+        assert "Altération détectée" in t_res["message"]
+
+        # 5. Tentative de vérification d'un audit inexistant
+        verify_unknown = client.get("/api/v1/engine/verify/00000000-0000-0000-0000-000000000000")
+        assert verify_unknown.status_code == 200
+        assert verify_unknown.json()["status"] == "NOT_FOUND"
+        assert verify_unknown.json()["is_valid"] is False
+
+
+
