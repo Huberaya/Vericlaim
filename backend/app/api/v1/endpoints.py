@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import csv
 import hashlib
+import io
 import json
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile
 from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -36,6 +38,10 @@ from app.models.schemas import (
     SupplierComparisonItem,
     SupplierSubmission,
     UrlAuditRequest,
+    CatalogBatchRequest,
+    CatalogBatchResponse,
+    CatalogItemInput,
+    CatalogItemResult,
 )
 
 
@@ -284,6 +290,208 @@ async def evaluate_ecommerce_url(
         db=db,
         extraction_method="URL_SCRAPER",
         document_sha256=document_sha256,
+    )
+
+
+def _process_catalog_batch(
+    items: list[CatalogItemInput],
+    jurisdiction: str,
+    as_of_date: str | None,
+    consumer_facing: bool,
+    evaluator: Any,
+    db: Session,
+) -> CatalogBatchResponse:
+    results: list[CatalogItemResult] = []
+    total_fines = 0
+    compliant_count = 0
+    non_compliant_count = 0
+    review_required_count = 0
+    total_risk = 0
+
+    for item in items:
+        evidence_items = []
+        if item.has_lca:
+            evidence_items.append({"kind": "lca_report", "standard": "ISO 14044"})
+        if item.ecolabel_license:
+            evidence_items.append({
+                "kind": "ecolabel_certificate",
+                "scheme": "EU_ECOLABEL",
+                "license_number": item.ecolabel_license,
+            })
+        ctx_kwargs: dict[str, Any] = {
+            "jurisdiction": jurisdiction,
+            "surface": item.surface,
+            "consumer_facing": consumer_facing,
+            "product_identifier": item.sku,
+            "supplier_name": item.supplier_name,
+            "product_category": item.category or "packaging",
+        }
+        if as_of_date:
+            ctx_kwargs["as_of_date"] = as_of_date
+        ctx = AuditContext(**ctx_kwargs)
+        dossier = EvidenceDossier(items=evidence_items, legal_person=True)
+        rep = _execute_evaluation(
+            evaluator=evaluator,
+            source_text=item.text,
+            context=ctx,
+            evidence=dossier,
+            db=db,
+            extraction_method="CATALOG_BATCH",
+        )
+        fine_val = int(rep.exposure_matrix.max_known_fixed_fine_eur or 0)
+        total_fines += fine_val
+        total_risk += rep.risk_score
+
+        if rep.overall_compliance == OverallCompliance.COMPLIANT:
+            compliant_count += 1
+        elif rep.overall_compliance == OverallCompliance.NON_COMPLIANT:
+            non_compliant_count += 1
+        else:
+            review_required_count += 1
+
+        claims_list = list({ev.claim_text for ev in rep.evaluations})
+        results.append(
+            CatalogItemResult(
+                sku=item.sku,
+                title=item.title or item.sku,
+                supplier_name=item.supplier_name,
+                overall_compliance=rep.overall_compliance,
+                risk_score=rep.risk_score,
+                detected_claims_count=rep.detected_claims_count,
+                violations_count=rep.violations_count,
+                fines_ceiling_eur=fine_val,
+                summary=rep.legal_exposure_estimate,
+                claims=claims_list,
+            )
+        )
+
+    n = len(items)
+    comp_rate = round((compliant_count / n) * 100, 1) if n > 0 else 0.0
+    avg_risk = round(total_risk / n, 1) if n > 0 else 0.0
+
+    return CatalogBatchResponse(
+        total_items=n,
+        compliant_items=compliant_count,
+        non_compliant_items=non_compliant_count,
+        review_required_items=review_required_count,
+        total_fines_ceiling_eur=total_fines,
+        compliance_rate_pct=comp_rate,
+        average_risk_score=avg_risk,
+        results=results,
+    )
+
+
+@router.post("/evaluate/batch", response_model=CatalogBatchResponse)
+def evaluate_catalog_batch(
+    body: CatalogBatchRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> CatalogBatchResponse:
+    """Audite un lot (batch) de fiches ou références catalogue au format JSON structuré."""
+    evaluator = request.app.state.evaluator
+    return _process_catalog_batch(
+        items=body.items,
+        jurisdiction=body.jurisdiction,
+        as_of_date=body.as_of_date,
+        consumer_facing=body.consumer_facing,
+        evaluator=evaluator,
+        db=db,
+    )
+
+
+@router.post("/evaluate/batch-csv", response_model=CatalogBatchResponse)
+async def evaluate_catalog_batch_csv(
+    file: UploadFile = File(...),
+    request: Request = None,
+    db: Session = Depends(get_db),
+) -> CatalogBatchResponse:
+    """Audite un catalogue de produits importé via un fichier CSV."""
+    content = await file.read()
+    text_content = content.decode("utf-8-sig", errors="replace")
+    
+    # Détection automatique du séparateur (, ou ;)
+    first_line = text_content.split("\n")[0] if text_content else ""
+    delimiter = ";" if ";" in first_line else ","
+    
+    reader = csv.DictReader(io.StringIO(text_content), delimiter=delimiter)
+    items: list[CatalogItemInput] = []
+
+    for row in reader:
+        # Recherche tolérante des noms de colonnes
+        sku = row.get("sku") or row.get("ref") or row.get("id") or row.get("reference") or f"SKU-{len(items)+1}"
+        title = row.get("title") or row.get("nom") or row.get("name") or row.get("produit") or ""
+        text = row.get("text") or row.get("description") or row.get("claim") or row.get("allegation") or ""
+        if not text.strip():
+            continue
+        surface_str = (row.get("surface") or "packaging").strip().lower()
+        surface = Surface.ONLINE_STORE if "online" in surface_str or "web" in surface_str else Surface.PACKAGING
+        supplier = row.get("supplier") or row.get("fournisseur")
+        has_lca = (row.get("has_lca") or row.get("acv") or "").strip().lower() in {"true", "1", "oui", "yes"}
+        ecolabel = row.get("ecolabel") or row.get("license") or None
+
+        items.append(
+            CatalogItemInput(
+                sku=sku.strip(),
+                title=title.strip(),
+                text=text.strip(),
+                surface=surface,
+                supplier_name=supplier.strip() if supplier else None,
+                has_lca=has_lca,
+                ecolabel_license=ecolabel.strip() if ecolabel else None,
+            )
+        )
+
+    if not items:
+        raise HTTPException(
+            status_code=422,
+            detail="Aucune ligne exploitable trouvée dans le CSV. Colonnes supportées : sku/ref, title/nom, text/description, surface, supplier.",
+        )
+
+    evaluator = request.app.state.evaluator
+    return _process_catalog_batch(
+        items=items,
+        jurisdiction="FR",
+        as_of_date=None,
+        consumer_facing=True,
+        evaluator=evaluator,
+        db=db,
+    )
+
+
+@router.post("/export/batch-csv")
+def export_catalog_batch_csv(body: CatalogBatchResponse) -> Response:
+    """Exporte la synthèse de conformité du catalogue au format CSV prêt pour Excel."""
+    output = io.StringIO()
+    writer = csv.writer(output, delimiter=";")
+    writer.writerow([
+        "SKU",
+        "Titre Produit",
+        "Fournisseur",
+        "Statut Conformité",
+        "Score de Risque (/100)",
+        "Allégations Détectées",
+        "Infractions Constatées",
+        "Plafond d'Amende (€)",
+        "Synthèse Réglementaire",
+    ])
+    for item in body.results:
+        writer.writerow([
+            item.sku,
+            item.title,
+            item.supplier_name or "",
+            item.overall_compliance.value,
+            item.risk_score,
+            item.detected_claims_count,
+            item.violations_count,
+            item.fines_ceiling_eur,
+            item.summary,
+        ])
+
+    csv_bytes = output.getvalue().encode("utf-8-sig")
+    return Response(
+        content=csv_bytes,
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="vericlaim_audit_catalogue.csv"'},
     )
 
 

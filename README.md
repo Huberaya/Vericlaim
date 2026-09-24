@@ -33,7 +33,7 @@ pytest -v
 
 Le fichier `backend/pytest.ini` résout automatiquement le `PYTHONPATH`. Si PostgreSQL n'est pas démarré, le backend bascule automatiquement sur SQLite local (`vericlaim.db`) sans configuration requise.
 
-Résultat validé dans le workspace : **27 tests passants (100% de réussite)**.
+Résultat validé dans le workspace : **28 tests passants (100% de réussite)**.
 
 ### Export PDF de l'attestation d'audit
 
@@ -55,6 +55,26 @@ L'API fournit l'endpoint `POST /api/v1/engine/export/pdf` qui génère une attes
 - **Extraction et audit en direct** (`POST /api/v1/engine/evaluate/url`) : scanne une fiche produit e-commerce (Shopify, WooCommerce, Amazon, etc.) via son URL publique, filtre le bruit technique (scripts, navigation, footer) et structure le titre produit, la balise meta-description et le corps d'argumentaire pour analyse immédiate par le moteur déterministe.
 - **Bouclier de sécurité anti-SSRF** : validation stricte bloquant systématiquement les adresses de bouclage (`localhost`, `127.0.0.1`), les réseaux privés (RFC 1918), les métadonnées d'instances cloud (`169.254.169.254`), et les protocoles non autorisés.
 - **Boutiques de démonstration intégrées** : fiches produits tests prêtes à l'emploi (`https://demo-shop.vericlaim.ai/...`) fonctionnant à 100% hors-ligne pour les démonstrations et la validation continue.
+
+### Audit de Catalogue en Masse (Batch CSV & JSON)
+
+- **Traitement de lot** (`POST /api/v1/engine/evaluate/batch`, `POST /api/v1/engine/evaluate/batch-csv`) : analyse simultanée de catalogues entiers (dizaines ou centaines de références SKU) avec calcul consolidé du taux de conformité, des sanctions financières cumulées et du risque moyen.
+- **Export tableur** (`POST /api/v1/engine/export/batch-csv`) : génération immédiate d'un rapport de conformité CSV prêt pour Excel détaillant par ligne le statut, le score de risque, les infractions et la synthèse réglementaire.
+- **Interface dédiée** : accessible via l'onglet « ▤ Audit de Catalogue (Batch) » avec glisser-déposer de fichier CSV, téléchargement de modèle type et démo intégrée de 6 produits multi-catégories.
+
+### Gestion des Migrations de Base de Données (Alembic)
+
+Les schémas de la base de données PostgreSQL / SQLite sont versionnés avec Alembic :
+```bash
+cd backend
+alembic upgrade head
+```
+
+### Intégration Continue (CI/CD GitHub Actions)
+
+Le workflow `.github/workflows/ci.yml` valide automatiquement sur chaque push et pull request :
+- L'exécution des migrations Alembic et de la suite de tests backend (`pytest -v`).
+- La vérification stricte des types TypeScript (`npm run typecheck`) et la compilation de production Next.js (`npm run build`).
 
 ### Développer l'interface
 

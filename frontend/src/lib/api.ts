@@ -1,6 +1,8 @@
 import type {
   AuditContext,
   AuditHistoryResponse,
+  CatalogBatchRequest,
+  CatalogBatchResponse,
   EvidenceDossier,
   EvidenceItem,
   EvaluationRequest,
@@ -258,4 +260,63 @@ export async function verifyEcolabelLicense(
   });
   if (!response.ok) throw new Error("Échec de vérification de la licence");
   return await response.json();
+}
+
+export async function auditCatalogBatch(
+  payload: CatalogBatchRequest,
+): Promise<CatalogBatchResponse> {
+  const response = await fetch(requestUrl("/api/v1/engine/evaluate/batch"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    let detail = `Erreur API (${response.status})`;
+    try {
+      const body = await response.json();
+      if (body?.detail) detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail);
+    } catch {}
+    throw new Error(detail);
+  }
+  return (await response.json()) as CatalogBatchResponse;
+}
+
+export async function auditCatalogCsv(file: File): Promise<CatalogBatchResponse> {
+  const form = new FormData();
+  form.append("file", file, file.name);
+  const response = await fetch(requestUrl("/api/v1/engine/evaluate/batch-csv"), {
+    method: "POST",
+    body: form,
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    let detail = `Erreur API (${response.status})`;
+    try {
+      const body = await response.json();
+      if (body?.detail) detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail);
+    } catch {}
+    throw new Error(detail);
+  }
+  return (await response.json()) as CatalogBatchResponse;
+}
+
+export async function exportCatalogBatchCsv(report: CatalogBatchResponse): Promise<void> {
+  const response = await fetch(requestUrl("/api/v1/engine/export/batch-csv"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(report),
+  });
+  if (!response.ok) {
+    throw new Error("Échec de l'export CSV du catalogue");
+  }
+  const blob = await response.blob();
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `VeriClaim_Audit_Catalogue_${new Date().toISOString().slice(0, 10)}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.URL.revokeObjectURL(url);
 }

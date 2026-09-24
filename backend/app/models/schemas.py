@@ -142,3 +142,45 @@ class SupplierCompareResponse(BaseModel):
     ranked_suppliers: list[SupplierComparisonItem]
     best_supplier: str | None
     benchmark_summary: str
+
+
+class CatalogItemInput(BaseModel):
+    sku: str = Field(min_length=1, max_length=64)
+    title: str = Field(default="", max_length=256)
+    text: str = Field(min_length=1, max_length=20000)
+    surface: Surface = Surface.PACKAGING
+    category: str | None = None
+    supplier_name: str | None = None
+    has_lca: bool = False
+    ecolabel_license: str | None = None
+
+
+class CatalogBatchRequest(BaseModel):
+    items: list[CatalogItemInput] = Field(min_length=1, max_length=500)
+    jurisdiction: str = "FR"
+    as_of_date: str | None = None
+    consumer_facing: bool = True
+
+
+class CatalogItemResult(BaseModel):
+    sku: str
+    title: str
+    supplier_name: str | None = None
+    overall_compliance: OverallCompliance
+    risk_score: int
+    detected_claims_count: int
+    violations_count: int
+    fines_ceiling_eur: int
+    summary: str
+    claims: list[str] = Field(default_factory=list)
+
+
+class CatalogBatchResponse(BaseModel):
+    total_items: int
+    compliant_items: int
+    non_compliant_items: int
+    review_required_items: int
+    total_fines_ceiling_eur: int
+    compliance_rate_pct: float
+    average_risk_score: float
+    results: list[CatalogItemResult]

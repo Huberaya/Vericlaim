@@ -348,3 +348,45 @@ export type SupplierCompareResponse = {
   best_supplier?: string | null;
   benchmark_summary: string;
 };
+
+export type CatalogItemInput = {
+  sku: string;
+  title?: string;
+  text: string;
+  surface?: Surface;
+  category?: string | null;
+  supplier_name?: string | null;
+  has_lca?: boolean;
+  ecolabel_license?: string | null;
+};
+
+export type CatalogBatchRequest = {
+  items: CatalogItemInput[];
+  jurisdiction?: string;
+  as_of_date?: string | null;
+  consumer_facing?: boolean;
+};
+
+export type CatalogItemResult = {
+  sku: string;
+  title: string;
+  supplier_name?: string | null;
+  overall_compliance: OverallCompliance;
+  risk_score: number;
+  detected_claims_count: number;
+  violations_count: number;
+  fines_ceiling_eur: number;
+  summary: string;
+  claims: string[];
+};
+
+export type CatalogBatchResponse = {
+  total_items: number;
+  compliant_items: number;
+  non_compliant_items: number;
+  review_required_items: number;
+  total_fines_ceiling_eur: number;
+  compliance_rate_pct: number;
+  average_risk_score: number;
+  results: CatalogItemResult[];
+};

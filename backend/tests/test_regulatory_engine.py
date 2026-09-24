@@ -680,3 +680,61 @@ def test_api_evaluate_url_endpoint():
         )
         assert bad_resp.status_code == 422
         assert "pas autorisée" in bad_resp.json()["detail"]
+
+
+def test_catalog_batch_evaluation_and_csv_import_export():
+    from app.main import app
+    import io
+
+    with TestClient(app) as client:
+        # 1. Batch JSON evaluation
+        batch_payload = {
+            "items": [
+                {
+                    "sku": "SKU-GREENWASH-01",
+                    "title": "Gourde Nomade Verte",
+                    "text": "Bouteille 100% biodégradable et sans déchet pour la planète.",
+                    "surface": "packaging",
+                    "supplier_name": "EcoPlast Inc",
+                },
+                {
+                    "sku": "SKU-COMPLIANT-02",
+                    "title": "Bocal Verre Consigné",
+                    "text": "Réduction de 25% de CO2 certifiée par ACV ISO 14044 et licence FR/012/345.",
+                    "surface": "packaging",
+                    "supplier_name": "VerreDurable SAS",
+                    "has_lca": True,
+                    "ecolabel_license": "FR/012/345",
+                },
+            ],
+            "jurisdiction": "FR",
+            "consumer_facing": True,
+        }
+        resp = client.post("/api/v1/engine/evaluate/batch", json=batch_payload)
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["total_items"] == 2
+        assert data["non_compliant_items"] >= 1
+        assert data["total_fines_ceiling_eur"] > 0
+        assert len(data["results"]) == 2
+
+        # 2. Batch CSV Upload
+        csv_content = (
+            "sku;title;text;surface;supplier\n"
+            "SKU-CSV-1;Boîte Cartonnée;Emballage 100% biodégradable;packaging;Fournisseur A\n"
+            "SKU-CSV-2;Flacon Savon;Formule certifiée par licence FR/012/345;online_store;Fournisseur B\n"
+        )
+        files = {"file": ("catalog.csv", io.BytesIO(csv_content.encode("utf-8")), "text/csv")}
+        csv_resp = client.post("/api/v1/engine/evaluate/batch-csv", files=files)
+        assert csv_resp.status_code == 200, csv_resp.text
+        csv_data = csv_resp.json()
+        assert csv_data["total_items"] == 2
+        assert csv_data["results"][0]["sku"] == "SKU-CSV-1"
+
+        # 3. Export Batch CSV
+        export_resp = client.post("/api/v1/engine/export/batch-csv", json=csv_data)
+        assert export_resp.status_code == 200
+        assert "text/csv" in export_resp.headers["content-type"]
+        exported_text = export_resp.content.decode("utf-8-sig")
+        assert "SKU-CSV-1" in exported_text
+        assert "Statut Conformité" in exported_text
