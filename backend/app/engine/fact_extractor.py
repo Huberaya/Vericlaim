@@ -21,7 +21,12 @@ CLAIM_PATTERNS: tuple[tuple[ClaimType, re.Pattern[str]], ...] = (
         re.compile(
             r"\b(?:bio)?d[eé]gradable(?:s)?\b"
             r"|\boxo[- ]?d[eé]gradable(?:s)?\b"
-            r"|\boxo[- ]?biod[eé]gradable(?:s)?\b",
+            r"|\boxo[- ]?biod[eé]gradable(?:s)?\b"
+            r"|\b(?:100\s?%\s+)?biodegradable\b"
+            r"|\boxo[- ]degradable\b"
+            r"|\bbiologisch\s+abbaubar(?:e|er|es|en)?\b"
+            r"|\b100\s?%\s+biologisch\s+abbaubar\b"
+            r"|\boxo[- ]abbaubar\b",
             re.IGNORECASE,
         ),
     ),
@@ -34,7 +39,12 @@ CLAIM_PATTERNS: tuple[tuple[ClaimType, re.Pattern[str]], ...] = (
             r"|\bindustriellement\s+compostable(?:s)?\b"
             r"|\bindustrially\s+compostable\b"
             r"|\bbio[- ]?sourc[eé](?:e|s|es)?\b"
-            r"|\bplant[- ]based\b",
+            r"|\bplant[- ]based\b"
+            r"|\bkompostierbar(?:e|er|es|en)?\b"
+            r"|\bheimkompostierbar\b"
+            r"|\bgartenkompostierbar\b"
+            r"|\bindustriell\s+kompostierbar\b"
+            r"|\bpflanzenbasiert(?:e|er|es|en)?\b",
             re.IGNORECASE,
         ),
     ),
@@ -46,7 +56,13 @@ CLAIM_PATTERNS: tuple[tuple[ClaimType, re.Pattern[str]], ...] = (
             r"|\bexempt\s+de\s+(?:tout\s+)?(?:produit|compos[eé])\s+chimique(?:s)?\b"
             r"|\bchemical[- ]free\b"
             r"|\bzero\s+chemicals?\b"
-            r"|\bno\s+chemicals?\b",
+            r"|\bno\s+chemicals?\b"
+            r"|\bfree\s+of\s+(?:any\s+)?chemicals?\b"
+            r"|\bchemiefrei(?:e|er|es|en)?\b"
+            r"|\bohne\s+chemie\b"
+            r"|\bohne\s+chemikalien\b"
+            r"|\bfrei\s+von\s+chemikalien\b"
+            r"|\bschadd?stofffrei(?:e|er|es|en)?\b",
             re.IGNORECASE,
         ),
     ),
@@ -60,7 +76,12 @@ CLAIM_PATTERNS: tuple[tuple[ClaimType, re.Pattern[str]], ...] = (
             r"|\bsans\s+pollution\b"
             r"|\bpollution[- ]free\b"
             r"|\bz[eé]ro\s+impact(?:\s+(?:environnemental|sur\s+l['’]environnement))?\b"
-            r"|\bsans\s+impact\s+(?:environnemental|sur\s+l['’]environnement)\b",
+            r"|\bsans\s+impact\s+(?:environnemental|sur\s+l['’]environnement)\b"
+            r"|\bzero\s+environmental\s+impact\b"
+            r"|\bnull\s+abfall\b"
+            r"|\bkein\s+abfall\b"
+            r"|\bumweltschonend\b"
+            r"|\bohne\s+umweltauswirkungen\b",
             re.IGNORECASE,
         ),
     ),
@@ -71,7 +92,11 @@ CLAIM_PATTERNS: tuple[tuple[ClaimType, re.Pattern[str]], ...] = (
             r"|\b(?:mati[eè]res?|plastiques?)\s+recycl[eé](?:e|s|es)?\b"
             r"|\brecycled\s+content\b"
             r"|\bissu\s+du\s+recyclage\b"
-            r"|\bmade\s+from\s+recycled\s+(?:plastic|materials?)\b",
+            r"|\bmade\s+(?:from|of|with)\s+recycled\s+(?:plastic|materials?)\b"
+            r"|\bpost[- ]consumer\s+recycled\b"
+            r"|\baus\s+recyceltem\s+(?:plastik|kunststoff|material)\b"
+            r"|\brecycelter\s+kunststoff\b"
+            r"|\brezyklat(?:anteil)?\b",
             re.IGNORECASE,
         ),
     ),
@@ -85,8 +110,13 @@ CLAIM_PATTERNS: tuple[tuple[ClaimType, re.Pattern[str]], ...] = (
             r"|\b(?:prot[eè]ge|sauve)\s+(?:la\s+plan[eè]te|la\s+nature|l['’]environnement)\b"
             r"|\benvironmentally[- ]friendly\b"
             r"|\b(?:nature|planet|earth|ocean)[- ]friendly\b"
-            r"|\bprotects\s+the\s+planet\b"
-            r"|\bgentle\s+on\s+the\s+environment\b",
+            r"|\bprotects\s+the\s+(?:planet|nature|earth)\b"
+            r"|\bgentle\s+on\s+the\s+environment\b"
+            r"|\bumweltfreundlich(?:e|er|es|en)?\b"
+            r"|\bnaturfreundlich(?:e|er|es|en)?\b"
+            r"|\bgut\s+f[üu]r\s+die\s+umwelt\b"
+            r"|\bschont\s+die\s+umwelt\b"
+            r"|\bsch[üu]tzt\s+die\s+natur\b",
             re.IGNORECASE,
         ),
     ),
@@ -109,7 +139,15 @@ CLAIM_PATTERNS: tuple[tuple[ClaimType, re.Pattern[str]], ...] = (
             r"|\bnet[- ]zero\b"
             r"|\bCO\s?2[- ]neutral\b"
             r"|\bcarbon\s+neutral\b"
-            r"|\b(?:z[eé]ro|aucun)\s+impact\s+(?:carbone|climatique)\b",
+            r"|\bclimate\s+neutral\b"
+            r"|\bzero\s+carbon\b"
+            r"|\b100\s?%\s+carbon\s+offset(?:ted)?\b"
+            r"|\b(?:z[eé]ro|aucun)\s+impact\s+(?:carbone|climatique)\b"
+            r"|\bklimaneutral(?:e|er|es|en)?\b"
+            r"|\bco2[- ]neutral(?:e|er|es|en)?\b"
+            r"|\bkohlenstoffneutral\b"
+            r"|\bnetto[- ]null\b"
+            r"|\b100\s?%\s+co2[- ]kompensiert\b",
             re.IGNORECASE,
         ),
     ),
@@ -129,7 +167,13 @@ CLAIM_PATTERNS: tuple[tuple[ClaimType, re.Pattern[str]], ...] = (
         re.compile(
             r"\b(?:100\s?%\s+|enti[eè]rement\s+|infiniment\s+)?recyclable(?:s)?\b"
             r"|\brecyclability\b"
-            r"|\binfinitely\s+recyclable\b",
+            r"|\binfinitely\s+recyclable\b"
+            r"|\b100\s?%\s+recyclable\b"
+            r"|\bfully\s+recyclable\b"
+            r"|\bwidely\s+recycled\b"
+            r"|\bvollst[äa]ndig\s+recycelbar\b"
+            r"|\b100\s?%\s+recycelbar\b"
+            r"|\bwiederverwertbar(?:e|er|es|en)?\b",
             re.IGNORECASE,
         ),
     ),
@@ -142,30 +186,37 @@ CLAIM_PATTERNS: tuple[tuple[ClaimType, re.Pattern[str]], ...] = (
             r"|\bgreen\b|\bnatural\b|\beco[- ]friendly\b|\beco\b"
             r"|\bsustainable\b|\bclimate[- ]friendly\b|\bcarbon[- ]friendly\b"
             r"|\bconscious\b|\bresponsible\b|\bnature['’]s\s+friend\b"
-            r"|\bclean\b|\bpropre\b|\b[eé]thique\b",
+            r"|\bclean\b|\bpropre\b|\b[eé]thique\b"
+            r"|\bgr[üu]n(?:e|er|es|en)?\b"
+            r"|\bnachhaltig(?:e|er|es|en)?\b"
+            r"|\b[öo]kologisch(?:e|er|es|en)?\b"
+            r"|\b[öo]ko\b"
+            r"|\bnat[üu]rlich(?:e|er|es|en)?\b"
+            r"|\bklimaschonend\b"
+            r"|\bsauber(?:e|er|es|en)?\b",
             re.IGNORECASE,
         ),
     ),
 )
 
 OFFSET_SIGNAL = re.compile(
-    r"\b(?:compens[eé](?:e|s|es)?|compensation|cr[eé]dits?\s+carbone|quotas?\s+(?:carbone|d['’]?[eé]mission)|offset(?:ting)?|carbon\s+credits?|verified\s+carbon\s+standard|VCS|Gold\s+Standard)\b",
+    r"\b(?:compens[eé](?:e|s|es)?|compensation|cr[eé]dits?\s+carbone|quotas?\s+(?:carbone|d['’]?[eé]mission)|offset(?:ting)?|carbon\s+credits?|verified\s+carbon\s+standard|VCS|Gold\s+Standard|ausgeglichen|kompensiert|kompensation|klimakompensation)\b",
     re.IGNORECASE,
 )
 
 ENVIRONMENTAL_METRIC = re.compile(
-    r"\b(?:CO\s?2|carbone|[eé]missions?|empreinte|climat(?:ique)?|greenhouse\s+gas|GHG|carbon\s+footprint)\b",
+    r"\b(?:CO\s?2|carbone|[eé]missions?|empreinte|climat(?:ique)?|greenhouse\s+gas|GHG|carbon\s+footprint|kohlenstoff|klima|treibhausgas(?:e)?)\b",
     re.IGNORECASE,
 )
 NUMBER = re.compile(r"(?<!\w)([-−]?\d+(?:[.,]\d+)?)\s*(%|kg|g|t|tonnes?|kg\s?CO\s?2|g\s?CO\s?2)?", re.IGNORECASE)
 OFFSET_NEGATION = re.compile(
-    r"(?:\b(?:ne\s+\w+(?:\s+\w+){0,3}\s+pas|n['’]est\s+pas|pas|non|sans)\s*|\b(?:not|never|without|no\s+longer)\s*|\bnon[- ])$",
+    r"(?:\b(?:ne\s+\w+(?:\s+\w+){0,3}\s+pas|n['’]est\s+pas|pas|non|sans)\s*|\b(?:not|never|without|no\s+longer|free\s+of)\s*|\b(?:nicht|ohne|kein|keine|nie)\s*|\bnon[- ])$",
     re.IGNORECASE,
 )
 SPECIFIC_DETAIL = re.compile(
-    r"\b\d+(?:[.,]\d+)?\s?%\s+(?:de\s+)?(?:CO\s?2|carbone|mati[eè]res?\s+recycl[eé](?:e|s|es)?|plastiques?\s+recycl[eé](?:e|s|es)?|mati[eè]res?\s+biosourc[eé](?:e|s|es)?)\b"
-    r"|\b(?:g|kg|t)\s?CO\s?2\s?(?:e|eq)?\s*(?:par|/|pour)\b"
-    r"|\bcomporte\s+au\s+moins\s+\d+(?:[.,]\d+)?\s?%\b",
+    r"\b\d+(?:[.,]\d+)?\s?%\s+(?:de\s+)?(?:CO\s?2|carbone|mati[eè]res?\s+recycl[eé](?:e|s|es)?|plastiques?\s+recycl[eé](?:e|s|es)?|mati[eè]res?\s+biosourc[eé](?:e|s|es)?|carbon|recycled|post[- ]consumer|rezyklat)\b"
+    r"|\b(?:g|kg|t)\s?CO\s?2\s?(?:e|eq)?\s*(?:par|/|pour|per|pro)\b"
+    r"|\b(?:comporte\s+au\s+moins|contains\s+at\s+least|mindestens)\s+\d+(?:[.,]\d+)?\s?%\b",
     re.IGNORECASE,
 )
 

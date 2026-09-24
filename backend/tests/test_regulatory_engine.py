@@ -840,3 +840,59 @@ def test_dynamic_javascript_rendering_and_spa_extraction():
             or "biodégradable" in ev["claim_text"].lower()
             for ev in data["evaluations"]
         )
+
+
+def test_multilingual_claims_english_and_german():
+    from app.engine.fact_extractor import FactExtractor
+    from app.models.legal_types import ClaimType
+    from app.main import app
+
+    extractor = FactExtractor()
+
+    # 1. English Lexicon Extraction
+    en_text = (
+        "Packaging 100% biodegradable and chemical-free. "
+        "Carbon neutral product certified by verified carbon offset credits."
+    )
+    en_claims = extractor.extract(en_text)
+    en_types = {c.claim_type for c in en_claims}
+    assert ClaimType.BIODEGRADABLE in en_types
+    assert ClaimType.CHEMICAL_FREE in en_types
+    assert ClaimType.CARBON_NEUTRALITY in en_types
+
+    carbon_claim = next(c for c in en_claims if c.claim_type == ClaimType.CARBON_NEUTRALITY)
+    assert carbon_claim.has_offsetting_signal is True
+
+    # 2. German Lexicon Extraction
+    de_text = (
+        "Verpackung 100% biologisch abbaubar und absolut chemiefrei. "
+        "Klimaneutral durch Klimakompensation und aus recyceltem Plastik hergestellt."
+    )
+    de_claims = extractor.extract(de_text)
+    de_types = {c.claim_type for c in de_claims}
+    assert ClaimType.BIODEGRADABLE in de_types
+    assert ClaimType.CHEMICAL_FREE in de_types
+    assert ClaimType.CARBON_NEUTRALITY in de_types
+    assert ClaimType.RECYCLED_CONTENT in de_types
+
+    de_carbon = next(c for c in de_claims if c.claim_type == ClaimType.CARBON_NEUTRALITY)
+    assert de_carbon.has_offsetting_signal is True
+
+    # 3. End-to-end API audit on English copy
+    with TestClient(app) as client:
+        resp = client.post(
+            "/api/v1/engine/evaluate",
+            json={
+                "source_text": "Bottle 100% biodegradable and zero waste.",
+                "context": {
+                    "as_of_date": "2026-09-24",
+                    "jurisdiction": "FR",
+                    "surface": "packaging",
+                    "consumer_facing": True,
+                },
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["overall_compliance"] == "NON_COMPLIANT"
+        assert data["violations_count"] >= 1

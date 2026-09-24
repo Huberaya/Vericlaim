@@ -33,7 +33,7 @@ pytest -v
 
 Le fichier `backend/pytest.ini` résout automatiquement le `PYTHONPATH`. Si PostgreSQL n'est pas démarré, le backend bascule automatiquement sur SQLite local (`vericlaim.db`) sans configuration requise.
 
-Résultat validé dans le workspace : **31 tests passants (100% de réussite)**.
+Résultat validé dans le workspace : **32 tests passants (100% de réussite)**.
 
 ### Export PDF de l'attestation d'audit
 
@@ -98,6 +98,14 @@ Le service expose des endpoints standardisés d'observabilité pour la productio
   - `GET /livez` : sonde de vivacité (Liveness probe).
   - `GET /readyz` : sonde d'aptitude au trafic avec vérification active de la base (Readiness probe).
 - **Traçabilité distribuée** : middleware `X-Request-ID` injectant et propageant un identifiant de corrélation unique par requête.
+
+### Support Multilingue Européen (Français, Anglais, Allemand)
+
+Le lexique déterministe d'extraction (`fact_extractor.py`) supporte nativement les allégations rédigées dans les 3 principales langues du marché unique européen :
+- **Français** : terminologie AGEC, Code de l'environnement et Code de la consommation (*« biodégradable »*, *« sans chimie »*, *« neutre en carbone »*, *« emballage recyclé »*).
+- **Anglais** : pan-européen et cross-border (*« 100% biodegradable »*, *« chemical-free »*, *« carbon neutral »*, *« net-zero »*, *« zero waste »*, *« made from recycled plastic »*, *« eco-friendly »*).
+- **Allemand** : droit allemand et transposition UWG (*« 100% biologisch abbaubar »*, *« chemiefrei »*, *« klimaneutral »*, *« aus recyceltem Kunststoff »*, *« umweltfreundlich »*, *« null Abfall »*).
+- **Détection des signaux de compensation** : identification multilingue des mentions de compensation carbone (*« offset credits »*, *« VCS »*, *« Gold Standard »*, *« Klimakompensation »*, *« kompensiert »*).
 
 ### Intégration Continue (CI/CD GitHub Actions)
 
