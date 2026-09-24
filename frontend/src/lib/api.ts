@@ -197,3 +197,46 @@ export async function compareSuppliers(
   }
   return (await response.json()) as SupplierCompareResponse;
 }
+
+export async function fetchEcolabelRegistries(): Promise<
+  Array<{
+    registry_id: string;
+    name: string;
+    authority: string;
+    scheme: string;
+    portal_url: string;
+    country: string;
+    iso_type_i: boolean;
+    status: string;
+  }>
+> {
+  const response = await fetch(requestUrl("/api/v1/engine/ecolabels/registries"), { cache: "no-store" });
+  if (!response.ok) throw new Error("Échec de récupération des registres");
+  return await response.json();
+}
+
+export async function verifyEcolabelLicense(
+  licenseNumber: string,
+  scheme?: string,
+  productIdentifier?: string,
+): Promise<{
+  license_number: string;
+  verified: boolean;
+  status: string;
+  message: string;
+  safe_harbor_eligible: boolean;
+  issuer?: string;
+  registry_name?: string;
+  source_url?: string;
+  valid_from?: string;
+  valid_until?: string;
+}> {
+  const query = new URLSearchParams({ license_number: licenseNumber });
+  if (scheme) query.set("scheme", scheme);
+  if (productIdentifier) query.set("product_identifier", productIdentifier);
+  const response = await fetch(requestUrl(`/api/v1/engine/ecolabels/verify?${query.toString()}`), {
+    cache: "no-store",
+  });
+  if (!response.ok) throw new Error("Échec de vérification de la licence");
+  return await response.json();
+}

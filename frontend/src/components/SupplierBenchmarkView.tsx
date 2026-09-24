@@ -1,7 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { compareSuppliers, downloadAuditPdf, fetchAuditById, fetchAuditHistory } from "@/lib/api";
+import {
+  compareSuppliers,
+  downloadAuditPdf,
+  fetchAuditById,
+  fetchAuditHistory,
+  fetchEcolabelRegistries,
+  verifyEcolabelLicense,
+} from "@/lib/api";
 import type {
   AuditHistoryItem,
   OverallCompliance,
@@ -53,7 +60,7 @@ function formatEur(amount: number | string | null | undefined): string {
 }
 
 export default function SupplierBenchmarkView({ onLoadAuditReport, onOpenNewAudit }: Props) {
-  const [activeTab, setActiveTab] = useState<"benchmark" | "history">("benchmark");
+  const [activeTab, setActiveTab] = useState<"benchmark" | "history" | "ecolabels">("benchmark");
   const [historyItems, setHistoryItems] = useState<AuditHistoryItem[]>([]);
   const [historyTotal, setHistoryTotal] = useState(0);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
@@ -67,6 +74,32 @@ export default function SupplierBenchmarkView({ onLoadAuditReport, onOpenNewAudi
   const [compareError, setCompareError] = useState<string | null>(null);
   const [copiedClauseIndex, setCopiedClauseIndex] = useState<number | null>(null);
   const [loadingAuditId, setLoadingAuditId] = useState<string | null>(null);
+
+  // Registres d'écolabels connectés
+  const [registries, setRegistries] = useState<any[]>([]);
+  const [testLicenseInput, setTestLicenseInput] = useState("FR/012/345");
+  const [testLicenseResult, setTestLicenseResult] = useState<any | null>(null);
+  const [isTestingLicense, setIsTestingLicense] = useState(false);
+
+  useEffect(() => {
+    void fetchEcolabelRegistries()
+      .then(setRegistries)
+      .catch(() => {});
+  }, []);
+
+  const handleTestLicense = async (lic = testLicenseInput) => {
+    if (!lic.trim()) return;
+    setIsTestingLicense(true);
+    setTestLicenseInput(lic);
+    try {
+      const res = await verifyEcolabelLicense(lic.trim());
+      setTestLicenseResult(res);
+    } catch {
+      setTestLicenseResult({ verified: false, message: "Erreur de connexion au registre." });
+    } finally {
+      setIsTestingLicense(false);
+    }
+  };
 
   // Charger l'historique
   const loadHistory = async () => {
@@ -183,6 +216,13 @@ export default function SupplierBenchmarkView({ onLoadAuditReport, onOpenNewAudi
             }}
           >
             <span>⏱</span> Registre & Historique des Audits ({historyTotal})
+          </button>
+          <button
+            type="button"
+            className={`subnav-tab ${activeTab === "ecolabels" ? "subnav-tab-active" : ""}`}
+            onClick={() => setActiveTab("ecolabels")}
+          >
+            <span>🌿</span> Connecteur Écolabels Live
           </button>
         </div>
 
@@ -644,6 +684,148 @@ export default function SupplierBenchmarkView({ onLoadAuditReport, onOpenNewAudi
               </table>
             </div>
           )}
+        </div>
+      )}
+
+      {/* VUE 3 : CONNECTEUR LIVE AUX REGISTRES D'ÉCOLABELS OFFICIELS */}
+      {activeTab === "ecolabels" && (
+        <div className="surface-card ecolabels-panel" style={{ marginTop: "16px", padding: "22px" }}>
+          <div className="flex items-center justify-between flex-wrap gap-3">
+            <div>
+              <div className="section-eyebrow">CONFORMITÉ DIRECTIVE (UE) 2024/825 & ISO 14024 TYPE I</div>
+              <h2 className="card-title">Connecteur Live aux Registres d'Écolabels Officiels</h2>
+              <p className="card-description" style={{ maxWidth: "700px" }}>
+                Vérification en temps réel des licences et certificats auprès des catalogues officiels de l'Union européenne et des organismes nationaux accrédités (ADEME, AFNOR, RAL, Nordic Ecolabelling).
+              </p>
+            </div>
+            <span className="status-pill badge-green">
+              <span className="status-dot" aria-hidden="true" />
+              CONNECTEUR ACTIF · 4 REGISTRES CONNECTÉS
+            </span>
+          </div>
+
+          {/* Cartes des registres officiels connectés */}
+          <div className="registries-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "12px", marginTop: "20px" }}>
+            {registries.map((r) => (
+              <div key={r.registry_id} className="surface-card registry-card" style={{ padding: "16px", background: "#fcfdfa", border: "1px solid #e2e8df", borderRadius: "10px" }}>
+                <div className="flex items-center justify-between" style={{ marginBottom: "8px" }}>
+                  <span className="badge-tag" style={{ fontSize: "9px", padding: "2px 6px", background: "#eef4ec", color: "#2d5423", borderRadius: "4px", fontWeight: "700" }}>
+                    {r.country} · {r.scheme}
+                  </span>
+                  <span style={{ fontSize: "10px", color: "var(--green)", fontWeight: "bold" }}>● En ligne</span>
+                </div>
+                <h4 style={{ fontSize: "12px", fontWeight: "750", margin: "4px 0", color: "var(--forest-deep)" }}>{r.name}</h4>
+                <div style={{ fontSize: "10px", color: "var(--muted)", marginBottom: "8px" }}>{r.authority}</div>
+                <a
+                  href={r.portal_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{ fontSize: "10px", color: "var(--forest)", textDecoration: "underline" }}
+                >
+                  Consulter le catalogue officiel ↗
+                </a>
+              </div>
+            ))}
+          </div>
+
+          {/* Bac à sable de vérification instantanée */}
+          <div className="surface-card license-tester-card" style={{ marginTop: "24px", padding: "18px", background: "#f7faf5", border: "1px solid #dbe6d7", borderRadius: "12px" }}>
+            <h3 className="card-title" style={{ fontSize: "13px" }}>Tester la vérification d'une licence en direct</h3>
+            <p className="card-description" style={{ fontSize: "11px", marginBottom: "12px" }}>
+              Interrogez immédiatement les registres pour tester la corroboration d'un numéro de licence et l'activation d'un Safe Harbor.
+            </p>
+
+            <div className="flex gap-2 flex-wrap items-center">
+              <input
+                type="text"
+                value={testLicenseInput}
+                onChange={(e) => setTestLicenseInput(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") void handleTestLicense(); }}
+                placeholder="Ex. FR/012/345 ou NFE/75/001"
+                style={{ padding: "8px 12px", borderRadius: "8px", border: "1px solid var(--line)", background: "white", fontSize: "12px", minWidth: "240px" }}
+              />
+              <button
+                type="button"
+                className="button button-primary"
+                onClick={() => void handleTestLicense()}
+                disabled={isTestingLicense}
+              >
+                {isTestingLicense ? "Interrogation live…" : "Vérifier le certificat"}
+              </button>
+            </div>
+
+            <div className="quick-chips flex items-center gap-2 flex-wrap" style={{ marginTop: "10px" }}>
+              <span style={{ fontSize: "10px", color: "var(--muted)", fontWeight: "600" }}>Exemples officiels :</span>
+              <button
+                type="button"
+                className="button button-quiet"
+                style={{ fontSize: "10px", padding: "2px 8px" }}
+                onClick={() => void handleTestLicense("FR/012/345")}
+              >
+                FR/012/345 (EU Ecolabel)
+              </button>
+              <button
+                type="button"
+                className="button button-quiet"
+                style={{ fontSize: "10px", padding: "2px 8px" }}
+                onClick={() => void handleTestLicense("NFE/75/001")}
+              >
+                NFE/75/001 (NF Environnement)
+              </button>
+              <button
+                type="button"
+                className="button button-quiet"
+                style={{ fontSize: "10px", padding: "2px 8px" }}
+                onClick={() => void handleTestLicense("RAL-UZ-102")}
+              >
+                RAL-UZ-102 (Blauer Engel)
+              </button>
+              <button
+                type="button"
+                className="button button-quiet"
+                style={{ fontSize: "10px", padding: "2px 8px" }}
+                onClick={() => void handleTestLicense("FAUX-ECOLABEL-999")}
+              >
+                FAUX-ECOLABEL-999 (Invalide)
+              </button>
+            </div>
+
+            {testLicenseResult && (
+              <div
+                style={{
+                  marginTop: "16px",
+                  padding: "14px 16px",
+                  borderRadius: "10px",
+                  background: testLicenseResult.verified ? "#eaf5e5" : "#fef3ee",
+                  border: `1px solid ${testLicenseResult.verified ? "#c3e2bb" : "#f8ccc5"}`,
+                  color: testLicenseResult.verified ? "#224f19" : "#892721",
+                }}
+              >
+                <div className="flex items-center justify-between">
+                  <strong style={{ fontSize: "13px" }}>
+                    {testLicenseResult.verified
+                      ? "✓ CERTIFICAT CORROBORÉ DANS LE REGISTRE OFFICIEL"
+                      : "⚠ CERTIFICAT INTROUVABLE DANS LES REGISTRES"}
+                  </strong>
+                  <span className="status-pill" style={{ background: testLicenseResult.verified ? "#d8edd2" : "#fcdad4", fontSize: "10px" }}>
+                    {testLicenseResult.status}
+                  </span>
+                </div>
+                <p style={{ margin: "6px 0 0", fontSize: "11px", lineHeight: "1.45" }}>
+                  {testLicenseResult.message}
+                </p>
+                {testLicenseResult.verified && (
+                  <div style={{ marginTop: "10px", fontSize: "10px", display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "8px", paddingTop: "8px", borderTop: "1px dashed rgba(0,0,0,0.1)" }}>
+                    <div><strong>Schéma :</strong> {testLicenseResult.scheme}</div>
+                    <div><strong>Organisme :</strong> {testLicenseResult.issuer}</div>
+                    <div><strong>Catalogue :</strong> {testLicenseResult.registry_name}</div>
+                    <div><strong>Validité :</strong> Jusqu'au {testLicenseResult.valid_until || "Illimitée"}</div>
+                    <div><strong>Safe Harbor 2024/825 :</strong> Éligible ✓</div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>

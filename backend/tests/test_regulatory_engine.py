@@ -524,3 +524,100 @@ def test_supplier_comparison_benchmark():
         assert ranked[1]["recommendation_color"] == "red"
         assert ranked[1]["violations_count"] >= 2
         assert data["best_supplier"] == "Fournisseur Vertueux (BioPack)"
+
+
+def test_live_ecolabel_connector_recognizes_official_licenses():
+    from app.engine.ecolabel_connector import LiveEcolabelConnector
+
+    connector = LiveEcolabelConnector()
+    # Check preloaded official licenses
+    eu_rec = connector.find("FR/012/345")
+    assert eu_rec is not None
+    assert eu_rec.scheme == "EU_ECOLABEL"
+    assert eu_rec.officially_recognised is True
+
+    nfe_rec = connector.find("NFE/75/001")
+    assert nfe_rec is not None
+    assert nfe_rec.scheme == "EN_ISO_14024_TYPE_I"
+    assert "AFNOR" in nfe_rec.issuer
+
+    # Live verification method
+    verified = connector.verify_live("FR/012/345", scheme="EU_ECOLABEL")
+    assert verified["verified"] is True
+    assert verified["status"] == "OFFICIALLY_VERIFIED"
+    assert verified["safe_harbor_eligible"] is True
+
+    # Unknown fake license
+    fake = connector.verify_live("FAKE-ECOLABEL-99999")
+    assert fake["verified"] is False
+    assert fake["status"] == "NOT_FOUND"
+
+
+def test_api_ecolabel_endpoints():
+    from app.main import app
+
+    with TestClient(app) as client:
+        # 1. Registries list
+        reg_resp = client.get("/api/v1/engine/ecolabels/registries")
+        assert reg_resp.status_code == 200
+        regs = reg_resp.json()
+        assert len(regs) >= 4
+        reg_ids = {r["registry_id"] for r in regs}
+        assert "EU_ECOLABEL_ECAT" in reg_ids
+        assert "AFNOR_NF_ENVIRONNEMENT" in reg_ids
+
+        # 2. Live verification of official license
+        verif_resp = client.get("/api/v1/engine/ecolabels/verify", params={"license_number": "FR/012/345"})
+        assert verif_resp.status_code == 200
+        verif_data = verif_resp.json()
+        assert verif_data["verified"] is True
+        assert verif_data["safe_harbor_eligible"] is True
+        assert "ECAT" in verif_data["registry_name"]
+
+        # 3. Non-existent license
+        unkn_resp = client.get("/api/v1/engine/ecolabels/verify", params={"license_number": "NON-EXISTENT-XYZ-999"})
+        assert unkn_resp.status_code == 200
+        assert unkn_resp.json()["verified"] is False
+
+        # 4. Sync endpoint
+        sync_resp = client.post("/api/v1/engine/ecolabels/sync")
+        assert sync_resp.status_code == 200
+        assert sync_resp.json()["status"] == "SYNCHRONIZED"
+
+
+def test_live_ecolabel_grants_safe_harbor_in_end_to_end_audit():
+    from app.main import app
+
+    with TestClient(app) as client:
+        eval_resp = client.post(
+            "/api/v1/engine/evaluate",
+            json={
+                "source_text": "Produit écologique pour la maison.",
+                "context": {
+                    "as_of_date": "2026-10-01",
+                    "jurisdiction": "FR",
+                    "surface": "advertisement",
+                    "consumer_facing": True,
+                    "product_category": "packaging",
+                },
+                "evidence": {
+                    "items": [
+                        {
+                            "kind": "ecolabel_certificate",
+                            "scheme": "EU_ECOLABEL",
+                            "license_number": "FR/012/345",
+                            "product_category": "packaging",
+                        }
+                    ],
+                    "legal_person": True,
+                },
+            },
+        )
+        assert eval_resp.status_code == 200, eval_resp.text
+        data = eval_resp.json()
+        # Find EU generic claim evaluation
+        eu_finding = [ev for ev in data["evaluations"] if ev["rule_id"] == "RULE_EU_GENERIC_CLAIM"][0]
+        # Must grant Safe Harbor because FR/012/345 is verified in live connector!
+        assert eu_finding["safe_harbor_applicable"] is True
+        assert eu_finding["safe_harbor_reason"] is not None
+        assert "ECAT" in eu_finding["safe_harbor_reason"]

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, type FormEvent } from "react";
+import { verifyEcolabelLicense } from "@/lib/api";
 import type { EvidenceItem } from "@/lib/types";
 
 type Props = {
@@ -57,6 +58,14 @@ export default function ProofUploadModal({ isOpen, onClose, onAdd }: Props) {
   const [quantity, setQuantity] = useState("");
   const [residualReference, setResidualReference] = useState("");
   const [description, setDescription] = useState("");
+  const [liveCheckResult, setLiveCheckResult] = useState<{
+    verified: boolean;
+    status?: string;
+    message?: string;
+    issuer?: string;
+    registry_name?: string;
+  } | null>(null);
+  const [isCheckingLicense, setIsCheckingLicense] = useState(false);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -205,7 +214,65 @@ export default function ProofUploadModal({ isOpen, onClose, onAdd }: Props) {
                     <option value="OTHER">Autre</option>
                   </select>
                 </label>
-                {textField("Numéro de licence *", licenseNumber, setLicenseNumber, "EU Ecolabel licence")}
+                {textField("Numéro de licence *", licenseNumber, setLicenseNumber, "Ex. FR/012/345 ou NFE/75/001")}
+
+                <div className="modal-field full" style={{ marginTop: "-2px", marginBottom: "8px" }}>
+                  <button
+                    type="button"
+                    className="button button-secondary"
+                    style={{ fontSize: "10px", padding: "4px 10px", width: "100%" }}
+                    onClick={async () => {
+                      if (!licenseNumber.trim()) return;
+                      setIsCheckingLicense(true);
+                      try {
+                        const res = await verifyEcolabelLicense(
+                          licenseNumber.trim(),
+                          scheme,
+                          productIdentifier.trim() || undefined,
+                        );
+                        setLiveCheckResult(res);
+                      } catch {
+                        setLiveCheckResult({
+                          verified: false,
+                          message: "Erreur de connexion au registre officiel.",
+                        });
+                      } finally {
+                        setIsCheckingLicense(false);
+                      }
+                    }}
+                    disabled={isCheckingLicense || !licenseNumber.trim()}
+                  >
+                    <span>{isCheckingLicense ? "⏳" : "🔍"}</span>
+                    <span>{isCheckingLicense ? "Interrogation des registres officiels…" : "Vérifier en direct (Live ECAT / AFNOR / RAL)"}</span>
+                  </button>
+
+                  {liveCheckResult && (
+                    <div
+                      style={{
+                        padding: "8px 12px",
+                        borderRadius: "8px",
+                        fontSize: "11px",
+                        marginTop: "8px",
+                        background: liveCheckResult.verified ? "#edf6e8" : "#fdf5e7",
+                        border: `1px solid ${liveCheckResult.verified ? "#c9e4bf" : "#f6deb6"}`,
+                        color: liveCheckResult.verified ? "#284c20" : "#845517",
+                      }}
+                    >
+                      <strong>
+                        {liveCheckResult.verified ? "✓ Licence officiellement corroborée" : "⚠ Licence non corroborée"}
+                      </strong>
+                      <div style={{ marginTop: "3px", fontSize: "10px", lineHeight: 1.4 }}>
+                        {liveCheckResult.message}
+                      </div>
+                      {liveCheckResult.issuer && (
+                        <div style={{ fontSize: "9px", marginTop: "4px", opacity: 0.9 }}>
+                          Émetteur : {liveCheckResult.issuer}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
                 {textField("Identifiant produit", productIdentifier, setProductIdentifier, "SKU-001")}
                 {textField("Catégorie produit", productCategory, setProductCategory, "emballage")}
               </>}

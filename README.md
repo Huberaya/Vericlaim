@@ -33,7 +33,7 @@ pytest -v
 
 Le fichier `backend/pytest.ini` résout automatiquement le `PYTHONPATH`. Si PostgreSQL n'est pas démarré, le backend bascule automatiquement sur SQLite local (`vericlaim.db`) sans configuration requise.
 
-Résultat validé dans le workspace : **22 tests passants (100% de réussite)**.
+Résultat validé dans le workspace : **25 tests passants (100% de réussite)**.
 
 ### Export PDF de l'attestation d'audit
 
@@ -131,9 +131,22 @@ Le brief contient des chiffres/références qu'il ne faut pas inscrire comme dro
 5. **ISO 14021.** L'édition ISO 14021:2016 a été retirée et une édition 2026 publiée. Le contrôle demandé sur l'édition 2016 est conservé uniquement comme garde-fou de norme volontaire et doit être rapproché de l'édition 2026 et des règles françaises de catégorie avant déploiement. Sources : [ISO 14021:2016 — statut retiré](https://www.iso.org/standard/66652.html), [ISO 14021:2026](https://www.iso.org/standard/14021).
 6. **ACV et conclusion légale.** Une ACV ISO 14044 est un seuil probatoire interne choisi pour les affirmations chiffrées/comparatives du prototype; l'absence de ce fichier ne signifie pas automatiquement qu'une infraction a été commise. L'exactitude, la méthodologie, les données, la représentativité et la présentation réclament une revue humaine.
 
-## Safe Harbor et registre de certificats
+## Safe Harbor et connecteur live aux registres d'écolabels officiels
 
-Un numéro de licence fourni dans le corps de la requête n'est jamais considéré comme vérifié. Le registre doit être contrôlé et configuré **côté serveur**. Format possible pour `VERICLAIM_CERTIFICATE_REGISTRY_JSON` :
+Un numéro de licence saisi par un utilisateur n'est jamais considéré comme valide par défaut : il doit être corroboré par les registres officiels d'organismes tiers accrédités.
+
+Le moteur intègre le module `LiveEcolabelConnector` connecté aux registres :
+1. **EU Ecolabel (ECAT)** — Catalogue officiel de la Commission Européenne / ADEME.
+2. **NF Environnement** — Schéma officiel national français (AFNOR Certification).
+3. **Der Blaue Engel (Ange Bleu)** — Schéma allemand officiel (RAL / Umweltbundesamt).
+4. **Nordic Swan (Svanen)** — Schéma officiel des pays nordiques.
+
+### Endpoints d'écolabels live
+- `GET /api/v1/engine/ecolabels/registries` : liste des registres officiels connectés et statut.
+- `GET /api/v1/engine/ecolabels/verify?license_number=...` : vérification live et éligibilité Safe Harbor Directive (UE) 2024/825.
+- `POST /api/v1/engine/ecolabels/sync` : synchronisation du cache local des licences officielles.
+
+Un instantané personnalisé peut également être injecté via la variable d'environnement `VERICLAIM_CERTIFICATE_REGISTRY_JSON` :
 
 ```json
 [

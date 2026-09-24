@@ -257,7 +257,14 @@ class ProofValidator:
                 item.product_category
                 and item.product_category in record.product_categories
             )
-            if not (sku_match or category_match or evidence_scope_match):
+            scope_match = (
+                sku_match
+                or category_match
+                or evidence_scope_match
+                or (not record.product_identifiers)
+                or ("tous" in record.product_categories)
+            )
+            if not scope_match:
                 rejected.append(self._evidence_id(item))
                 continue
             relevant = {value.lower() for value in record.relevant_claim_types}

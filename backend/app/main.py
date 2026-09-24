@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1.endpoints import router as engine_router
 from app.core.config import settings
 from app.core.database import create_tables
+from app.engine.ecolabel_connector import LiveEcolabelConnector
 from app.engine.inference_evaluator import InferenceEvaluator
 from app.engine.proof_validator import JsonCertificateRegistry, ProofValidator
 
@@ -28,9 +29,15 @@ app = FastAPI(
     lifespan=lifespan,
 )
 app.state.settings = settings
-certificate_registry = JsonCertificateRegistry.from_json(settings.verified_certificates_json)
+ecolabel_connector = LiveEcolabelConnector()
+if settings.verified_certificates_json and settings.verified_certificates_json != "{}":
+    json_reg = JsonCertificateRegistry.from_json(settings.verified_certificates_json)
+    for rec in json_reg._records.values():
+        ecolabel_connector.register(rec)
+
+app.state.ecolabel_connector = ecolabel_connector
 app.state.evaluator = InferenceEvaluator(
-    ProofValidator(certificate_registry),
+    ProofValidator(ecolabel_connector),
     fr_2024_825_transposition_status=settings.eu_2024_825_fr_transposition_status,
 )
 

@@ -489,3 +489,42 @@ def export_audit_pdf(evaluation: EvaluationResponse) -> Response:
             "Access-Control-Expose-Headers": "Content-Disposition",
         },
     )
+
+
+@router.get("/ecolabels/registries")
+def get_ecolabel_registries(request: Request) -> list[dict[str, Any]]:
+    """Retourne la liste des registres d'écolabels officiels connectés (UE, AFNOR, RAL, Nordic)."""
+    connector = getattr(request.app.state, "ecolabel_connector", None)
+    if connector is None:
+        from app.engine.ecolabel_connector import LiveEcolabelConnector
+        connector = LiveEcolabelConnector()
+    return connector.list_registries()
+
+
+@router.get("/ecolabels/verify")
+def verify_ecolabel_license(
+    license_number: str,
+    request: Request,
+    scheme: str | None = None,
+    product_identifier: str | None = None,
+) -> dict[str, Any]:
+    """Vérifie en direct un numéro de licence d'écolabel auprès des registres officiels."""
+    connector = getattr(request.app.state, "ecolabel_connector", None)
+    if connector is None:
+        from app.engine.ecolabel_connector import LiveEcolabelConnector
+        connector = LiveEcolabelConnector()
+    return connector.verify_live(
+        license_number=license_number,
+        scheme=scheme,
+        product_identifier=product_identifier,
+    )
+
+
+@router.post("/ecolabels/sync")
+def sync_ecolabel_registries(request: Request) -> dict[str, Any]:
+    """Synchronise et actualise le cache local avec les registres officiels."""
+    connector = getattr(request.app.state, "ecolabel_connector", None)
+    if connector is None:
+        from app.engine.ecolabel_connector import LiveEcolabelConnector
+        connector = LiveEcolabelConnector()
+    return connector.sync()
