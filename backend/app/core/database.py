@@ -55,6 +55,39 @@ class Webhook(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
+class MonitoredTarget(Base):
+    __tablename__ = "monitored_targets"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    organization_id: Mapped[str] = mapped_column(String(36), index=True)
+    name: Mapped[str] = mapped_column(String(128))
+    url: Mapped[str] = mapped_column(String(2048))
+    frequency_hours: Mapped[int] = mapped_column(Integer, default=24)
+    last_checked_at_utc: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    next_check_due_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    last_status: Mapped[str] = mapped_column(String(32), default="PENDING")
+    last_risk_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_violations_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_audit_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    regression_detected: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class MonitoringLog(Base):
+    __tablename__ = "monitoring_logs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    target_id: Mapped[str] = mapped_column(String(36), index=True)
+    executed_at_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    overall_compliance: Mapped[str] = mapped_column(String(32))
+    risk_score: Mapped[int] = mapped_column(Integer)
+    violations_count: Mapped[int] = mapped_column(Integer)
+    detected_claims: Mapped[list[str]] = mapped_column(JSON, default=list)
+    audit_id: Mapped[str] = mapped_column(String(36))
+    delta_status: Mapped[str] = mapped_column(String(32), default="UNCHANGED")
+
+
 class AuditRecord(Base):
     __tablename__ = "audit_records"
 

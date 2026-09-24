@@ -126,6 +126,14 @@ L'architecture supporte le cloisonnement étanche multi-organisations via l'en-t
 - **Détection des altérations et ruptures de chaîne** : re-calcul à la volée du chaînage de blocs cryptographiques du ledger (`record_hash`) et comparaison de l'empreinte SHA-256 du texte source et du rapport pour détecter toute falsification (`TAMPERED` vs `CERTIFIED`).
 - **Interface UI dédiée** : onglet « Vérification d'Attestation » dans le dashboard pour contrôler en un clic n'importe quel identifiant d'audit ou certificat.
 
+### Compliance Watcher · Surveillance E-Commerce Continue & Détection de Régression
+
+- **Surveillance planifiée de fiches produits (`/api/v1/engine/watcher/targets`)** : enregistrement d'URLs e-commerce sous surveillance continue avec fréquence configurable (1h à 168h).
+- **Scraper et audit automatisé (`app/engine/compliance_watcher.py`)** : extraction sécurisée du contenu web, soumission au moteur réglementaire déterministe et stockage immuable du log de conformité (`MonitoringLog`).
+- **Détection des régressions de conformité** : identification automatique de toute dégradation du statut légal (ex. basculement de `COMPLIANT` vers `NON_COMPLIANT` ou apparition de nouvelles allégations interdites) avec calcul du statut delta (`INITIAL`, `REGRESSION`, `RESOLVED`, `UNCHANGED`).
+- **Déclenchement automatique de Webhooks** : émission d'un événement `watcher.regression_detected` dès qu'un drift ou une régression est constaté sur un site marchand.
+- **Interface UI dédiée (`ComplianceWatcherView`)** : onglet « Compliance Watcher (E-Com) » pour piloter les cibles, déclencher des scans unitaires ou des scans batch de la flotte, et inspecter l'historique complet des deltas.
+
 ### Intégration Continue (CI/CD GitHub Actions)
 
 Le workflow `.github/workflows/ci.yml` valide automatiquement sur chaque push et pull request :

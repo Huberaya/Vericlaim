@@ -477,3 +477,42 @@ export type AuditVerificationResponse = {
   violations_count: number | null;
   verification_timestamp_utc: string;
 };
+
+export type MonitoredTargetResponse = {
+  id: string;
+  organization_id: string;
+  name: string;
+  url: string;
+  frequency_hours: number;
+  last_checked_at_utc: string | null;
+  next_check_due_utc: string;
+  last_status: OverallCompliance | "PENDING";
+  last_risk_score: number | null;
+  last_violations_count: number | null;
+  last_audit_id: string | null;
+  regression_detected: boolean;
+  is_active: boolean;
+  created_at_utc: string;
+};
+
+export type MonitoredTargetListResponse = {
+  total: number;
+  targets: MonitoredTargetResponse[];
+};
+
+export type MonitoringLogResponse = {
+  id: string;
+  target_id: string;
+  executed_at_utc: string;
+  overall_compliance: OverallCompliance;
+  risk_score: number;
+  violations_count: number;
+  detected_claims: string[];
+  audit_id: string;
+  delta_status: "INITIAL" | "REGRESSION" | "RESOLVED" | "UNCHANGED";
+};
+
+export type MonitoringLogListResponse = {
+  total: number;
+  logs: MonitoringLogResponse[];
+};

@@ -301,3 +301,48 @@ class AuditVerificationResponse(BaseModel):
     risk_score: int | None = None
     violations_count: int | None = None
     verification_timestamp_utc: datetime
+
+
+class MonitoredTargetCreateRequest(BaseModel):
+    name: str = Field(min_length=2, max_length=128)
+    url: str = Field(min_length=8, max_length=2048)
+    frequency_hours: int = Field(default=24, ge=1, le=720)
+
+
+class MonitoredTargetResponse(BaseModel):
+    id: str
+    organization_id: str
+    name: str
+    url: str
+    frequency_hours: int
+    last_checked_at_utc: datetime | None = None
+    next_check_due_utc: datetime
+    last_status: str
+    last_risk_score: int | None = None
+    last_violations_count: int | None = None
+    last_audit_id: str | None = None
+    regression_detected: bool
+    is_active: bool
+    created_at_utc: datetime
+
+
+class MonitoredTargetListResponse(BaseModel):
+    total: int
+    targets: list[MonitoredTargetResponse]
+
+
+class MonitoringLogResponse(BaseModel):
+    id: str
+    target_id: str
+    executed_at_utc: datetime
+    overall_compliance: str
+    risk_score: int
+    violations_count: int
+    detected_claims: list[str]
+    audit_id: str
+    delta_status: str
+
+
+class MonitoringLogListResponse(BaseModel):
+    total: int
+    logs: list[MonitoringLogResponse]

@@ -1176,4 +1176,85 @@ def test_cryptographic_audit_verification_portal():
         assert verify_unknown.json()["is_valid"] is False
 
 
+def test_compliance_watcher_target_and_execution_lifecycle(monkeypatch):
+    from uuid import uuid4
+    from app.main import app
+    from app.engine.url_scraper import EcommerceUrlScraper
+
+    # Mock du scraper pour retourner une allégation contrôlée
+    mock_html = "<html><head><title>Bouteille Bio 500ml</title></head><body>Bouteille 100% biodégradable et sans chimie.</body></html>"
+    async def mock_scrape(self, url, render_js=True):
+        return "Bouteille 100% biodégradable et sans chimie.", "hash123", {"page_title": "Bouteille Bio 500ml"}
+
+    monkeypatch.setattr(EcommerceUrlScraper, "scrape", mock_scrape)
+
+    with TestClient(app) as client:
+        # 1. Onboarder une organisation
+        slug = f"watcher-org-{uuid4().hex[:6]}"
+        t_resp = client.post("/api/v1/engine/tenants", json={"name": "Watcher Brand", "slug": slug})
+        assert t_resp.status_code == 200
+        api_key = t_resp.json()["initial_api_key"]["key"]
+
+        # 2. Créer une cible de surveillance
+        target_resp = client.post(
+            "/api/v1/engine/watcher/targets",
+            headers={"X-API-Key": api_key},
+            json={
+                "name": "Fiche Produit Bouteille Bio",
+                "url": "https://bio-store.fr/products/bouteille-500",
+                "frequency_hours": 12,
+            },
+        )
+        assert target_resp.status_code == 200
+        target_data = target_resp.json()
+        target_id = target_data["id"]
+        assert target_data["last_status"] == "PENDING"
+        assert target_data["frequency_hours"] == 12
+
+        # 3. Lister les cibles de l'organisation
+        list_targets = client.get("/api/v1/engine/watcher/targets", headers={"X-API-Key": api_key})
+        assert list_targets.status_code == 200
+        assert list_targets.json()["total"] == 1
+
+        # 4. Déclencher un contrôle immédiat sur la cible
+        run_resp = client.post(
+            f"/api/v1/engine/watcher/targets/{target_id}/run",
+            headers={"X-API-Key": api_key},
+        )
+        assert run_resp.status_code == 200
+        run_data = run_resp.json()
+        assert run_data["overall_compliance"] == "NON_COMPLIANT"
+        assert run_data["violations_count"] >= 1
+        assert run_data["delta_status"] == "INITIAL"
+
+        # 5. Consulter l'historique de surveillance
+        hist_resp = client.get(
+            f"/api/v1/engine/watcher/targets/{target_id}/history",
+            headers={"X-API-Key": api_key},
+        )
+        assert hist_resp.status_code == 200
+        assert hist_resp.json()["total"] == 1
+        assert hist_resp.json()["logs"][0]["delta_status"] == "INITIAL"
+
+        # 6. Vérifier la cible mise à jour avec détection de régression / infraction
+        check_tgt = client.get("/api/v1/engine/watcher/targets", headers={"X-API-Key": api_key})
+        updated_tgt = check_tgt.json()["targets"][0]
+        assert updated_tgt["last_status"] == "NON_COMPLIANT"
+        assert updated_tgt["regression_detected"] is True
+        assert updated_tgt["last_checked_at_utc"] is not None
+
+        # 7. Exécuter le batch périodique
+        batch_resp = client.post("/api/v1/engine/watcher/run-batch")
+        assert batch_resp.status_code == 200
+
+        # 8. Supprimer la cible
+        del_resp = client.delete(
+            f"/api/v1/engine/watcher/targets/{target_id}",
+            headers={"X-API-Key": api_key},
+        )
+        assert del_resp.status_code == 200
+        assert del_resp.json()["status"] == "deleted"
+
+
+
 

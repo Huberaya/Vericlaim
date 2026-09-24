@@ -18,6 +18,8 @@ from starlette.datastructures import UploadFile as StarletteUploadFile
 from app.core.database import (
     ApiKey,
     AuditRecord,
+    MonitoredTarget,
+    MonitoringLog,
     Organization,
     Webhook,
     append_audit_record,
@@ -35,6 +37,7 @@ from app.core.security import (
 )
 from app.core.webhooks import dispatch_webhook_event, generate_webhook_secret
 from app.engine.audit_verifier import verify_audit_record
+from app.engine.compliance_watcher import execute_watcher_check, run_due_watcher_checks
 from app.engine.document_extractor import DocumentExtractionError, DocumentTextExtractor
 from app.engine.legal_remediation import generate_supplier_contract_addendum
 from app.engine.pdf_exporter import generate_audit_pdf
@@ -63,6 +66,11 @@ from app.models.schemas import (
     ContractAddendumResponse,
     EvaluationRequest,
     EvaluationResponse,
+    MonitoredTargetCreateRequest,
+    MonitoredTargetListResponse,
+    MonitoredTargetResponse,
+    MonitoringLogListResponse,
+    MonitoringLogResponse,
     RuleBookResponse,
     RuleSummary,
     SupplierCompareRequest,
@@ -1222,3 +1230,194 @@ def verify_audit_dossier(
     """Vérifie l'intégrité intégrale d'un rapport d'audit et détecte toute altération du texte ou des métadonnées."""
     result = verify_audit_record(db, body.audit_id, supplied_report_json=body.report_json)
     return AuditVerificationResponse(**result.to_dict())
+
+
+@router.post("/watcher/targets", response_model=MonitoredTargetResponse)
+def create_monitored_target(
+    body: MonitoredTargetCreateRequest,
+    tenant: TenantContext = Depends(require_auth),
+    db: Session = Depends(get_db),
+) -> MonitoredTargetResponse:
+    """Ajoute une URL e-commerce au plan de surveillance continue et de détection de régressions."""
+    target_id = str(uuid4())
+    now = datetime.now(timezone.utc)
+    target = MonitoredTarget(
+        id=target_id,
+        organization_id=tenant.organization.id,
+        name=body.name.strip(),
+        url=body.url.strip(),
+        frequency_hours=body.frequency_hours,
+        next_check_due_utc=now,
+        last_status="PENDING",
+        is_active=True,
+        created_at_utc=now,
+    )
+    db.add(target)
+    db.commit()
+
+    return MonitoredTargetResponse(
+        id=target.id,
+        organization_id=target.organization_id,
+        name=target.name,
+        url=target.url,
+        frequency_hours=target.frequency_hours,
+        last_checked_at_utc=target.last_checked_at_utc,
+        next_check_due_utc=target.next_check_due_utc,
+        last_status=target.last_status,
+        last_risk_score=target.last_risk_score,
+        last_violations_count=target.last_violations_count,
+        last_audit_id=target.last_audit_id,
+        regression_detected=target.regression_detected,
+        is_active=target.is_active,
+        created_at_utc=target.created_at_utc,
+    )
+
+
+@router.get("/watcher/targets", response_model=MonitoredTargetListResponse)
+def list_monitored_targets(
+    tenant: TenantContext = Depends(require_auth),
+    db: Session = Depends(get_db),
+) -> MonitoredTargetListResponse:
+    """Liste l'ensemble des cibles sous surveillance continue pour l'organisation."""
+    targets = list(
+        db.scalars(
+            select(MonitoredTarget)
+            .where(MonitoredTarget.organization_id == tenant.organization.id)
+            .order_by(MonitoredTarget.created_at_utc.desc())
+        ).all()
+    )
+    items = [
+        MonitoredTargetResponse(
+            id=t.id,
+            organization_id=t.organization_id,
+            name=t.name,
+            url=t.url,
+            frequency_hours=t.frequency_hours,
+            last_checked_at_utc=t.last_checked_at_utc,
+            next_check_due_utc=t.next_check_due_utc,
+            last_status=t.last_status,
+            last_risk_score=t.last_risk_score,
+            last_violations_count=t.last_violations_count,
+            last_audit_id=t.last_audit_id,
+            regression_detected=t.regression_detected,
+            is_active=t.is_active,
+            created_at_utc=t.created_at_utc,
+        )
+        for t in targets
+    ]
+    return MonitoredTargetListResponse(total=len(items), targets=items)
+
+
+@router.get("/watcher/targets/{target_id}/history", response_model=MonitoringLogListResponse)
+def get_target_history(
+    target_id: str,
+    tenant: TenantContext = Depends(require_auth),
+    db: Session = Depends(get_db),
+) -> MonitoringLogListResponse:
+    """Historique chronologique des contrôles exécutés sur une cible e-commerce."""
+    target = db.scalar(
+        select(MonitoredTarget).where(
+            MonitoredTarget.id == target_id,
+            MonitoredTarget.organization_id == tenant.organization.id,
+        )
+    )
+    if not target:
+        raise HTTPException(status_code=404, detail="Cible de surveillance introuvable.")
+
+    logs = list(
+        db.scalars(
+            select(MonitoringLog)
+            .where(MonitoringLog.target_id == target_id)
+            .order_by(MonitoringLog.executed_at_utc.desc())
+        ).all()
+    )
+    items = [
+        MonitoringLogResponse(
+            id=l.id,
+            target_id=l.target_id,
+            executed_at_utc=l.executed_at_utc,
+            overall_compliance=l.overall_compliance,
+            risk_score=l.risk_score,
+            violations_count=l.violations_count,
+            detected_claims=l.detected_claims or [],
+            audit_id=l.audit_id,
+            delta_status=l.delta_status,
+        )
+        for l in logs
+    ]
+    return MonitoringLogListResponse(total=len(items), logs=items)
+
+
+@router.post("/watcher/targets/{target_id}/run", response_model=MonitoringLogResponse)
+async def run_target_check(
+    target_id: str,
+    request: Request,
+    tenant: TenantContext = Depends(require_auth),
+    db: Session = Depends(get_db),
+) -> MonitoringLogResponse:
+    """Déclenche immédiatement un contrôle de conformité sur la cible spécifiée."""
+    target = db.scalar(
+        select(MonitoredTarget).where(
+            MonitoredTarget.id == target_id,
+            MonitoredTarget.organization_id == tenant.organization.id,
+        )
+    )
+    if not target:
+        raise HTTPException(status_code=404, detail="Cible de surveillance introuvable.")
+
+    evaluator = request.app.state.evaluator
+    log_entry = await execute_watcher_check(
+        db=db,
+        target=target,
+        evaluator=evaluator,
+        execute_evaluation_func=_execute_evaluation,
+    )
+    return MonitoringLogResponse(
+        id=log_entry.id,
+        target_id=log_entry.target_id,
+        executed_at_utc=log_entry.executed_at_utc,
+        overall_compliance=log_entry.overall_compliance,
+        risk_score=log_entry.risk_score,
+        violations_count=log_entry.violations_count,
+        detected_claims=log_entry.detected_claims or [],
+        audit_id=log_entry.audit_id,
+        delta_status=log_entry.delta_status,
+    )
+
+
+@router.delete("/watcher/targets/{target_id}")
+def delete_monitored_target(
+    target_id: str,
+    tenant: TenantContext = Depends(require_auth),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Supprime une cible de la surveillance continue."""
+    target = db.scalar(
+        select(MonitoredTarget).where(
+            MonitoredTarget.id == target_id,
+            MonitoredTarget.organization_id == tenant.organization.id,
+        )
+    )
+    if not target:
+        raise HTTPException(status_code=404, detail="Cible introuvable.")
+
+    db.delete(target)
+    db.commit()
+    return {"status": "deleted", "target_id": target_id}
+
+
+@router.post("/watcher/run-batch")
+async def trigger_due_watcher_batch(
+    request: Request,
+    max_targets: int = 10,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Exécute les contrôles pour toutes les cibles dont la date de validité périodique est échue."""
+    evaluator = request.app.state.evaluator
+    logs = await run_due_watcher_checks(
+        db=db,
+        evaluator=evaluator,
+        execute_evaluation_func=_execute_evaluation,
+        max_targets=max_targets,
+    )
+    return {"status": "success", "executed_checks_count": len(logs)}

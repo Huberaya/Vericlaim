@@ -11,6 +11,9 @@ import type {
   EvidenceItem,
   EvaluationRequest,
   LcaEvidence,
+  MonitoredTargetListResponse,
+  MonitoredTargetResponse,
+  MonitoringLogListResponse,
   RegulatoryAuditResponse,
   SupplierCompareRequest,
   SupplierCompareResponse,
@@ -505,3 +508,84 @@ export async function verifyAuditPublic(auditId: string): Promise<AuditVerificat
   }
   return (await response.json()) as AuditVerificationResponse;
 }
+
+export async function fetchMonitoredTargets(): Promise<MonitoredTargetListResponse> {
+  const response = await fetch(requestUrl("/api/v1/engine/watcher/targets"), {
+    headers: authHeaders(),
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    throw new Error(`Échec de récupération des cibles surveillées (${response.status})`);
+  }
+  return (await response.json()) as MonitoredTargetListResponse;
+}
+
+export async function createMonitoredTarget(data: {
+  name: string;
+  url: string;
+  frequency_hours?: number;
+}): Promise<MonitoredTargetResponse> {
+  const response = await fetch(requestUrl("/api/v1/engine/watcher/targets"), {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(data),
+  });
+  if (!response.ok) {
+    let detail = `Erreur création cible (${response.status})`;
+    try {
+      const body = await response.json();
+      if (body?.detail) detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail);
+    } catch {}
+    throw new Error(detail);
+  }
+  return (await response.json()) as MonitoredTargetResponse;
+}
+
+export async function deleteMonitoredTarget(targetId: string): Promise<void> {
+  const response = await fetch(requestUrl(`/api/v1/engine/watcher/targets/${encodeURIComponent(targetId)}`), {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  if (!response.ok) {
+    throw new Error(`Échec de suppression de la cible (${response.status})`);
+  }
+}
+
+export async function runMonitoredTargetCheck(targetId: string): Promise<{ status: string; log: any }> {
+  const response = await fetch(requestUrl(`/api/v1/engine/watcher/targets/${encodeURIComponent(targetId)}/run`), {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  if (!response.ok) {
+    let detail = `Erreur exécution scan (${response.status})`;
+    try {
+      const body = await response.json();
+      if (body?.detail) detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail);
+    } catch {}
+    throw new Error(detail);
+  }
+  return await response.json();
+}
+
+export async function fetchMonitoredTargetHistory(targetId: string): Promise<MonitoringLogListResponse> {
+  const response = await fetch(requestUrl(`/api/v1/engine/watcher/targets/${encodeURIComponent(targetId)}/history`), {
+    headers: authHeaders(),
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    throw new Error(`Échec de récupération de l'historique (${response.status})`);
+  }
+  return (await response.json()) as MonitoringLogListResponse;
+}
+
+export async function runBatchWatcherChecks(): Promise<{ processed: number; success: number; regressions_detected: number }> {
+  const response = await fetch(requestUrl("/api/v1/engine/watcher/run-batch"), {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  if (!response.ok) {
+    throw new Error(`Erreur exécution batch de surveillance (${response.status})`);
+  }
+  return await response.json();
+}
+

@@ -10,6 +10,7 @@ import RemediationModal from "@/components/RemediationModal";
 import SupplierBenchmarkView from "@/components/SupplierBenchmarkView";
 import TenantApiKeyView from "@/components/TenantApiKeyView";
 import AuditVerificationView from "@/components/AuditVerificationView";
+import ComplianceWatcherView from "@/components/ComplianceWatcherView";
 import { auditFile, auditText, auditUrl, downloadAuditPdf } from "@/lib/api";
 import type {
   AuditContext,
@@ -67,7 +68,7 @@ function evidenceLabel(item: EvidenceItem): string {
 }
 
 export default function AuditDashboard() {
-  const [currentView, setCurrentView] = useState<"audit" | "benchmark" | "catalog" | "tenants" | "verify">("audit");
+  const [currentView, setCurrentView] = useState<"audit" | "benchmark" | "catalog" | "tenants" | "verify" | "watcher">("audit");
   const [surface, setSurface] = useState<Surface>("packaging");
   const [auditDate, setAuditDate] = useState(parisToday);
   const [consumerFacing, setConsumerFacing] = useState(true);
@@ -226,6 +227,15 @@ export default function AuditDashboard() {
             <span className="nav-icon">🛡️</span> Vérification d&apos;Attestation
             {currentView === "verify" && <span className="nav-indicator" />}
           </button>
+          <button
+            type="button"
+            className={`sidebar-link ${currentView === "watcher" ? "sidebar-link-active" : ""}`}
+            onClick={() => setCurrentView("watcher")}
+            style={{ width: "100%", textAlign: "left", background: "none", border: 0 }}
+          >
+            <span className="nav-icon">📡</span> Compliance Watcher (E-Com)
+            {currentView === "watcher" && <span className="nav-indicator" />}
+          </button>
           <a
             className="sidebar-link"
             href="#results-title"
@@ -316,6 +326,14 @@ export default function AuditDashboard() {
             <TenantApiKeyView />
           ) : currentView === "verify" ? (
             <AuditVerificationView />
+          ) : currentView === "watcher" ? (
+            <ComplianceWatcherView
+              onLoadAuditReport={(rep) => {
+                setReport(rep);
+                setSourceText(rep.extracted_source_text);
+                setCurrentView("audit");
+              }}
+            />
           ) : (
             <>
               <div className="dashboard-grid grid">
