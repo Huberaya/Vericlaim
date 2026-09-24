@@ -6,6 +6,7 @@ import DocumentUploader from "@/components/DocumentUploader";
 import LegalScoreCard from "@/components/LegalScoreCard";
 import ProofUploadModal from "@/components/ProofUploadModal";
 import RemediationModal from "@/components/RemediationModal";
+import SupplierBenchmarkView from "@/components/SupplierBenchmarkView";
 import { auditFile, auditText, downloadAuditPdf } from "@/lib/api";
 import type {
   AuditContext,
@@ -63,9 +64,11 @@ function evidenceLabel(item: EvidenceItem): string {
 }
 
 export default function AuditDashboard() {
+  const [currentView, setCurrentView] = useState<"audit" | "benchmark">("audit");
   const [surface, setSurface] = useState<Surface>("packaging");
   const [auditDate, setAuditDate] = useState(parisToday);
   const [consumerFacing, setConsumerFacing] = useState(true);
+  const [supplierName, setSupplierName] = useState("");
   const [evidence, setEvidence] = useState<EvidenceItem[]>([]);
   const [report, setReport] = useState<RegulatoryAuditResponse | null>(null);
   const [sourceText, setSourceText] = useState("");
@@ -93,6 +96,7 @@ export default function AuditDashboard() {
       jurisdiction: "FR",
       surface,
       consumer_facing: consumerFacing,
+      supplier_name: supplierName.trim() || undefined,
       product_identifier: "SKU-DEMO-001",
       product_category: "packaging",
     };
@@ -154,8 +158,32 @@ export default function AuditDashboard() {
         </a>
         <div className="sidebar-section-label">ESPACE DE TRAVAIL</div>
         <nav className="sidebar-nav" aria-label="Navigation principale">
-          <a className="sidebar-link sidebar-link-active" href="#audit"><span className="nav-icon">◈</span> Audit des allégations<span className="nav-indicator" /></a>
-          <a className="sidebar-link" href="#results-title"><span className="nav-icon">⌘</span> Rapport d’analyse<span className="nav-count">08</span></a>
+          <button
+            type="button"
+            className={`sidebar-link ${currentView === "audit" ? "sidebar-link-active" : ""}`}
+            onClick={() => setCurrentView("audit")}
+            style={{ width: "100%", textAlign: "left", background: "none", border: 0 }}
+          >
+            <span className="nav-icon">◈</span> Audit des allégations
+            {currentView === "audit" && <span className="nav-indicator" />}
+          </button>
+          <button
+            type="button"
+            className={`sidebar-link ${currentView === "benchmark" ? "sidebar-link-active" : ""}`}
+            onClick={() => setCurrentView("benchmark")}
+            style={{ width: "100%", textAlign: "left", background: "none", border: 0 }}
+          >
+            <span className="nav-icon">⚖</span> Comparateur Fournisseurs
+            {currentView === "benchmark" && <span className="nav-indicator" />}
+          </button>
+          <a
+            className="sidebar-link"
+            href="#results-title"
+            onClick={() => setCurrentView("audit")}
+          >
+            <span className="nav-icon">⌘</span> Rapport d’analyse
+            <span className="nav-count">08</span>
+          </a>
         </nav>
         <div className="sidebar-rule-card">
           <div className="rule-card-icon">✓</div>
@@ -199,6 +227,17 @@ export default function AuditDashboard() {
               <span>DATE D’ANALYSE</span>
               <input type="date" value={auditDate} disabled={isLoading} onChange={(event) => { if (event.target.value) clearReportForContextChange(() => setAuditDate(event.target.value)); }} />
             </label>
+            <label className="context-field">
+              <span>FOURNISSEUR</span>
+              <input
+                type="text"
+                placeholder="Ex. EcoPack SAS"
+                value={supplierName}
+                disabled={isLoading}
+                onChange={(event) => setSupplierName(event.target.value)}
+                style={{ width: "120px", border: 0, background: "transparent", fontSize: "11px", fontWeight: "600", outline: "none", color: "var(--ink)" }}
+              />
+            </label>
             <label className="context-checkbox">
               <input type="checkbox" checked={consumerFacing} disabled={isLoading} onChange={(event) => clearReportForContextChange(() => setConsumerFacing(event.target.checked))} />
               <span className="checkbox-mark" aria-hidden="true" />
@@ -207,20 +246,31 @@ export default function AuditDashboard() {
             <span className="context-jurisdiction"><span className="jurisdiction-dot" /> JURIDICTION FR</span>
           </section>
 
-          <div className="dashboard-grid grid">
-            <DocumentUploader
-              isLoading={isLoading}
-              error={error}
-              onAuditText={runTextAudit}
-              onAuditFile={runFileAudit}
-              onOpenEvidence={() => setProofModalOpen(true)}
+          {currentView === "benchmark" ? (
+            <SupplierBenchmarkView
+              onLoadAuditReport={(rep) => {
+                setReport(rep);
+                setSourceText(rep.extracted_source_text);
+                setCurrentView("audit");
+              }}
+              onOpenNewAudit={() => setCurrentView("audit")}
             />
-            <LegalScoreCard
-              report={report}
-              onDownloadPdf={handleDownloadPdf}
-              isDownloadingPdf={isDownloadingPdf}
-            />
-          </div>
+          ) : (
+            <>
+              <div className="dashboard-grid grid">
+                <DocumentUploader
+                  isLoading={isLoading}
+                  error={error}
+                  onAuditText={runTextAudit}
+                  onAuditFile={runFileAudit}
+                  onOpenEvidence={() => setProofModalOpen(true)}
+                />
+                <LegalScoreCard
+                  report={report}
+                  onDownloadPdf={handleDownloadPdf}
+                  isDownloadingPdf={isDownloadingPdf}
+                />
+              </div>
 
           <section className="surface-card results-card" aria-labelledby="results-title">
             <div className="results-header">
@@ -299,6 +349,8 @@ export default function AuditDashboard() {
               </div>
             )}
           </section>
+          </>
+          )}
 
           <footer className="page-disclaimer">
             <span className="disclaimer-icon" aria-hidden="true">i</span>

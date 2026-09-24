@@ -432,3 +432,95 @@ def test_extended_nature_friendly_and_carbon_synonyms():
     types = {c.claim_type for c in claims}
     assert ClaimType.NATURE_FRIENDLY in types
     assert ClaimType.CARBON_NEUTRALITY in types
+
+
+def test_audit_history_and_retrieval():
+    from app.main import app
+
+    with TestClient(app) as client:
+        # Submit an evaluation with supplier metadata
+        eval_resp = client.post(
+            "/api/v1/engine/evaluate",
+            json={
+                "source_text": "Bouteille réutilisable zéro déchet.",
+                "context": {
+                    "as_of_date": "2026-09-24",
+                    "jurisdiction": "FR",
+                    "surface": "packaging",
+                    "consumer_facing": True,
+                    "supplier_name": "EcoSupply SAS",
+                    "product_identifier": "SKU-ECO-88",
+                },
+                "evidence": {"items": [], "legal_person": True},
+            },
+        )
+        assert eval_resp.status_code == 200
+        audit_id = eval_resp.json()["audit_trail"]["audit_id"]
+
+        # List audits and find our audit
+        history_resp = client.get("/api/v1/engine/audits", params={"supplier": "EcoSupply"})
+        assert history_resp.status_code == 200
+        history_data = history_resp.json()
+        assert history_data["total"] >= 1
+        found = [item for item in history_data["items"] if item["audit_id"] == audit_id]
+        assert len(found) == 1
+        assert found[0]["supplier_name"] == "EcoSupply SAS"
+        assert found[0]["product_identifier"] == "SKU-ECO-88"
+
+        # Fetch single audit
+        single_resp = client.get(f"/api/v1/engine/audits/{audit_id}")
+        assert single_resp.status_code == 200
+        single_data = single_resp.json()
+        assert single_data["audit_trail"]["audit_id"] == audit_id
+        assert single_data["extracted_source_text"] == "Bouteille réutilisable zéro déchet."
+
+
+def test_supplier_comparison_benchmark():
+    from app.main import app
+
+    with TestClient(app) as client:
+        comp_resp = client.post(
+            "/api/v1/engine/suppliers/compare",
+            json={
+                "submissions": [
+                    {
+                        "supplier_name": "Fournisseur Vertueux (BioPack)",
+                        "product_identifier": "PACK-VERT-01",
+                        "source_text": "Emballage en carton issu de forêts gérées durablement.",
+                        "context": {
+                            "as_of_date": "2026-09-24",
+                            "jurisdiction": "FR",
+                            "surface": "packaging",
+                            "consumer_facing": True,
+                        },
+                        "evidence": {"items": [], "legal_person": True},
+                    },
+                    {
+                        "supplier_name": "Fournisseur À Risque (Toxipack)",
+                        "product_identifier": "PACK-RISK-02",
+                        "source_text": "Emballage 100% biodégradable et sans produits chimiques.",
+                        "context": {
+                            "as_of_date": "2026-09-24",
+                            "jurisdiction": "FR",
+                            "surface": "packaging",
+                            "consumer_facing": True,
+                        },
+                        "evidence": {"items": [], "legal_person": True},
+                    },
+                ]
+            },
+        )
+        assert comp_resp.status_code == 200, comp_resp.text
+        data = comp_resp.json()
+        assert data["suppliers_count"] == 2
+        ranked = data["ranked_suppliers"]
+        # BioPack should rank #1
+        assert ranked[0]["supplier_name"] == "Fournisseur Vertueux (BioPack)"
+        assert ranked[0]["rank"] == 1
+        # Toxipack should rank #2 with critical non-compliance
+        assert ranked[1]["supplier_name"] == "Fournisseur À Risque (Toxipack)"
+        assert ranked[1]["rank"] == 2
+        assert ranked[1]["overall_compliance"] == "NON_COMPLIANT"
+        assert ranked[1]["recommendation_color"] == "red"
+        assert ranked[1]["violations_count"] >= 2
+        assert data["best_supplier"] == "Fournisseur Vertueux (BioPack)"

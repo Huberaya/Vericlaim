@@ -33,11 +33,17 @@ pytest -v
 
 Le fichier `backend/pytest.ini` résout automatiquement le `PYTHONPATH`. Si PostgreSQL n'est pas démarré, le backend bascule automatiquement sur SQLite local (`vericlaim.db`) sans configuration requise.
 
-Résultat validé dans le workspace : **20 tests passants (100% de réussite)**.
+Résultat validé dans le workspace : **22 tests passants (100% de réussite)**.
 
 ### Export PDF de l'attestation d'audit
 
 L'API fournit l'endpoint `POST /api/v1/engine/export/pdf` qui génère une attestation d'audit juridique officielle au format PDF (mise en page juridique professionnelle, horodatage, empreinte SHA-256, plafond d'exposition et remédiations contractuelles). L'attestation est téléchargeable en un clic depuis l'interface utilisateur.
+
+### Historique des audits & Comparateur Fournisseurs
+
+- **Registre d'audit** (`GET /api/v1/engine/audits`, `GET /api/v1/engine/audits/{id}`) : consultation chronologique de tous les audits enregistrés avec métadonnées fournisseur, SKU, score et scellement SHA-256.
+- **Comparateur Achats** (`POST /api/v1/engine/suppliers/compare`) : benchmark déterministe côte-à-côte de plusieurs offres fournisseurs (classement par niveau de risque, identification des infractions, comparaison des plafonds d'amende et génération de clauses contractuelles d'achat).
+- **Interface dédiée** : accessible via l'onglet « Comparateur Fournisseurs » dans la barre latérale, avec démo intégrée (3 fournisseurs packaging) et sélection multi-audits depuis l'historique.
 
 ### Développer l'interface
 

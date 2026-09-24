@@ -1,10 +1,13 @@
 import type {
   AuditContext,
+  AuditHistoryResponse,
   EvidenceDossier,
   EvidenceItem,
   EvaluationRequest,
   LcaEvidence,
   RegulatoryAuditResponse,
+  SupplierCompareRequest,
+  SupplierCompareResponse,
 } from "@/lib/types";
 
 export const API_BASE_URL = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000").replace(/\/+$/, "");
@@ -144,4 +147,53 @@ export async function downloadAuditPdf(report: RegulatoryAuditResponse): Promise
   a.click();
   a.remove();
   window.URL.revokeObjectURL(url);
+}
+
+export async function fetchAuditHistory(params?: {
+  limit?: number;
+  offset?: number;
+  supplier?: string;
+  compliance?: string;
+  search?: string;
+}): Promise<AuditHistoryResponse> {
+  const query = new URLSearchParams();
+  if (params?.limit) query.set("limit", String(params.limit));
+  if (params?.offset) query.set("offset", String(params.offset));
+  if (params?.supplier) query.set("supplier", params.supplier);
+  if (params?.compliance) query.set("compliance", params.compliance);
+  if (params?.search) query.set("search", params.search);
+  const qs = query.toString();
+  const url = requestUrl(`/api/v1/engine/audits${qs ? `?${qs}` : ""}`);
+  const response = await fetch(url, { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(`Échec du chargement de l'historique (${response.status})`);
+  }
+  return (await response.json()) as AuditHistoryResponse;
+}
+
+export async function fetchAuditById(auditId: string): Promise<RegulatoryAuditResponse> {
+  const response = await fetch(requestUrl(`/api/v1/engine/audits/${encodeURIComponent(auditId)}`), {
+    cache: "no-store",
+  });
+  return readResult(response);
+}
+
+export async function compareSuppliers(
+  payload: SupplierCompareRequest,
+): Promise<SupplierCompareResponse> {
+  const response = await fetch(requestUrl("/api/v1/engine/suppliers/compare"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    let detail = `Erreur API (${response.status})`;
+    try {
+      const body = await response.json();
+      if (body?.detail) detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail);
+    } catch {}
+    throw new Error(detail);
+  }
+  return (await response.json()) as SupplierCompareResponse;
 }

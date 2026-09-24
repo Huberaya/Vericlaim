@@ -30,6 +30,7 @@ class AuditContext(BaseModel):
     jurisdiction: str = Field(default="FR", min_length=2, max_length=8)
     surface: Surface = Surface.PACKAGING
     consumer_facing: bool = True
+    supplier_name: str | None = None
     product_identifier: str | None = None
     product_category: str | None = None
     operation_spend_eur: Decimal | None = Field(default=None, ge=0)
@@ -76,3 +77,62 @@ class RuleSummary(BaseModel):
 class RuleBookResponse(BaseModel):
     rulebook_version: str
     rules: list[RuleSummary]
+
+
+class AuditHistoryItem(BaseModel):
+    audit_id: str
+    created_at_utc: datetime
+    supplier_name: str | None = None
+    product_identifier: str | None = None
+    overall_compliance: OverallCompliance
+    risk_score: int
+    violations_count: int
+    conditional_findings_count: int
+    detected_claims_count: int
+    record_hash: str
+    max_fixed_fine_eur: Decimal | None = None
+    source_snippet: str = ""
+
+
+class AuditHistoryResponse(BaseModel):
+    total: int
+    items: list[AuditHistoryItem]
+
+
+class SupplierSubmission(BaseModel):
+    supplier_name: str
+    product_identifier: str | None = None
+    source_text: str
+    context: AuditContext | None = None
+    evidence: EvidenceDossier | None = None
+
+
+class SupplierCompareRequest(BaseModel):
+    audit_ids: list[str] = Field(default_factory=list)
+    submissions: list[SupplierSubmission] = Field(default_factory=list)
+
+
+class SupplierComparisonItem(BaseModel):
+    supplier_name: str
+    product_identifier: str | None = None
+    audit_id: str | None = None
+    overall_compliance: OverallCompliance
+    risk_score: int
+    rank: int
+    recommendation: str
+    recommendation_color: str
+    violations_count: int
+    violations_summary: list[str] = Field(default_factory=list)
+    max_known_fine_eur: Decimal | None = None
+    claims_detected: list[str] = Field(default_factory=list)
+    procurement_clause: str
+    has_lca_declared: bool = False
+    has_ecolabel_declared: bool = False
+
+
+class SupplierCompareResponse(BaseModel):
+    evaluated_at: datetime
+    suppliers_count: int
+    ranked_suppliers: list[SupplierComparisonItem]
+    best_supplier: str | None
+    benchmark_summary: str

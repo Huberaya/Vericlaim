@@ -28,6 +28,9 @@ class AuditRecord(Base):
     previous_record_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     record_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     summary_json: Mapped[dict[str, Any]] = mapped_column(JSON)
+    supplier_name: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    product_identifier: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    report_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
 
 
 _engine_kwargs: dict[str, Any] = {"pool_pre_ping": True}
@@ -40,10 +43,25 @@ engine = create_engine(settings.database_url, **_engine_kwargs)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
 
 
+def _migrate_columns() -> None:
+    from sqlalchemy import text
+    with engine.begin() as conn:
+        for col_name, col_type in [
+            ("supplier_name", "VARCHAR(128)"),
+            ("product_identifier", "VARCHAR(128)"),
+            ("report_json", "JSON" if not str(engine.url).startswith("sqlite") else "TEXT"),
+        ]:
+            try:
+                conn.execute(text(f"ALTER TABLE audit_records ADD COLUMN {col_name} {col_type}"))
+            except Exception:
+                pass
+
+
 def create_tables() -> None:
     global engine, SessionLocal
     try:
         Base.metadata.create_all(bind=engine)
+        _migrate_columns()
     except Exception as exc:
         # Fallback automatique sur SQLite si le serveur PostgreSQL n'est pas démarré (démos locales)
         if not settings.database_url.startswith("sqlite"):
@@ -53,6 +71,7 @@ def create_tables() -> None:
             engine = create_engine(fallback_url, connect_args={"check_same_thread": False})
             SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
             Base.metadata.create_all(bind=engine)
+            _migrate_columns()
         else:
             raise
 
@@ -82,6 +101,9 @@ def append_audit_record(
     report_sha256: str,
     summary: dict[str, Any],
     created_at_utc: datetime | None = None,
+    supplier_name: str | None = None,
+    product_identifier: str | None = None,
+    report_json: dict[str, Any] | None = None,
 ) -> tuple[str | None, str, datetime]:
     """Append a hash-linked audit envelope. This is tamper-evident, not notarised."""
     created = created_at_utc or datetime.now(timezone.utc)
@@ -95,6 +117,8 @@ def append_audit_record(
         "report_sha256": report_sha256,
         "previous_record_hash": previous_hash,
         "summary": summary,
+        "supplier_name": supplier_name,
+        "product_identifier": product_identifier,
     }
     record_hash = sha256_json(material)
     row = AuditRecord(
@@ -106,6 +130,9 @@ def append_audit_record(
         previous_record_hash=previous_hash,
         record_hash=record_hash,
         summary_json=summary,
+        supplier_name=supplier_name,
+        product_identifier=product_identifier,
+        report_json=report_json,
     )
     db.add(row)
     db.commit()

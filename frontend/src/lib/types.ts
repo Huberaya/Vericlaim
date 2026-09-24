@@ -148,6 +148,7 @@ export type AuditContext = {
   jurisdiction: string;
   surface: Surface;
   consumer_facing: boolean;
+  supplier_name?: string | null;
   product_identifier?: string | null;
   product_category?: string | null;
   operation_spend_eur?: ApiDecimal | null;
@@ -288,3 +289,62 @@ export function violationSeverity(evaluation: ClaimEvaluation): ViolationSeverit
   ) return "WARNING";
   return "INFO";
 }
+
+export type AuditHistoryItem = {
+  audit_id: string;
+  created_at_utc: string;
+  supplier_name?: string | null;
+  product_identifier?: string | null;
+  overall_compliance: OverallCompliance;
+  risk_score: number;
+  violations_count: number;
+  conditional_findings_count: number;
+  detected_claims_count: number;
+  record_hash: string;
+  max_fixed_fine_eur?: ApiDecimal | null;
+  source_snippet: string;
+};
+
+export type AuditHistoryResponse = {
+  total: number;
+  items: AuditHistoryItem[];
+};
+
+export type SupplierSubmission = {
+  supplier_name: string;
+  product_identifier?: string | null;
+  source_text: string;
+  context?: Partial<AuditContext>;
+  evidence?: Partial<EvidenceDossier>;
+};
+
+export type SupplierCompareRequest = {
+  audit_ids?: string[];
+  submissions?: SupplierSubmission[];
+};
+
+export type SupplierComparisonItem = {
+  supplier_name: string;
+  product_identifier?: string | null;
+  audit_id?: string | null;
+  overall_compliance: OverallCompliance;
+  risk_score: number;
+  rank: number;
+  recommendation: string;
+  recommendation_color: "green" | "amber" | "red" | string;
+  violations_count: number;
+  violations_summary: string[];
+  max_known_fine_eur?: ApiDecimal | null;
+  claims_detected: string[];
+  procurement_clause: string;
+  has_lca_declared: boolean;
+  has_ecolabel_declared: boolean;
+};
+
+export type SupplierCompareResponse = {
+  evaluated_at: string;
+  suppliers_count: number;
+  ranked_suppliers: SupplierComparisonItem[];
+  best_supplier?: string | null;
+  benchmark_summary: string;
+};

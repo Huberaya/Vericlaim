@@ -3,15 +3,17 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Any
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import ValidationError
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
-from app.core.database import append_audit_record, canonical_json, get_db, sha256_json
+from app.core.database import AuditRecord, append_audit_record, canonical_json, get_db, sha256_json
 from app.engine.document_extractor import DocumentExtractionError, DocumentTextExtractor
 from app.engine.pdf_exporter import generate_audit_pdf
 from app.engine.risk_assessment import (
@@ -20,8 +22,20 @@ from app.engine.risk_assessment import (
     derive_risk_score,
 )
 from app.engine.rule_book import RULES, RULEBOOK_VERSION
-from app.models.legal_types import AuditTrail, EvidenceDossier, LegalAssessment, Verdict
-from app.models.schemas import AuditContext, EvaluationRequest, EvaluationResponse, RuleBookResponse, RuleSummary
+from app.models.legal_types import AuditTrail, EvidenceDossier, LegalAssessment, OverallCompliance, Verdict
+from app.models.schemas import (
+    AuditContext,
+    AuditHistoryItem,
+    AuditHistoryResponse,
+    EvaluationRequest,
+    EvaluationResponse,
+    RuleBookResponse,
+    RuleSummary,
+    SupplierCompareRequest,
+    SupplierCompareResponse,
+    SupplierComparisonItem,
+    SupplierSubmission,
+)
 
 
 router = APIRouter(prefix="/api/v1/engine", tags=["regulatory-engine"])
@@ -117,17 +131,19 @@ def _audit_limitations(evaluator_status: str) -> list[str]:
     ]
 
 
-@router.post("/evaluate", response_model=EvaluationResponse)
-async def evaluate_claims(request: Request, db: Session = Depends(get_db)) -> EvaluationResponse:
-    body, extraction_method, document_sha256 = await _read_request(request)
-    if not body.source_text.strip():
-        raise HTTPException(status_code=422, detail="Fournissez source_text ou un document exploitable.")
-
-    evaluator = request.app.state.evaluator
-    claims, evaluations = evaluator.evaluate_text(body.source_text, body.evidence, body.context)
+def _execute_evaluation(
+    evaluator,
+    source_text: str,
+    context: AuditContext,
+    evidence: EvidenceDossier,
+    db: Session,
+    extraction_method: str = "INLINE_TEXT",
+    document_sha256: str | None = None,
+) -> EvaluationResponse:
+    claims, evaluations = evaluator.evaluate_text(source_text, evidence, context)
     overall = derive_overall_status(evaluations, len(claims))
     risk_score = derive_risk_score(evaluations)
-    exposure, exposure_summary = build_exposure_matrix(evaluations, body.evidence, body.context)
+    exposure, exposure_summary = build_exposure_matrix(evaluations, evidence, context)
 
     violations_count = sum(1 for item in evaluations if item.is_legal_violation)
     conditional_findings_count = sum(
@@ -135,11 +151,11 @@ async def evaluate_claims(request: Request, db: Session = Depends(get_db)) -> Ev
         for item in evaluations
         if item.verdict in {Verdict.CONDITIONAL_REJECT, Verdict.REVIEW_REQUIRED, Verdict.UPCOMING}
     )
-    source_sha256 = _sha256_text(body.source_text)
-    evidence_manifest_sha256 = sha256_json(body.evidence.model_dump(mode="json"))
+    source_sha256 = _sha256_text(source_text)
+    evidence_manifest_sha256 = sha256_json(evidence.model_dump(mode="json"))
 
     base_response: dict[str, Any] = {
-        "extracted_source_text": body.source_text,
+        "extracted_source_text": source_text,
         "overall_compliance": overall,
         "risk_score": risk_score,
         "legal_exposure_estimate": exposure_summary,
@@ -152,6 +168,11 @@ async def evaluate_claims(request: Request, db: Session = Depends(get_db)) -> Ev
     report_sha256 = sha256_json(base_response)
     audit_id = str(uuid4())
     now = datetime.now(timezone.utc)
+    fine_val = (
+        str(exposure.max_known_fixed_fine_eur)
+        if exposure.max_known_fixed_fine_eur is not None
+        else None
+    )
     summary = {
         "overall_compliance": overall.value,
         "risk_score": risk_score,
@@ -159,6 +180,8 @@ async def evaluate_claims(request: Request, db: Session = Depends(get_db)) -> Ev
         "conditional_findings_count": conditional_findings_count,
         "detected_claims_count": len(claims),
         "rule_ids": sorted({item.rule_id for item in evaluations}),
+        "max_fixed_fine_eur": fine_val,
+        "source_snippet": source_text[:200],
     }
     try:
         previous_hash, record_hash, created_at = append_audit_record(
@@ -169,17 +192,22 @@ async def evaluate_claims(request: Request, db: Session = Depends(get_db)) -> Ev
             report_sha256=report_sha256,
             summary=summary,
             created_at_utc=now,
+            supplier_name=context.supplier_name,
+            product_identifier=context.product_identifier,
         )
     except Exception as exc:
         db.rollback()
-        raise HTTPException(status_code=503, detail="Le registre d'audit est indisponible; aucune évaluation n'a été certifiée.") from exc
+        raise HTTPException(
+            status_code=503,
+            detail="Le registre d'audit est indisponible; aucune évaluation n'a été certifiée.",
+        ) from exc
 
     audit_trail = AuditTrail(
         audit_id=audit_id,
         engine_version="0.1.0",
         rulebook_version=RULEBOOK_VERSION,
         evaluated_at_utc=created_at,
-        as_of_date=body.context.as_of_date,
+        as_of_date=context.as_of_date,
         source_sha256=source_sha256,
         document_sha256=document_sha256,
         evidence_manifest_sha256=evidence_manifest_sha256,
@@ -189,11 +217,239 @@ async def evaluate_claims(request: Request, db: Session = Depends(get_db)) -> Ev
         extraction_method=extraction_method,
         limitations=_audit_limitations(evaluator.fr_2024_825_transposition_status),
     )
+    final_response = EvaluationResponse(**base_response, audit_trail=audit_trail)
+
+    # Sauvegarder le rapport complet pour consultation historique et comparaison
     try:
-        return EvaluationResponse(**base_response, audit_trail=audit_trail)
-    except ValidationError as exc:
-        # This should indicate a developer/schema mismatch, not user input.
-        raise HTTPException(status_code=500, detail="Erreur interne de construction du rapport.") from exc
+        record = db.scalar(select(AuditRecord).where(AuditRecord.audit_id == audit_id))
+        if record:
+            record.report_json = final_response.model_dump(mode="json")
+            db.commit()
+    except Exception:
+        pass
+
+    return final_response
+
+
+@router.post("/evaluate", response_model=EvaluationResponse)
+async def evaluate_claims(request: Request, db: Session = Depends(get_db)) -> EvaluationResponse:
+    body, extraction_method, document_sha256 = await _read_request(request)
+    if not body.source_text.strip():
+        raise HTTPException(status_code=422, detail="Fournissez source_text ou un document exploitable.")
+
+    evaluator = request.app.state.evaluator
+    return _execute_evaluation(
+        evaluator=evaluator,
+        source_text=body.source_text,
+        context=body.context,
+        evidence=body.evidence,
+        db=db,
+        extraction_method=extraction_method,
+        document_sha256=document_sha256,
+    )
+
+
+@router.get("/audits", response_model=AuditHistoryResponse)
+def list_audits(
+    limit: int = 50,
+    offset: int = 0,
+    supplier: str | None = None,
+    compliance: str | None = None,
+    search: str | None = None,
+    db: Session = Depends(get_db),
+) -> AuditHistoryResponse:
+    """Consulte l'historique chronologique des audits enregistrés dans le registre immuable."""
+    query = select(AuditRecord).order_by(AuditRecord.sequence.desc())
+    records = list(db.scalars(query).all())
+
+    filtered: list[AuditRecord] = []
+    for r in records:
+        summary = r.summary_json or {}
+        comp = summary.get("overall_compliance", "")
+        if compliance and comp != compliance:
+            continue
+        if supplier and (not r.supplier_name or supplier.lower() not in r.supplier_name.lower()):
+            continue
+        if search:
+            snippet = summary.get("source_snippet", "")
+            supp = r.supplier_name or ""
+            sku = r.product_identifier or ""
+            term = search.lower()
+            if term not in snippet.lower() and term not in supp.lower() and term not in sku.lower() and term not in r.audit_id.lower():
+                continue
+        filtered.append(r)
+
+    total = len(filtered)
+    page_records = filtered[offset : offset + limit]
+
+    items: list[AuditHistoryItem] = []
+    for r in page_records:
+        summary = r.summary_json or {}
+        fine_val = summary.get("max_fixed_fine_eur")
+        fine = Decimal(str(fine_val)) if fine_val is not None else None
+        comp_val = summary.get("overall_compliance", "NO_CLAIMS_DETECTED")
+        items.append(
+            AuditHistoryItem(
+                audit_id=r.audit_id,
+                created_at_utc=r.created_at_utc,
+                supplier_name=r.supplier_name,
+                product_identifier=r.product_identifier,
+                overall_compliance=(
+                    OverallCompliance(comp_val)
+                    if comp_val in OverallCompliance._value2member_map_
+                    else OverallCompliance.NO_CLAIMS_DETECTED
+                ),
+                risk_score=int(summary.get("risk_score", 0)),
+                violations_count=int(summary.get("violations_count", 0)),
+                conditional_findings_count=int(summary.get("conditional_findings_count", 0)),
+                detected_claims_count=int(summary.get("detected_claims_count", 0)),
+                record_hash=r.record_hash,
+                max_fixed_fine_eur=fine,
+                source_snippet=summary.get("source_snippet", ""),
+            )
+        )
+    return AuditHistoryResponse(total=total, items=items)
+
+
+@router.get("/audits/{audit_id}", response_model=EvaluationResponse)
+def get_audit(audit_id: str, db: Session = Depends(get_db)) -> EvaluationResponse:
+    """Récupère le rapport complet d'un audit archivé par son identifiant."""
+    record = db.scalar(select(AuditRecord).where(AuditRecord.audit_id == audit_id))
+    if not record or not record.report_json:
+        raise HTTPException(status_code=404, detail="Rapport d'audit introuvable.")
+    return EvaluationResponse.model_validate(record.report_json)
+
+
+@router.post("/suppliers/compare", response_model=SupplierCompareResponse)
+def compare_suppliers(
+    body: SupplierCompareRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> SupplierCompareResponse:
+    """Compare et classe plusieurs offres ou dossiers fournisseurs selon leur niveau de risque réglementaire."""
+    evaluator = request.app.state.evaluator
+    evaluations_to_compare: list[tuple[str, str | None, EvaluationResponse]] = []
+
+    # 1. Depuis des identifiants d'audits passés
+    for audit_id in body.audit_ids:
+        record = db.scalar(select(AuditRecord).where(AuditRecord.audit_id == audit_id))
+        if record and record.report_json:
+            rep = EvaluationResponse.model_validate(record.report_json)
+            s_name = record.supplier_name or f"Audit {audit_id[:8]}"
+            p_id = record.product_identifier
+            evaluations_to_compare.append((s_name, p_id, rep))
+
+    # 2. Depuis des soumissions directes
+    for sub in body.submissions:
+        ctx = sub.context or AuditContext(
+            supplier_name=sub.supplier_name, product_identifier=sub.product_identifier
+        )
+        if sub.supplier_name and not ctx.supplier_name:
+            ctx.supplier_name = sub.supplier_name
+        if sub.product_identifier and not ctx.product_identifier:
+            ctx.product_identifier = sub.product_identifier
+        dossier = sub.evidence or EvidenceDossier(items=[])
+        rep = _execute_evaluation(evaluator, sub.source_text, ctx, dossier, db)
+        evaluations_to_compare.append((sub.supplier_name, sub.product_identifier, rep))
+
+    if not evaluations_to_compare:
+        raise HTTPException(
+            status_code=400,
+            detail="Fournissez au moins une offre fournisseur (via 'audit_ids' ou 'submissions') à évaluer.",
+        )
+
+    # Critères de classement du comparateur achats :
+    # 1. Conformité globale (COMPLIANT en tête, NON_COMPLIANT en queue)
+    # 2. Score de risque le plus faible
+    # 3. Moins d'infractions
+    # 4. Exposition financière la plus faible
+    def sort_key(item: tuple[str, str | None, EvaluationResponse]):
+        _, _, rep = item
+        status_rank = {
+            OverallCompliance.COMPLIANT: 0,
+            OverallCompliance.NO_CLAIMS_DETECTED: 1,
+            OverallCompliance.REVIEW_REQUIRED: 2,
+            OverallCompliance.CONDITIONAL_REJECT: 3,
+            OverallCompliance.UPCOMING_REQUIREMENTS: 4,
+            OverallCompliance.NON_COMPLIANT: 5,
+        }.get(rep.overall_compliance, 9)
+        fine = rep.exposure_matrix.max_known_fixed_fine_eur or Decimal(0)
+        return (status_rank, rep.risk_score, rep.violations_count, fine)
+
+    sorted_evals = sorted(evaluations_to_compare, key=sort_key)
+
+    items: list[SupplierComparisonItem] = []
+    for rank, (name, pid, rep) in enumerate(sorted_evals, start=1):
+        if rep.overall_compliance == OverallCompliance.COMPLIANT and rep.risk_score < 30:
+            rec = "CONFORME — Validé pour référencement achat"
+            color = "green"
+        elif rep.overall_compliance == OverallCompliance.NON_COMPLIANT or rep.violations_count > 0:
+            rec = "NON CONFORME — Risque juridique élevé (infractions retenues)"
+            color = "red"
+        else:
+            rec = "VIGILANCE — Preuves ou modifications obligatoires avant signature"
+            color = "amber"
+
+        viol_rules = sorted({ev.rule_title for ev in rep.evaluations if ev.is_legal_violation})
+        claims_det = [ev.trigger_text for ev in rep.evaluations]
+
+        first_clause = (
+            rep.evaluations[0].remediation.supplier_contract_clause
+            if rep.evaluations
+            else "Le Fournisseur garantit la stricte conformité réglementaire de ses allégations environnementales."
+        )
+
+        has_lca = any(
+            "ACV" in ev.rule_id or any("14044" in c.check_name for c in ev.evidence_checks)
+            for ev in rep.evaluations
+        )
+        has_ecolabel = any(
+            any("ECOLABEL" in c.check_name and c.independently_verified for c in ev.evidence_checks)
+            for ev in rep.evaluations
+        )
+
+        items.append(
+            SupplierComparisonItem(
+                supplier_name=name,
+                product_identifier=pid,
+                audit_id=rep.audit_trail.audit_id,
+                overall_compliance=rep.overall_compliance,
+                risk_score=rep.risk_score,
+                rank=rank,
+                recommendation=rec,
+                recommendation_color=color,
+                violations_count=rep.violations_count,
+                violations_summary=viol_rules,
+                max_known_fine_eur=rep.exposure_matrix.max_known_fixed_fine_eur,
+                claims_detected=list(dict.fromkeys(claims_det)),
+                procurement_clause=first_clause,
+                has_lca_declared=has_lca,
+                has_ecolabel_declared=has_ecolabel,
+            )
+        )
+
+    best_supp = items[0].supplier_name if items else None
+    summary_parts = []
+    if items:
+        summary_parts.append(f"Comparatif de {len(items)} fournisseur(s) : ")
+        summary_parts.append(
+            f"Fournisseur le plus vertueux : « {items[0].supplier_name} » (Score risque : {items[0].risk_score}/100). "
+        )
+        non_compliant = [it for it in items if it.overall_compliance == OverallCompliance.NON_COMPLIANT]
+        if non_compliant:
+            summary_parts.append(
+                f"{len(non_compliant)} offre(s) présentent un risque d'infraction juridique caractérisée."
+            )
+        else:
+            summary_parts.append("Aucun manquement critique non remédiable détecté.")
+
+    return SupplierCompareResponse(
+        evaluated_at=datetime.now(timezone.utc),
+        suppliers_count=len(items),
+        ranked_suppliers=items,
+        best_supplier=best_supp,
+        benchmark_summary="".join(summary_parts),
+    )
 
 
 @router.get("/rules", response_model=RuleBookResponse)

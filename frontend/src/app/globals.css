@@ -399,3 +399,115 @@ a { color: inherit; }
   .modal-field.full { grid-column: auto; }
   .modal-body { padding: 14px; }
 }
+
+/* --- HISTORIQUE & COMPARATEUR FOURNISSEURS --- */
+.benchmark-container { margin-top: 18px; margin-bottom: 30px; }
+.benchmark-subnav {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 14px; border: 1px solid var(--line); border-radius: 12px;
+  background: white; margin-bottom: 18px;
+}
+.subnav-tabs { display: flex; gap: 8px; }
+.subnav-tab {
+  display: inline-flex; align-items: center; gap: 6px; padding: 7px 14px;
+  border-radius: 8px; border: 1px solid transparent; font-size: 11px;
+  font-weight: 650; color: var(--muted); background: transparent; transition: .15s;
+}
+.subnav-tab:hover { background: #f6f8f5; color: var(--ink); }
+.subnav-tab-active { background: var(--forest); color: white !important; }
+.benchmark-empty-state {
+  text-align: center; padding: 48px 24px; border: 1px dashed #d5ded3;
+}
+.benchmark-summary-banner {
+  padding: 18px 22px; background: linear-gradient(135deg, #ffffff 0%, #f7faf5 100%);
+  border: 1px solid #d9e5d6; margin-bottom: 20px;
+}
+.best-supplier-badge {
+  display: flex; flex-direction: column; align-items: flex-end;
+  padding: 10px 16px; border-radius: 10px; background: #eaf4e6;
+  border: 1px solid #c8e0c3; color: #284c20;
+}
+.best-supplier-badge small { font-size: 8px; letter-spacing: .08em; font-weight: 700; }
+.best-supplier-badge strong { font-size: 13px; font-weight: 750; }
+.supplier-cards-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(310px, 1fr));
+  gap: 16px; margin-top: 16px;
+}
+.supplier-card {
+  display: flex; flex-direction: column; gap: 12px; padding: 20px;
+  border: 1px solid #e1e8df; border-radius: 14px; background: white;
+  transition: transform .15s, box-shadow .15s;
+}
+.supplier-card:hover { transform: translateY(-2px); box-shadow: var(--shadow); }
+.supplier-rank-1 { border-color: #badbb4; box-shadow: 0 4px 16px rgba(83,128,68,.08); }
+.rank-indicator { display: flex; align-items: center; gap: 6px; }
+.rank-num {
+  display: inline-flex; width: 26px; height: 26px; align-items: center;
+  justify-content: center; border-radius: 50%; font-weight: 800; font-size: 12px;
+  background: var(--forest); color: white;
+}
+.supplier-rank-1 .rank-num { background: #2f692b; color: white; }
+.rank-text { font-size: 11px; font-weight: 700; color: var(--ink); }
+.supplier-title { font-size: 13px; font-weight: 700; color: var(--forest-deep); margin: 0; }
+.supplier-sku { font-size: 9px; color: var(--muted); font-family: ui-monospace, monospace; }
+.supplier-score-row {
+  padding: 10px 12px; border-radius: 9px; background: #f8faf7;
+  border: 1px solid #ebf0e9;
+}
+.score-label { font-size: 8px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+.score-val strong { font-size: 18px; font-weight: 800; color: var(--forest-deep); }
+.fine-val { font-size: 12px; font-weight: 750; color: #8f342e; }
+.recommendation-box {
+  padding: 10px 12px; border-radius: 8px; font-size: 10px; line-height: 1.45;
+}
+.rec-title { font-weight: 700; font-size: 9px; text-transform: uppercase; letter-spacing: .05em; margin-bottom: 2px; }
+.rec-box-green { background: #eef7eb; color: #23521d; border: 1px solid #cbe5c4; }
+.rec-box-amber { background: #fdf7ec; color: #7f4b0e; border: 1px solid #fae2be; }
+.rec-box-red { background: #fef0ee; color: #87251f; border: 1px solid #f9ccc8; }
+.box-subtitle { font-size: 9px; font-weight: 700; text-transform: uppercase; color: var(--muted); margin-bottom: 4px; }
+.claim-tag {
+  display: inline-block; padding: 2px 7px; border-radius: 6px;
+  background: #f1f4f0; border: 1px solid #e2e8e0; font-size: 9px; color: var(--ink);
+}
+.violations-list { margin: 4px 0 0; padding-left: 14px; font-size: 10px; color: #a12b25; }
+.violations-list li { margin-bottom: 3px; }
+.supplier-clause-box {
+  padding: 10px 12px; border-radius: 8px; background: #fcfdfa;
+  border: 1px dashed #dbe4d8;
+}
+.clause-text {
+  font-size: 9px; color: #4e5e52; line-height: 1.4; margin: 0;
+  max-height: 70px; overflow-y: auto;
+}
+.matrix-card { padding: 22px; }
+.matrix-table { border-collapse: collapse; font-size: 11px; }
+.matrix-table th, .matrix-table td {
+  padding: 10px 14px; border-bottom: 1px solid #eef2ec;
+}
+.matrix-table th { background: #f7faf5; font-size: 10px; font-weight: 700; color: var(--muted); }
+.history-panel { padding: 22px; }
+.history-search-input {
+  min-width: 200px; padding: 6px 11px; border: 1px solid var(--line);
+  border-radius: 8px; font-size: 11px; background: white;
+}
+.history-filter-select {
+  padding: 6px 11px; border: 1px solid var(--line); border-radius: 8px;
+  font-size: 11px; background: white;
+}
+.history-table { border-collapse: collapse; font-size: 11px; }
+.history-table th, .history-table td {
+  padding: 9px 12px; border-bottom: 1px solid #edf1eb; text-align: left;
+}
+.history-table th { font-size: 9px; text-transform: uppercase; color: var(--muted); background: #f8faf7; font-weight: 700; }
+.row-selected { background: #f3f9ef !important; }
+.cell-date { font-weight: 650; font-size: 11px; color: var(--ink); }
+.cell-audit-id { font-family: ui-monospace, monospace; color: var(--muted); font-size: 9px; }
+.cell-sku { font-size: 9px; color: var(--muted); font-family: ui-monospace, monospace; }
+.hash-code { font-family: ui-monospace, monospace; font-size: 9px; padding: 2px 4px; background: #eef2ed; border-radius: 4px; }
+.badge-green { background: #edf6e8; color: #396328; border: 1px solid #c9e4bf; }
+.badge-amber { background: #fdf5e7; color: #845517; border: 1px solid #f6deb6; }
+.badge-red { background: #fceeed; color: #9c2e27; border: 1px solid #f6c8c4; }
+.badge-gray { background: #eff2ef; color: #647368; border: 1px solid #dde3de; }
+.score-badge { display: inline-block; padding: 2px 7px; border-radius: 6px; font-weight: 750; font-size: 10px; }
+.benchmark-alert { padding: 10px 14px; border-radius: 8px; margin-bottom: 14px; font-size: 11px; }
+.alert-error { background: #fdf0ed; color: #9b2820; border: 1px solid #f8cbc5; }
