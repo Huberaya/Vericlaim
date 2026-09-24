@@ -762,3 +762,39 @@ def test_rate_limiting_and_anti_abuse_protection():
         r3 = client.get("/api/v1/engine/rate-limit-check", headers=headers)
         assert r3.status_code == 429
         assert "rate limit exceeded" in r3.text.lower() or "too many requests" in r3.text.lower()
+
+
+def test_observability_metrics_and_health_probes():
+    from app.main import app
+
+    with TestClient(app) as client:
+        # 1. Detailed Healthcheck
+        h_resp = client.get("/healthz")
+        assert h_resp.status_code == 200
+        h_data = h_resp.json()
+        assert h_data["status"] == "healthy"
+        assert h_data["database"]["status"] == "ok"
+        assert h_data["engine"]["status"] == "ready"
+        assert h_data["engine"]["loaded_rules_count"] >= 10
+        assert h_data["ecolabel_connector"]["registries_count"] >= 4
+
+        # 2. Kubernetes Liveness & Readiness probes
+        live_resp = client.get("/livez")
+        assert live_resp.status_code == 200
+        assert live_resp.json()["status"] == "alive"
+
+        ready_resp = client.get("/readyz")
+        assert ready_resp.status_code == 200
+        assert ready_resp.json()["status"] == "ready"
+
+        # 3. Prometheus Metrics Endpoint
+        metrics_resp = client.get("/metrics")
+        assert metrics_resp.status_code == 200
+        assert "text/plain" in metrics_resp.headers["content-type"]
+        metrics_body = metrics_resp.text
+        assert "vericlaim_evaluations_total" in metrics_body
+        assert "vericlaim_evaluation_duration_seconds" in metrics_body
+
+        # 4. Correlation ID header injection
+        cid_resp = client.get("/healthz", headers={"X-Request-ID": "corr-uuid-test-999"})
+        assert cid_resp.headers.get("X-Request-ID") == "corr-uuid-test-999"

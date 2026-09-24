@@ -236,6 +236,20 @@ def _execute_evaluation(
     except Exception:
         pass
 
+    try:
+        from app.core.monitoring import record_evaluation_metrics
+        violation_rules = [item.rule_id for item in evaluations if item.is_legal_violation]
+        claim_types = [item.claim_type.value for item in evaluations if hasattr(item, "claim_type") and hasattr(item.claim_type, "value")]
+        record_evaluation_metrics(
+            compliance=overall.value,
+            extraction_method=extraction_method,
+            duration_sec=0.02,
+            violations=violation_rules,
+            claims=claim_types,
+        )
+    except Exception:
+        pass
+
     return final_response
 
 

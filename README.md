@@ -33,7 +33,7 @@ pytest -v
 
 Le fichier `backend/pytest.ini` résout automatiquement le `PYTHONPATH`. Si PostgreSQL n'est pas démarré, le backend bascule automatiquement sur SQLite local (`vericlaim.db`) sans configuration requise.
 
-Résultat validé dans le workspace : **29 tests passants (100% de réussite)**.
+Résultat validé dans le workspace : **30 tests passants (100% de réussite)**.
 
 ### Export PDF de l'attestation d'audit
 
@@ -80,6 +80,20 @@ Le moteur intègre un limiteur de débit centralisé (`SlowAPI`) protégeant les
   - Audit batch de catalogue (`POST /evaluate/batch`, `POST /evaluate/batch-csv`) : 20 à 30 req/min.
   - Génération d'attestation PDF (`POST /export/pdf`) : 30 req/min.
 - **Gestion des dépassements** : renvoi automatique d'une réponse `HTTP 429 Too Many Requests`.
+
+### Observabilité, Métriques Prometheus & Sondes Kubernetes
+
+Le service expose des endpoints standardisés d'observabilité pour la production :
+- **Métriques Prometheus** (`GET /metrics`) :
+  - `vericlaim_evaluations_total` : compteur des audits ventilé par statut de conformité et méthode d'extraction.
+  - `vericlaim_violations_total` : infractions constatées par identifiant de règle juridique.
+  - `vericlaim_claims_detected_total` : allégations identifiées par typologie réglementaire.
+  - `vericlaim_evaluation_duration_seconds` : histogramme de latence de traitement du moteur.
+- **Bilan de santé enrichi** (`GET /healthz`) : statut global, ping base de données avec temps de réponse, connectivité aux registres d'écolabels et état de la transposition française.
+- **Sondes Kubernetes** :
+  - `GET /livez` : sonde de vivacité (Liveness probe).
+  - `GET /readyz` : sonde d'aptitude au trafic avec vérification active de la base (Readiness probe).
+- **Traçabilité distribuée** : middleware `X-Request-ID` injectant et propageant un identifiant de corrélation unique par requête.
 
 ### Intégration Continue (CI/CD GitHub Actions)
 
