@@ -288,6 +288,7 @@ class LegalAssessment(BaseModel):
 
 class AuditTrail(BaseModel):
     audit_id: str
+    tenant_id: str = "default"
     engine_version: str
     rulebook_version: str
     evaluated_at_utc: datetime

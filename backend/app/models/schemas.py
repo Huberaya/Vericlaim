@@ -88,6 +88,7 @@ class RuleBookResponse(BaseModel):
 
 class AuditHistoryItem(BaseModel):
     audit_id: str
+    tenant_id: str | None = None
     created_at_utc: datetime
     supplier_name: str | None = None
     product_identifier: str | None = None
@@ -185,3 +186,54 @@ class CatalogBatchResponse(BaseModel):
     compliance_rate_pct: float
     average_risk_score: float
     results: list[CatalogItemResult]
+
+
+class TenantCreateRequest(BaseModel):
+    name: str = Field(min_length=2, max_length=128)
+    slug: str | None = Field(default=None, max_length=64)
+    tier: str = Field(default="standard", max_length=32)
+
+
+class TenantResponse(BaseModel):
+    id: str
+    name: str
+    slug: str
+    tier: str
+    created_at_utc: datetime
+    is_active: bool
+    api_keys_count: int = 0
+    total_audits_count: int = 0
+
+
+class ApiKeyCreateRequest(BaseModel):
+    name: str = Field(min_length=2, max_length=128)
+    scopes: list[str] = Field(default_factory=lambda: ["audit:read", "audit:write", "batch:run"])
+
+
+class ApiKeyCreatedResponse(BaseModel):
+    id: str
+    name: str
+    key: str
+    key_prefix: str
+    scopes: list[str]
+    created_at_utc: datetime
+
+
+class ApiKeyItem(BaseModel):
+    id: str
+    name: str
+    key_prefix: str
+    scopes: list[str]
+    created_at_utc: datetime
+    last_used_at_utc: datetime | None = None
+    is_active: bool
+
+
+class ApiKeyListResponse(BaseModel):
+    total: int
+    keys: list[ApiKeyItem]
+
+
+class TenantWithKeyResponse(BaseModel):
+    organization: TenantResponse
+    initial_api_key: ApiKeyCreatedResponse

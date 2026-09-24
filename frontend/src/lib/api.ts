@@ -1,4 +1,6 @@
 import type {
+  ApiKeyCreatedResponse,
+  ApiKeyListResponse,
   AuditContext,
   AuditHistoryResponse,
   CatalogBatchRequest,
@@ -10,9 +12,34 @@ import type {
   RegulatoryAuditResponse,
   SupplierCompareRequest,
   SupplierCompareResponse,
+  TenantResponse,
+  TenantWithKeyResponse,
 } from "@/lib/types";
 
 export const API_BASE_URL = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000").replace(/\/+$/, "");
+
+export function getStoredApiKey(): string | null {
+  if (typeof window === "undefined") return null;
+  return localStorage.getItem("vericlaim_api_key");
+}
+
+export function setStoredApiKey(key: string | null): void {
+  if (typeof window === "undefined") return;
+  if (key) {
+    localStorage.setItem("vericlaim_api_key", key);
+  } else {
+    localStorage.removeItem("vericlaim_api_key");
+  }
+}
+
+function authHeaders(extra: Record<string, string> = {}): Record<string, string> {
+  const headers = { ...extra };
+  const key = getStoredApiKey();
+  if (key) {
+    headers["X-API-Key"] = key;
+  }
+  return headers;
+}
 
 export type AuditOptions = {
   context?: Partial<AuditContext>;
@@ -57,8 +84,6 @@ function buildDossier(hasLcaAttached: boolean, options: AuditOptions): EvidenceD
   const items = [...(options.evidence?.items ?? []), ...(options.additionalEvidence ?? [])];
   const hasLcaMetadata = items.some((item) => item.kind === "lca_report");
   if (hasLcaAttached && !hasLcaMetadata) {
-    // The checkbox records the user's declaration of the standard only. Missing report details
-    // remain missing, so this cannot activate a Safe Harbor or make an incomplete ACV pass.
     const declaredLca: LcaEvidence = { kind: "lca_report", standard: "ISO 14044" };
     items.push(declaredLca);
   }
@@ -99,7 +124,7 @@ export async function auditText(
   };
   const response = await fetch(requestUrl("/api/v1/engine/evaluate"), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(payload),
     cache: "no-store",
   });
@@ -117,6 +142,7 @@ export async function auditFile(
   form.append("evidence_json", JSON.stringify(buildDossier(hasLcaAttached, options)));
   const response = await fetch(requestUrl("/api/v1/engine/evaluate"), {
     method: "POST",
+    headers: authHeaders(),
     body: form,
     cache: "no-store",
   });
@@ -136,7 +162,7 @@ export async function auditUrl(
   };
   const response = await fetch(requestUrl("/api/v1/engine/evaluate/url"), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(payload),
     cache: "no-store",
   });
@@ -146,7 +172,7 @@ export async function auditUrl(
 export async function downloadAuditPdf(report: RegulatoryAuditResponse): Promise<void> {
   const response = await fetch(requestUrl("/api/v1/engine/export/pdf"), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(report),
   });
   if (!response.ok) {
@@ -154,9 +180,7 @@ export async function downloadAuditPdf(report: RegulatoryAuditResponse): Promise
     try {
       const err = await response.json();
       if (err?.detail) msg = typeof err.detail === "string" ? err.detail : JSON.stringify(err.detail);
-    } catch {
-      // Ignorer
-    }
+    } catch {}
     throw new Error(msg);
   }
   const blob = await response.blob();
@@ -186,7 +210,7 @@ export async function fetchAuditHistory(params?: {
   if (params?.search) query.set("search", params.search);
   const qs = query.toString();
   const url = requestUrl(`/api/v1/engine/audits${qs ? `?${qs}` : ""}`);
-  const response = await fetch(url, { cache: "no-store" });
+  const response = await fetch(url, { headers: authHeaders(), cache: "no-store" });
   if (!response.ok) {
     throw new Error(`Échec du chargement de l'historique (${response.status})`);
   }
@@ -195,6 +219,7 @@ export async function fetchAuditHistory(params?: {
 
 export async function fetchAuditById(auditId: string): Promise<RegulatoryAuditResponse> {
   const response = await fetch(requestUrl(`/api/v1/engine/audits/${encodeURIComponent(auditId)}`), {
+    headers: authHeaders(),
     cache: "no-store",
   });
   return readResult(response);
@@ -205,7 +230,7 @@ export async function compareSuppliers(
 ): Promise<SupplierCompareResponse> {
   const response = await fetch(requestUrl("/api/v1/engine/suppliers/compare"), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(payload),
     cache: "no-store",
   });
@@ -232,7 +257,7 @@ export async function fetchEcolabelRegistries(): Promise<
     status: string;
   }>
 > {
-  const response = await fetch(requestUrl("/api/v1/engine/ecolabels/registries"), { cache: "no-store" });
+  const response = await fetch(requestUrl("/api/v1/engine/ecolabels/registries"), { headers: authHeaders(), cache: "no-store" });
   if (!response.ok) throw new Error("Échec de récupération des registres");
   return await response.json();
 }
@@ -257,6 +282,7 @@ export async function verifyEcolabelLicense(
   if (scheme) query.set("scheme", scheme);
   if (productIdentifier) query.set("product_identifier", productIdentifier);
   const response = await fetch(requestUrl(`/api/v1/engine/ecolabels/verify?${query.toString()}`), {
+    headers: authHeaders(),
     cache: "no-store",
   });
   if (!response.ok) throw new Error("Échec de vérification de la licence");
@@ -268,7 +294,7 @@ export async function auditCatalogBatch(
 ): Promise<CatalogBatchResponse> {
   const response = await fetch(requestUrl("/api/v1/engine/evaluate/batch"), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(payload),
     cache: "no-store",
   });
@@ -288,6 +314,7 @@ export async function auditCatalogCsv(file: File): Promise<CatalogBatchResponse>
   form.append("file", file, file.name);
   const response = await fetch(requestUrl("/api/v1/engine/evaluate/batch-csv"), {
     method: "POST",
+    headers: authHeaders(),
     body: form,
     cache: "no-store",
   });
@@ -305,7 +332,7 @@ export async function auditCatalogCsv(file: File): Promise<CatalogBatchResponse>
 export async function exportCatalogBatchCsv(report: CatalogBatchResponse): Promise<void> {
   const response = await fetch(requestUrl("/api/v1/engine/export/batch-csv"), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(report),
   });
   if (!response.ok) {
@@ -320,4 +347,72 @@ export async function exportCatalogBatchCsv(report: CatalogBatchResponse): Promi
   a.click();
   a.remove();
   window.URL.revokeObjectURL(url);
+}
+
+// ======================== TENANT & API KEYS ========================
+
+export async function fetchCurrentTenant(): Promise<TenantResponse> {
+  const response = await fetch(requestUrl("/api/v1/engine/tenants/current"), {
+    headers: authHeaders(),
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    throw new Error(`Échec de récupération du tenant (${response.status})`);
+  }
+  return (await response.json()) as TenantResponse;
+}
+
+export async function createTenant(name: string, slug?: string, tier = "standard"): Promise<TenantWithKeyResponse> {
+  const response = await fetch(requestUrl("/api/v1/engine/tenants"), {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ name, slug, tier }),
+  });
+  if (!response.ok) {
+    let detail = `Erreur création organisation (${response.status})`;
+    try {
+      const body = await response.json();
+      if (body?.detail) detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail);
+    } catch {}
+    throw new Error(detail);
+  }
+  return (await response.json()) as TenantWithKeyResponse;
+}
+
+export async function createApiKey(name: string, scopes: string[] = ["audit:read", "audit:write"]): Promise<ApiKeyCreatedResponse> {
+  const response = await fetch(requestUrl("/api/v1/engine/tenants/keys"), {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ name, scopes }),
+  });
+  if (!response.ok) {
+    let detail = `Erreur création clé API (${response.status})`;
+    try {
+      const body = await response.json();
+      if (body?.detail) detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail);
+    } catch {}
+    throw new Error(detail);
+  }
+  return (await response.json()) as ApiKeyCreatedResponse;
+}
+
+export async function fetchApiKeys(): Promise<ApiKeyListResponse> {
+  const response = await fetch(requestUrl("/api/v1/engine/tenants/keys"), {
+    headers: authHeaders(),
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    throw new Error(`Échec du listing des clés (${response.status})`);
+  }
+  return (await response.json()) as ApiKeyListResponse;
+}
+
+export async function revokeApiKey(keyId: string): Promise<void> {
+  const response = await fetch(requestUrl(`/api/v1/engine/tenants/keys/${encodeURIComponent(keyId)}`), {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  if (!response.ok) {
+    throw new Error(`Échec de révocation de la clé (${response.status})`);
+  }
 }

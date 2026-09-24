@@ -247,6 +247,7 @@ export type ExposureMatrix = {
 
 export type AuditTrail = {
   audit_id: string;
+  tenant_id?: string;
   engine_version: string;
   rulebook_version: string;
   evaluated_at_utc: string;
@@ -292,6 +293,7 @@ export function violationSeverity(evaluation: ClaimEvaluation): ViolationSeverit
 
 export type AuditHistoryItem = {
   audit_id: string;
+  tenant_id?: string;
   created_at_utc: string;
   supplier_name?: string | null;
   product_identifier?: string | null;
@@ -389,4 +391,44 @@ export type CatalogBatchResponse = {
   compliance_rate_pct: number;
   average_risk_score: number;
   results: CatalogItemResult[];
+};
+
+export type TenantResponse = {
+  id: string;
+  name: string;
+  slug: string;
+  tier: string;
+  created_at_utc: string;
+  is_active: boolean;
+  api_keys_count: number;
+  total_audits_count: number;
+};
+
+export type ApiKeyCreatedResponse = {
+  id: string;
+  name: string;
+  key: string;
+  key_prefix: string;
+  scopes: string[];
+  created_at_utc: string;
+};
+
+export type TenantWithKeyResponse = {
+  organization: TenantResponse;
+  initial_api_key: ApiKeyCreatedResponse;
+};
+
+export type ApiKeyItem = {
+  id: string;
+  name: string;
+  key_prefix: string;
+  scopes: string[];
+  created_at_utc: string;
+  last_used_at_utc: string | null;
+  is_active: boolean;
+};
+
+export type ApiKeyListResponse = {
+  total: number;
+  keys: ApiKeyItem[];
 };

@@ -15,8 +15,23 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
-from app.core.database import AuditRecord, append_audit_record, canonical_json, get_db, sha256_json
+from app.core.database import (
+    ApiKey,
+    AuditRecord,
+    Organization,
+    append_audit_record,
+    canonical_json,
+    get_db,
+    sha256_json,
+)
 from app.core.limiter import limiter
+from app.core.security import (
+    TenantContext,
+    generate_api_key,
+    get_tenant_context,
+    require_auth,
+    require_scopes,
+)
 from app.engine.document_extractor import DocumentExtractionError, DocumentTextExtractor
 from app.engine.pdf_exporter import generate_audit_pdf
 from app.engine.risk_assessment import (
@@ -27,9 +42,17 @@ from app.engine.risk_assessment import (
 from app.engine.rule_book import RULES, RULEBOOK_VERSION
 from app.models.legal_types import AuditTrail, EvidenceDossier, LegalAssessment, OverallCompliance, Surface, Verdict
 from app.models.schemas import (
+    ApiKeyCreateRequest,
+    ApiKeyCreatedResponse,
+    ApiKeyItem,
+    ApiKeyListResponse,
     AuditContext,
     AuditHistoryItem,
     AuditHistoryResponse,
+    CatalogBatchRequest,
+    CatalogBatchResponse,
+    CatalogItemInput,
+    CatalogItemResult,
     EvaluationRequest,
     EvaluationResponse,
     RuleBookResponse,
@@ -38,11 +61,10 @@ from app.models.schemas import (
     SupplierCompareResponse,
     SupplierComparisonItem,
     SupplierSubmission,
+    TenantCreateRequest,
+    TenantResponse,
+    TenantWithKeyResponse,
     UrlAuditRequest,
-    CatalogBatchRequest,
-    CatalogBatchResponse,
-    CatalogItemInput,
-    CatalogItemResult,
 )
 
 
@@ -147,6 +169,7 @@ def _execute_evaluation(
     db: Session,
     extraction_method: str = "INLINE_TEXT",
     document_sha256: str | None = None,
+    organization_id: str = "default",
 ) -> EvaluationResponse:
     claims, evaluations = evaluator.evaluate_text(source_text, evidence, context)
     overall = derive_overall_status(evaluations, len(claims))
@@ -202,6 +225,7 @@ def _execute_evaluation(
             created_at_utc=now,
             supplier_name=context.supplier_name,
             product_identifier=context.product_identifier,
+            organization_id=organization_id,
         )
     except Exception as exc:
         db.rollback()
@@ -212,6 +236,7 @@ def _execute_evaluation(
 
     audit_trail = AuditTrail(
         audit_id=audit_id,
+        tenant_id=organization_id,
         engine_version="0.1.0",
         rulebook_version=RULEBOOK_VERSION,
         evaluated_at_utc=created_at,
@@ -262,7 +287,11 @@ async def rate_limit_check(request: Request) -> dict[str, Any]:
 
 @router.post("/evaluate", response_model=EvaluationResponse)
 @limiter.limit("60/minute")
-async def evaluate_claims(request: Request, db: Session = Depends(get_db)) -> EvaluationResponse:
+async def evaluate_claims(
+    request: Request,
+    db: Session = Depends(get_db),
+    tenant: TenantContext = Depends(get_tenant_context),
+) -> EvaluationResponse:
     body, extraction_method, document_sha256 = await _read_request(request)
     if not body.source_text.strip():
         raise HTTPException(status_code=422, detail="Fournissez source_text ou un document exploitable.")
@@ -276,6 +305,7 @@ async def evaluate_claims(request: Request, db: Session = Depends(get_db)) -> Ev
         db=db,
         extraction_method=extraction_method,
         document_sha256=document_sha256,
+        organization_id=tenant.organization.id,
     )
 
 
@@ -285,6 +315,7 @@ async def evaluate_ecommerce_url(
     body: UrlAuditRequest,
     request: Request,
     db: Session = Depends(get_db),
+    tenant: TenantContext = Depends(get_tenant_context),
 ) -> EvaluationResponse:
     """Scrape et audite en direct une page produit e-commerce (Shopify, WooCommerce, Amazon...)."""
     from app.engine.url_scraper import EcommerceUrlScraper, UrlScraperError
@@ -316,6 +347,7 @@ async def evaluate_ecommerce_url(
         db=db,
         extraction_method="URL_SCRAPER",
         document_sha256=document_sha256,
+        organization_id=tenant.organization.id,
     )
 
 
@@ -326,6 +358,7 @@ def _process_catalog_batch(
     consumer_facing: bool,
     evaluator: Any,
     db: Session,
+    organization_id: str = "default",
 ) -> CatalogBatchResponse:
     results: list[CatalogItemResult] = []
     total_fines = 0
@@ -363,6 +396,7 @@ def _process_catalog_batch(
             evidence=dossier,
             db=db,
             extraction_method="CATALOG_BATCH",
+            organization_id=organization_id,
         )
         fine_val = int(rep.exposure_matrix.max_known_fixed_fine_eur or 0)
         total_fines += fine_val
@@ -413,6 +447,7 @@ def evaluate_catalog_batch(
     body: CatalogBatchRequest,
     request: Request,
     db: Session = Depends(get_db),
+    tenant: TenantContext = Depends(get_tenant_context),
 ) -> CatalogBatchResponse:
     """Audite un lot (batch) de fiches ou références catalogue au format JSON structuré."""
     evaluator = request.app.state.evaluator
@@ -423,6 +458,7 @@ def evaluate_catalog_batch(
         consumer_facing=body.consumer_facing,
         evaluator=evaluator,
         db=db,
+        organization_id=tenant.organization.id,
     )
 
 
@@ -432,6 +468,7 @@ async def evaluate_catalog_batch_csv(
     request: Request,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
+    tenant: TenantContext = Depends(get_tenant_context),
 ) -> CatalogBatchResponse:
     """Audite un catalogue de produits importé via un fichier CSV."""
     content = await file.read()
@@ -483,6 +520,7 @@ async def evaluate_catalog_batch_csv(
         consumer_facing=True,
         evaluator=evaluator,
         db=db,
+        organization_id=tenant.organization.id,
     )
 
 
@@ -531,9 +569,14 @@ def list_audits(
     compliance: str | None = None,
     search: str | None = None,
     db: Session = Depends(get_db),
+    tenant: TenantContext = Depends(get_tenant_context),
 ) -> AuditHistoryResponse:
-    """Consulte l'historique chronologique des audits enregistrés dans le registre immuable."""
-    query = select(AuditRecord).order_by(AuditRecord.sequence.desc())
+    """Consulte l'historique chronologique des audits enregistrés dans le registre immuable de l'organisation."""
+    query = (
+        select(AuditRecord)
+        .where(AuditRecord.organization_id == tenant.organization.id)
+        .order_by(AuditRecord.sequence.desc())
+    )
     records = list(db.scalars(query).all())
 
     filtered: list[AuditRecord] = []
@@ -565,6 +608,7 @@ def list_audits(
         items.append(
             AuditHistoryItem(
                 audit_id=r.audit_id,
+                tenant_id=r.organization_id,
                 created_at_utc=r.created_at_utc,
                 supplier_name=r.supplier_name,
                 product_identifier=r.product_identifier,
@@ -586,9 +630,18 @@ def list_audits(
 
 
 @router.get("/audits/{audit_id}", response_model=EvaluationResponse)
-def get_audit(audit_id: str, db: Session = Depends(get_db)) -> EvaluationResponse:
-    """Récupère le rapport complet d'un audit archivé par son identifiant."""
-    record = db.scalar(select(AuditRecord).where(AuditRecord.audit_id == audit_id))
+def get_audit(
+    audit_id: str,
+    db: Session = Depends(get_db),
+    tenant: TenantContext = Depends(get_tenant_context),
+) -> EvaluationResponse:
+    """Récupère le rapport complet d'un audit archivé par son identifiant pour l'organisation appelante."""
+    record = db.scalar(
+        select(AuditRecord).where(
+            AuditRecord.audit_id == audit_id,
+            AuditRecord.organization_id == tenant.organization.id,
+        )
+    )
     if not record or not record.report_json:
         raise HTTPException(status_code=404, detail="Rapport d'audit introuvable.")
     return EvaluationResponse.model_validate(record.report_json)
@@ -599,14 +652,20 @@ def compare_suppliers(
     body: SupplierCompareRequest,
     request: Request,
     db: Session = Depends(get_db),
+    tenant: TenantContext = Depends(get_tenant_context),
 ) -> SupplierCompareResponse:
     """Compare et classe plusieurs offres ou dossiers fournisseurs selon leur niveau de risque réglementaire."""
     evaluator = request.app.state.evaluator
     evaluations_to_compare: list[tuple[str, str | None, EvaluationResponse]] = []
 
-    # 1. Depuis des identifiants d'audits passés
+    # 1. Depuis des identifiants d'audits passés (vérifiés pour le tenant)
     for audit_id in body.audit_ids:
-        record = db.scalar(select(AuditRecord).where(AuditRecord.audit_id == audit_id))
+        record = db.scalar(
+            select(AuditRecord).where(
+                AuditRecord.audit_id == audit_id,
+                AuditRecord.organization_id == tenant.organization.id,
+            )
+        )
         if record and record.report_json:
             rep = EvaluationResponse.model_validate(record.report_json)
             s_name = record.supplier_name or f"Audit {audit_id[:8]}"
@@ -623,7 +682,14 @@ def compare_suppliers(
         if sub.product_identifier and not ctx.product_identifier:
             ctx.product_identifier = sub.product_identifier
         dossier = sub.evidence or EvidenceDossier(items=[])
-        rep = _execute_evaluation(evaluator, sub.source_text, ctx, dossier, db)
+        rep = _execute_evaluation(
+            evaluator,
+            sub.source_text,
+            ctx,
+            dossier,
+            db,
+            organization_id=tenant.organization.id,
+        )
         evaluations_to_compare.append((sub.supplier_name, sub.product_identifier, rep))
 
     if not evaluations_to_compare:
@@ -803,3 +869,169 @@ def sync_ecolabel_registries(request: Request) -> dict[str, Any]:
         from app.engine.ecolabel_connector import LiveEcolabelConnector
         connector = LiveEcolabelConnector()
     return connector.sync()
+
+
+@router.post("/tenants", response_model=TenantWithKeyResponse)
+def create_tenant(
+    body: TenantCreateRequest,
+    db: Session = Depends(get_db),
+) -> TenantWithKeyResponse:
+    """Crée une nouvelle organisation (tenant) et génère sa clé API initiale."""
+    slug = (body.slug or body.name.lower().replace(" ", "-")).strip()
+    existing = db.scalar(select(Organization).where(Organization.slug == slug))
+    if existing:
+        raise HTTPException(status_code=409, detail=f"Une organisation avec le slug '{slug}' existe déjà.")
+
+    org_id = str(uuid4())
+    now = datetime.now(timezone.utc)
+    org = Organization(
+        id=org_id,
+        name=body.name.strip(),
+        slug=slug,
+        tier=body.tier,
+        created_at_utc=now,
+        is_active=True,
+    )
+    db.add(org)
+
+    raw_key, prefix, key_hash = generate_api_key(is_live=True)
+    api_key_id = str(uuid4())
+    api_key = ApiKey(
+        id=api_key_id,
+        organization_id=org_id,
+        name="Clé API Principale",
+        key_prefix=prefix,
+        hashed_key=key_hash,
+        scopes=["audit:read", "audit:write", "batch:run", "admin"],
+        created_at_utc=now,
+        is_active=True,
+    )
+    db.add(api_key)
+    db.commit()
+
+    return TenantWithKeyResponse(
+        organization=TenantResponse(
+            id=org.id,
+            name=org.name,
+            slug=org.slug,
+            tier=org.tier,
+            created_at_utc=org.created_at_utc,
+            is_active=org.is_active,
+            api_keys_count=1,
+            total_audits_count=0,
+        ),
+        initial_api_key=ApiKeyCreatedResponse(
+            id=api_key.id,
+            name=api_key.name,
+            key=raw_key,
+            key_prefix=api_key.key_prefix,
+            scopes=api_key.scopes,
+            created_at_utc=api_key.created_at_utc,
+        ),
+    )
+
+
+@router.get("/tenants/current", response_model=TenantResponse)
+def get_current_tenant_info(
+    tenant: TenantContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> TenantResponse:
+    """Consulte les informations et compteurs d'usage de l'organisation active."""
+    api_keys_count = len(
+        list(db.scalars(select(ApiKey).where(ApiKey.organization_id == tenant.organization.id, ApiKey.is_active == True)).all())
+    )
+    audits_count = len(
+        list(db.scalars(select(AuditRecord).where(AuditRecord.organization_id == tenant.organization.id)).all())
+    )
+    return TenantResponse(
+        id=tenant.organization.id,
+        name=tenant.organization.name,
+        slug=tenant.organization.slug,
+        tier=tenant.organization.tier,
+        created_at_utc=tenant.organization.created_at_utc,
+        is_active=tenant.organization.is_active,
+        api_keys_count=api_keys_count,
+        total_audits_count=audits_count,
+    )
+
+
+@router.post("/tenants/keys", response_model=ApiKeyCreatedResponse)
+def create_api_key(
+    body: ApiKeyCreateRequest,
+    tenant: TenantContext = Depends(require_auth),
+    db: Session = Depends(get_db),
+) -> ApiKeyCreatedResponse:
+    """Génère une nouvelle clé API secrète pour l'organisation courante."""
+    raw_key, prefix, key_hash = generate_api_key(is_live=True)
+    key_id = str(uuid4())
+    now = datetime.now(timezone.utc)
+    key_row = ApiKey(
+        id=key_id,
+        organization_id=tenant.organization.id,
+        name=body.name.strip(),
+        key_prefix=prefix,
+        hashed_key=key_hash,
+        scopes=body.scopes,
+        created_at_utc=now,
+        is_active=True,
+    )
+    db.add(key_row)
+    db.commit()
+
+    return ApiKeyCreatedResponse(
+        id=key_row.id,
+        name=key_row.name,
+        key=raw_key,
+        key_prefix=key_row.key_prefix,
+        scopes=key_row.scopes,
+        created_at_utc=key_row.created_at_utc,
+    )
+
+
+@router.get("/tenants/keys", response_model=ApiKeyListResponse)
+def list_api_keys(
+    tenant: TenantContext = Depends(require_auth),
+    db: Session = Depends(get_db),
+) -> ApiKeyListResponse:
+    """Liste l'ensemble des clés API enregistrées pour l'organisation active."""
+    keys = list(
+        db.scalars(
+            select(ApiKey)
+            .where(ApiKey.organization_id == tenant.organization.id)
+            .order_by(ApiKey.created_at_utc.desc())
+        ).all()
+    )
+    items = [
+        ApiKeyItem(
+            id=k.id,
+            name=k.name,
+            key_prefix=k.key_prefix,
+            scopes=k.scopes or [],
+            created_at_utc=k.created_at_utc,
+            last_used_at_utc=k.last_used_at_utc,
+            is_active=k.is_active,
+        )
+        for k in keys
+    ]
+    return ApiKeyListResponse(total=len(items), keys=items)
+
+
+@router.delete("/tenants/keys/{key_id}")
+def revoke_api_key(
+    key_id: str,
+    tenant: TenantContext = Depends(require_auth),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Révoque immédiatement une clé API d'accès."""
+    key_record = db.scalar(
+        select(ApiKey).where(
+            ApiKey.id == key_id,
+            ApiKey.organization_id == tenant.organization.id,
+        )
+    )
+    if not key_record:
+        raise HTTPException(status_code=404, detail="Clé API introuvable.")
+
+    key_record.is_active = False
+    db.commit()
+    return {"status": "revoked", "key_id": key_id}

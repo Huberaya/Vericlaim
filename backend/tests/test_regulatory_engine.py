@@ -896,3 +896,115 @@ def test_multilingual_claims_english_and_german():
         data = resp.json()
         assert data["overall_compliance"] == "NON_COMPLIANT"
         assert data["violations_count"] >= 1
+
+
+def test_multi_tenant_isolation_and_api_key_lifecycle():
+    from uuid import uuid4
+    from app.main import app
+
+    with TestClient(app) as client:
+        # 1. Tentative d'accès avec clé invalide -> 401
+        invalid_resp = client.get(
+            "/api/v1/engine/audits",
+            headers={"X-API-Key": "vk_live_completely_bogus_key"},
+        )
+        assert invalid_resp.status_code == 401
+        assert "Clé API invalide" in invalid_resp.json()["detail"]
+
+        # 2. Création de deux organisations distinctes (Tenant Alpha & Tenant Beta)
+        slug_a = f"alpha-{uuid4().hex[:6]}"
+        slug_b = f"beta-{uuid4().hex[:6]}"
+        resp_alpha = client.post(
+            "/api/v1/engine/tenants",
+            json={"name": "Groupe Alpha Luxe", "slug": slug_a, "tier": "enterprise"},
+        )
+        assert resp_alpha.status_code == 200
+        alpha_data = resp_alpha.json()
+        alpha_org_id = alpha_data["organization"]["id"]
+        alpha_key = alpha_data["initial_api_key"]["key"]
+        assert alpha_key.startswith("vk_live_")
+
+        resp_beta = client.post(
+            "/api/v1/engine/tenants",
+            json={"name": "Beta Eco Packaging", "slug": slug_b, "tier": "standard"},
+        )
+        assert resp_beta.status_code == 200
+        beta_data = resp_beta.json()
+        beta_org_id = beta_data["organization"]["id"]
+        beta_key = beta_data["initial_api_key"]["key"]
+
+        # 3. Consultation du profil du tenant actif
+        current_alpha = client.get("/api/v1/engine/tenants/current", headers={"X-API-Key": alpha_key})
+        assert current_alpha.status_code == 200
+        assert current_alpha.json()["id"] == alpha_org_id
+        assert current_alpha.json()["name"] == "Groupe Alpha Luxe"
+
+        # 4. Exécution d'un audit sous le tenant Alpha
+        eval_alpha = client.post(
+            "/api/v1/engine/evaluate",
+            headers={"X-API-Key": alpha_key},
+            json={
+                "source_text": "Flacon 100% recyclable.",
+                "context": {"supplier_name": "Fournisseur Alpha", "product_identifier": "SKU-ALPHA-01"},
+            },
+        )
+        assert eval_alpha.status_code == 200
+        audit_alpha_id = eval_alpha.json()["audit_trail"]["audit_id"]
+        assert eval_alpha.json()["audit_trail"]["tenant_id"] == alpha_org_id
+
+        # 5. Exécution d'un audit sous le tenant Beta
+        eval_beta = client.post(
+            "/api/v1/engine/evaluate",
+            headers={"X-API-Key": beta_key},
+            json={
+                "source_text": "Sac sans chimie et naturel.",
+                "context": {"supplier_name": "Fournisseur Beta", "product_identifier": "SKU-BETA-02"},
+            },
+        )
+        assert eval_beta.status_code == 200
+        audit_beta_id = eval_beta.json()["audit_trail"]["audit_id"]
+        assert eval_beta.json()["audit_trail"]["tenant_id"] == beta_org_id
+
+        # 6. Vérification de l'isolation étanche de l'historique
+        hist_alpha = client.get("/api/v1/engine/audits", headers={"X-API-Key": alpha_key})
+        assert hist_alpha.status_code == 200
+        alpha_items = hist_alpha.json()["items"]
+        alpha_audit_ids = [it["audit_id"] for it in alpha_items]
+        assert audit_alpha_id in alpha_audit_ids
+        assert audit_beta_id not in alpha_audit_ids
+
+        hist_beta = client.get("/api/v1/engine/audits", headers={"X-API-Key": beta_key})
+        assert hist_beta.status_code == 200
+        beta_items = hist_beta.json()["items"]
+        beta_audit_ids = [it["audit_id"] for it in beta_items]
+        assert audit_beta_id in beta_audit_ids
+        assert audit_alpha_id not in beta_audit_ids
+
+        # 7. Tentative d'accès direct cross-tenant -> 404 (aucune fuite d'information)
+        cross_get = client.get(f"/api/v1/engine/audits/{audit_beta_id}", headers={"X-API-Key": alpha_key})
+        assert cross_get.status_code == 404
+
+        # 8. Génération d'une seconde clé et révocation
+        new_key_resp = client.post(
+            "/api/v1/engine/tenants/keys",
+            headers={"X-API-Key": alpha_key},
+            json={"name": "Clé Intégration ERP", "scopes": ["audit:read"]},
+        )
+        assert new_key_resp.status_code == 200
+        erp_key_data = new_key_resp.json()
+        erp_key = erp_key_data["key"]
+        erp_key_id = erp_key_data["id"]
+
+        # La clé ERP fonctionne
+        erp_audits = client.get("/api/v1/engine/audits", headers={"X-API-Key": erp_key})
+        assert erp_audits.status_code == 200
+
+        # Révocation de la clé ERP
+        revoke_resp = client.delete(f"/api/v1/engine/tenants/keys/{erp_key_id}", headers={"X-API-Key": alpha_key})
+        assert revoke_resp.status_code == 200
+        assert revoke_resp.json()["status"] == "revoked"
+
+        # La clé ERP révoquée est désormais rejetée -> 401
+        erp_after_revoke = client.get("/api/v1/engine/audits", headers={"X-API-Key": erp_key})
+        assert erp_after_revoke.status_code == 401
+

@@ -8,6 +8,7 @@ import LegalScoreCard from "@/components/LegalScoreCard";
 import ProofUploadModal from "@/components/ProofUploadModal";
 import RemediationModal from "@/components/RemediationModal";
 import SupplierBenchmarkView from "@/components/SupplierBenchmarkView";
+import TenantApiKeyView from "@/components/TenantApiKeyView";
 import { auditFile, auditText, auditUrl, downloadAuditPdf } from "@/lib/api";
 import type {
   AuditContext,
@@ -65,7 +66,7 @@ function evidenceLabel(item: EvidenceItem): string {
 }
 
 export default function AuditDashboard() {
-  const [currentView, setCurrentView] = useState<"audit" | "benchmark" | "catalog">("audit");
+  const [currentView, setCurrentView] = useState<"audit" | "benchmark" | "catalog" | "tenants">("audit");
   const [surface, setSurface] = useState<Surface>("packaging");
   const [auditDate, setAuditDate] = useState(parisToday);
   const [consumerFacing, setConsumerFacing] = useState(true);
@@ -206,6 +207,15 @@ export default function AuditDashboard() {
             <span className="nav-icon">▤</span> Audit de Catalogue (Batch)
             {currentView === "catalog" && <span className="nav-indicator" />}
           </button>
+          <button
+            type="button"
+            className={`sidebar-link ${currentView === "tenants" ? "sidebar-link-active" : ""}`}
+            onClick={() => setCurrentView("tenants")}
+            style={{ width: "100%", textAlign: "left", background: "none", border: 0 }}
+          >
+            <span className="nav-icon">🔑</span> Clés API & Multi-Tenant
+            {currentView === "tenants" && <span className="nav-indicator" />}
+          </button>
           <a
             className="sidebar-link"
             href="#results-title"
@@ -292,6 +302,8 @@ export default function AuditDashboard() {
                 setCurrentView("audit");
               }}
             />
+          ) : currentView === "tenants" ? (
+            <TenantApiKeyView />
           ) : (
             <>
               <div className="dashboard-grid grid">

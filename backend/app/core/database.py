@@ -5,7 +5,7 @@ import json
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import DateTime, Integer, JSON, String, create_engine, select
+from sqlalchemy import Boolean, DateTime, Integer, JSON, String, create_engine, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -16,11 +16,37 @@ class Base(DeclarativeBase):
     pass
 
 
+class Organization(Base):
+    __tablename__ = "organizations"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    name: Mapped[str] = mapped_column(String(128))
+    slug: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    tier: Mapped[str] = mapped_column(String(32), default="standard")
+    created_at_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class ApiKey(Base):
+    __tablename__ = "api_keys"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    organization_id: Mapped[str] = mapped_column(String(36), index=True)
+    name: Mapped[str] = mapped_column(String(128))
+    key_prefix: Mapped[str] = mapped_column(String(16), index=True)
+    hashed_key: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    scopes: Mapped[list[str]] = mapped_column(JSON, default=list)
+    created_at_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    last_used_at_utc: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
 class AuditRecord(Base):
     __tablename__ = "audit_records"
 
     sequence: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     audit_id: Mapped[str] = mapped_column(String(36), unique=True, index=True)
+    organization_id: Mapped[str] = mapped_column(String(36), default="default", index=True)
     created_at_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     source_sha256: Mapped[str] = mapped_column(String(64), index=True)
     evidence_manifest_sha256: Mapped[str] = mapped_column(String(64))
@@ -50,6 +76,7 @@ def _migrate_columns() -> None:
             ("supplier_name", "VARCHAR(128)"),
             ("product_identifier", "VARCHAR(128)"),
             ("report_json", "JSON" if not str(engine.url).startswith("sqlite") else "TEXT"),
+            ("organization_id", "VARCHAR(36) DEFAULT 'default'"),
         ]:
             try:
                 conn.execute(text(f"ALTER TABLE audit_records ADD COLUMN {col_name} {col_type}"))
@@ -57,11 +84,31 @@ def _migrate_columns() -> None:
                 pass
 
 
+def ensure_default_organization() -> None:
+    try:
+        with SessionLocal() as db:
+            default_org = db.scalar(select(Organization).where(Organization.id == "default"))
+            if not default_org:
+                default_org = Organization(
+                    id="default",
+                    name="Organisation Principale (Démo)",
+                    slug="default-demo",
+                    tier="enterprise",
+                    created_at_utc=datetime.now(timezone.utc),
+                    is_active=True,
+                )
+                db.add(default_org)
+                db.commit()
+    except Exception:
+        pass
+
+
 def create_tables() -> None:
     global engine, SessionLocal
     try:
         Base.metadata.create_all(bind=engine)
         _migrate_columns()
+        ensure_default_organization()
     except Exception as exc:
         # Fallback automatique sur SQLite si le serveur PostgreSQL n'est pas démarré (démos locales)
         if not settings.database_url.startswith("sqlite"):
@@ -72,6 +119,7 @@ def create_tables() -> None:
             SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
             Base.metadata.create_all(bind=engine)
             _migrate_columns()
+            ensure_default_organization()
         else:
             raise
 
@@ -104,12 +152,19 @@ def append_audit_record(
     supplier_name: str | None = None,
     product_identifier: str | None = None,
     report_json: dict[str, Any] | None = None,
+    organization_id: str = "default",
 ) -> tuple[str | None, str, datetime]:
-    """Append a hash-linked audit envelope. This is tamper-evident, not notarised."""
+    """Append a hash-linked audit envelope partitioned per tenant. Tamper-evident and isolated."""
     created = created_at_utc or datetime.now(timezone.utc)
-    previous = db.scalar(select(AuditRecord).order_by(AuditRecord.sequence.desc()).limit(1))
+    previous = db.scalar(
+        select(AuditRecord)
+        .where(AuditRecord.organization_id == organization_id)
+        .order_by(AuditRecord.sequence.desc())
+        .limit(1)
+    )
     previous_hash = previous.record_hash if previous else None
     material = {
+        "organization_id": organization_id,
         "audit_id": audit_id,
         "created_at_utc": created.isoformat(),
         "source_sha256": source_sha256,
@@ -123,6 +178,7 @@ def append_audit_record(
     record_hash = sha256_json(material)
     row = AuditRecord(
         audit_id=audit_id,
+        organization_id=organization_id,
         created_at_utc=created,
         source_sha256=source_sha256,
         evidence_manifest_sha256=evidence_manifest_sha256,
