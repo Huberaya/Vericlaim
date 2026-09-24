@@ -291,7 +291,9 @@ async def evaluate_ecommerce_url(
 
     scraper = EcommerceUrlScraper()
     try:
-        extracted_text, document_sha256, metadata = await scraper.scrape(body.url)
+        extracted_text, document_sha256, metadata = await scraper.scrape(
+            body.url, render_js=body.render_js
+        )
     except UrlScraperError as exc:
         raise HTTPException(status_code=422, detail=f"Erreur d'extraction URL : {exc}") from exc
 

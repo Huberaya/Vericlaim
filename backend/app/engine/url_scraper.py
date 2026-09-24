@@ -84,6 +84,52 @@ MOCK_ECOMMERCE_PAGES: dict[str, dict[str, str]] = {
         </div>
         """,
     },
+    "https://demo-shop.vericlaim.ai/produit/spa-react-eco-creme": {
+        "title": "Crème Solaire Minérale Bio — SPF 50 (Headless Next.js Store)",
+        "description": "Protection solaire minérale océan-friendly.",
+        "content": """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Crème Solaire Minérale Bio — SPF 50</title>
+            <script type="application/ld+json">
+            {
+                "@context": "https://schema.org",
+                "@type": "Product",
+                "name": "Crème Solaire Minérale Bio SPF 50",
+                "description": "Formule 100% sans produits chimiques, 100% biodégradable dans l'eau et zéro pollution pour les coraux.",
+                "category": "Soin Solaire"
+            }
+            </script>
+            <script id="__NEXT_DATA__" type="application/json">
+            {
+                "props": {
+                    "pageProps": {
+                        "product": {
+                            "name": "Crème Solaire Minérale Bio SPF 50",
+                            "highlights": [
+                                "Formule garantie 100% sans produits chimiques",
+                                "Formule 100% biodégradable en milieu marin",
+                                "Impact carbone neutre garanti par compensation",
+                                "Pot en aluminium recyclé sans déchet plastique"
+                            ]
+                        }
+                    }
+                }
+            }
+            </script>
+            <script>
+                document.getElementById('spa-content').innerHTML = '<p>Boutique Headless React rendue dynamiquement.</p>';
+            </script>
+        </head>
+        <body>
+            <div id="__next">
+                <div id="spa-content"></div>
+            </div> <!-- Conteneur vide au chargement initial sans SSR -->
+        </body>
+        </html>
+        """,
+    },
 }
 
 
@@ -105,10 +151,40 @@ def is_safe_url(url: str) -> bool:
 
 
 def scrape_ecommerce_html(
-    html_content: str, url: str = ""
+    html_content: str, url: str = "", render_js: bool = True
 ) -> tuple[str, dict[str, Any]]:
-    """Clean and structure raw HTML from an e-commerce page into verifiable regulatory text."""
+    """Clean and structure raw HTML from an e-commerce page into verifiable regulatory text.
+    
+    When render_js is True, also extracts client-side dynamic content from JSON-LD,
+    Next.js / Nuxt hydration stores, and executes sandboxed client-side DOM mutations.
+    """
     soup = BeautifulSoup(html_content, "html.parser")
+
+    dynamic_sections: list[str] = []
+    dynamic_methods: list[str] = []
+    if render_js:
+        try:
+            from app.engine.dynamic_renderer import (
+                execute_sandboxed_client_scripts,
+                extract_hydration_data,
+                extract_json_ld_product,
+            )
+            json_ld_data = extract_json_ld_product(soup)
+            if json_ld_data:
+                dynamic_sections.extend(json_ld_data)
+                dynamic_methods.append("JSON_LD_PRODUCT")
+
+            hydration_data = extract_hydration_data(soup)
+            if hydration_data:
+                dynamic_sections.extend(hydration_data)
+                dynamic_methods.append("CLIENT_HYDRATION_STORE")
+
+            executed_dom = execute_sandboxed_client_scripts(soup)
+            if executed_dom:
+                dynamic_sections.extend(executed_dom)
+                dynamic_methods.append("SANDBOXED_NODE_VM")
+        except Exception:
+            pass
 
     # Remove script, style, nav, footer, header noise
     for tag in soup(["script", "style", "nav", "footer", "header", "noscript", "svg", "form"]):
@@ -155,6 +231,10 @@ def scrape_ecommerce_html(
         cleaned_lines = [line for line in lines if len(line) > 3 or line.endswith((".", "!", ":"))]
         extracted_sections.append("\n".join(cleaned_lines))
 
+    # Append dynamic rendered content from JavaScript hydration / JSON-LD / DOM mutations
+    if dynamic_sections:
+        extracted_sections.extend(dynamic_sections)
+
     full_text = "\n\n".join(extracted_sections).strip()
     # Normalize excessive newlines and spaces
     full_text = re.sub(r"\n{3,}", "\n\n", full_text)
@@ -163,6 +243,8 @@ def scrape_ecommerce_html(
         "url": url,
         "page_title": page_title or h1_text,
         "meta_description": meta_desc,
+        "dynamic_js_rendering": render_js,
+        "dynamic_extraction_methods": dynamic_methods,
         "extracted_chars_count": len(full_text),
     }
     return full_text, metadata
@@ -175,7 +257,7 @@ class EcommerceUrlScraper:
         self.timeout = timeout
         self.max_chars = max_chars
 
-    async def scrape(self, url: str) -> tuple[str, str, dict[str, Any]]:
+    async def scrape(self, url: str, render_js: bool = True) -> tuple[str, str, dict[str, Any]]:
         """Scrape an e-commerce URL and return (clean_text, sha256_hash, metadata)."""
         clean_url = url.strip()
         if not clean_url:
@@ -185,7 +267,7 @@ class EcommerceUrlScraper:
         for demo_url, mock_data in MOCK_ECOMMERCE_PAGES.items():
             if clean_url.lower() == demo_url.lower() or clean_url.rstrip("/").lower() == demo_url.rstrip("/").lower():
                 html = mock_data["content"]
-                text, meta = scrape_ecommerce_html(html, clean_url)
+                text, meta = scrape_ecommerce_html(html, clean_url, render_js=render_js)
                 doc_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
                 return text[: self.max_chars], doc_hash, meta
 
@@ -215,13 +297,13 @@ class EcommerceUrlScraper:
             for demo_url, mock_data in MOCK_ECOMMERCE_PAGES.items():
                 if "gourde" in clean_url.lower():
                     html = MOCK_ECOMMERCE_PAGES["https://demo-shop.vericlaim.ai/produit/gourde-verte"]["content"]
-                    text, meta = scrape_ecommerce_html(html, clean_url)
+                    text, meta = scrape_ecommerce_html(html, clean_url, render_js=render_js)
                     doc_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
                     meta["note"] = f"Sandbox hors ligne : contenu simulé pour {clean_url}"
                     return text[: self.max_chars], doc_hash, meta
             raise UrlScraperError(f"Impossible de joindre l'adresse : {exc}") from exc
 
-        text, meta = scrape_ecommerce_html(html, clean_url)
+        text, meta = scrape_ecommerce_html(html, clean_url, render_js=render_js)
         if not text.strip():
             raise UrlScraperError("Aucun contenu textuel exploitable n'a pu être extrait de cette page.")
 

@@ -798,3 +798,45 @@ def test_observability_metrics_and_health_probes():
         # 4. Correlation ID header injection
         cid_resp = client.get("/healthz", headers={"X-Request-ID": "corr-uuid-test-999"})
         assert cid_resp.headers.get("X-Request-ID") == "corr-uuid-test-999"
+
+
+def test_dynamic_javascript_rendering_and_spa_extraction():
+    import asyncio
+    from app.engine.url_scraper import EcommerceUrlScraper
+    from app.main import app
+
+    scraper = EcommerceUrlScraper()
+    spa_url = "https://demo-shop.vericlaim.ai/produit/spa-react-eco-creme"
+
+    # 1. Direct scraper extraction with JS rendering enabled
+    text, doc_hash, meta = asyncio.run(scraper.scrape(spa_url, render_js=True))
+    assert meta["dynamic_js_rendering"] is True
+    assert "JSON_LD_PRODUCT" in meta["dynamic_extraction_methods"]
+    assert "CLIENT_HYDRATION_STORE" in meta["dynamic_extraction_methods"]
+    assert "Crème Solaire Minérale Bio" in text
+    assert "sans produits chimiques" in text.lower()
+    assert "biodégradable" in text.lower()
+
+    # 2. End-to-end API audit of dynamic headless SPA
+    with TestClient(app) as client:
+        resp = client.post(
+            "/api/v1/engine/evaluate/url",
+            json={
+                "url": spa_url,
+                "render_js": True,
+                "context": {
+                    "as_of_date": "2026-09-24",
+                    "jurisdiction": "FR",
+                    "consumer_facing": True,
+                },
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["overall_compliance"] == "NON_COMPLIANT"
+        assert data["violations_count"] >= 1
+        assert any(
+            "sans produits chimiques" in ev["claim_text"].lower()
+            or "biodégradable" in ev["claim_text"].lower()
+            for ev in data["evaluations"]
+        )

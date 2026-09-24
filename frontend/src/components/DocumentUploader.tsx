@@ -8,7 +8,7 @@ type Props = {
   error?: string | null;
   onAuditText: (text: string, hasLcaAttached: boolean, additionalEvidence?: EvidenceItem[]) => void | Promise<void>;
   onAuditFile: (file: File, hasLcaAttached: boolean) => void | Promise<void>;
-  onAuditUrl?: (url: string, hasLcaAttached: boolean) => void | Promise<void>;
+  onAuditUrl?: (url: string, hasLcaAttached: boolean, renderJs?: boolean) => void | Promise<void>;
   onOpenEvidence: () => void;
 };
 
@@ -53,6 +53,7 @@ export default function DocumentUploader({
   const [tab, setTab] = useState<Tab>("document");
   const [text, setText] = useState("");
   const [url, setUrl] = useState("");
+  const [renderJs, setRenderJs] = useState(true);
   const [hasLcaAttached, setHasLcaAttached] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [fileName, setFileName] = useState<string | null>(null);
@@ -82,7 +83,7 @@ export default function DocumentUploader({
     setLocalError(null);
     setUrl(trimmed);
     if (onAuditUrl) {
-      void onAuditUrl(trimmed, hasLcaAttached);
+      void onAuditUrl(trimmed, hasLcaAttached, renderJs);
     }
   }
 
@@ -267,20 +268,42 @@ export default function DocumentUploader({
                 className="button button-quiet"
                 style={{ fontSize: "0.75rem", padding: "0.25rem 0.5rem" }}
                 onClick={() => {
-                  const demo = "https://demo-shop.vericlaim.ai/produit/lessive-ecologique-concentree";
+                  const demo = "https://demo-shop.vericlaim.ai/produit/spa-react-eco-creme";
                   setUrl(demo);
                   submitUrl(demo);
                 }}
                 disabled={isLoading}
               >
-                Lessive Éco (Oxo-dégradable)
+                Crème SPA Next.js (Headless)
               </button>
             </div>
           </div>
 
+          <label
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "0.5rem",
+              fontSize: "0.8rem",
+              color: "var(--color-text-default, #1e293b)",
+              marginBottom: "1rem",
+              cursor: "pointer",
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={renderJs}
+              onChange={(e) => setRenderJs(e.target.checked)}
+              disabled={isLoading}
+            />
+            <span>
+              <strong>Rendu JavaScript dynamique actif</strong> (Next.js, Shopify Hydrogen, JSON-LD, SPAs)
+            </span>
+          </label>
+
           <div className="textarea-footer">
             <span>Bouclier anti-SSRF actif</span>
-            <span>Extraction sélective : Titre, H1, Meta, Description produit</span>
+            <span>Extraction hybride : DOM statique + JSON-LD + State Hydraté</span>
           </div>
 
           <button

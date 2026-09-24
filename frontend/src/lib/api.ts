@@ -126,10 +126,11 @@ export async function auditFile(
 export async function auditUrl(
   url: string,
   hasLcaAttached = false,
-  options: AuditOptions = {},
+  options: AuditOptions & { renderJs?: boolean } = {},
 ): Promise<RegulatoryAuditResponse> {
   const payload = {
     url,
+    render_js: options.renderJs ?? true,
     context: buildContext({ ...options.context, surface: options.context?.surface ?? "online_store" }),
     evidence: buildDossier(hasLcaAttached, options),
   };

@@ -33,7 +33,7 @@ pytest -v
 
 Le fichier `backend/pytest.ini` résout automatiquement le `PYTHONPATH`. Si PostgreSQL n'est pas démarré, le backend bascule automatiquement sur SQLite local (`vericlaim.db`) sans configuration requise.
 
-Résultat validé dans le workspace : **30 tests passants (100% de réussite)**.
+Résultat validé dans le workspace : **31 tests passants (100% de réussite)**.
 
 ### Export PDF de l'attestation d'audit
 
@@ -50,11 +50,15 @@ L'API fournit l'endpoint `POST /api/v1/engine/export/pdf` qui génère une attes
 - **Vérification automatique** (`GET /api/v1/engine/ecolabels/verify`) : interroge en direct les registres officiels ISO 14024 Type I (EU Ecolabel ECAT, AFNOR NF Environnement, Blauer Engel, Nordic Swan) pour valider l'authenticité d'une licence.
 - **Safe Harbor probatoire** : une licence vérifiée active automatiquement l'exonération Safe Harbor prévue par la directive européenne 2024/825 pour les allégations environnementales génériques.
 
-### Mode "Audit de Site E-Commerce / Scraper d'URL"
+### Mode "Audit de Site E-Commerce & Rendu JavaScript Dynamique"
 
-- **Extraction et audit en direct** (`POST /api/v1/engine/evaluate/url`) : scanne une fiche produit e-commerce (Shopify, WooCommerce, Amazon, etc.) via son URL publique, filtre le bruit technique (scripts, navigation, footer) et structure le titre produit, la balise meta-description et le corps d'argumentaire pour analyse immédiate par le moteur déterministe.
+- **Extraction et audit en direct** (`POST /api/v1/engine/evaluate/url`) : scanne une fiche produit e-commerce (Shopify, WooCommerce, Amazon, boutique headless Next.js, etc.) via son URL publique, filtre le bruit technique et structure l'argumentaire pour analyse immédiate par le moteur déterministe.
+- **Moteur de rendu JavaScript dynamique (SPAs)** :
+  - **Extraction des données hydratées client** : capture les données produit injectées côté client dans Next.js (`__NEXT_DATA__`), Nuxt (`__NUXT__`), Shopify Storefront (`meta.product`) et Remix.
+  - **Données structurées Schema.org** : analyse automatique des balises `<script type="application/ld+json">` (`Product`, `Offer`, `brand`).
+  - **Exécution DOM sandboxée** : runner Node.js VM sécurisé évaluant les scripts dynamiques de mutation DOM avec isolation stricte et délai d'expiration de 2 secondes.
 - **Bouclier de sécurité anti-SSRF** : validation stricte bloquant systématiquement les adresses de bouclage (`localhost`, `127.0.0.1`), les réseaux privés (RFC 1918), les métadonnées d'instances cloud (`169.254.169.254`), et les protocoles non autorisés.
-- **Boutiques de démonstration intégrées** : fiches produits tests prêtes à l'emploi (`https://demo-shop.vericlaim.ai/...`) fonctionnant à 100% hors-ligne pour les démonstrations et la validation continue.
+- **Boutiques de démonstration intégrées** : fiches produits tests prêtes à l'emploi (`https://demo-shop.vericlaim.ai/...`), dont une boutique headless SPA Next.js fonctionnant à 100% hors-ligne.
 
 ### Audit de Catalogue en Masse (Batch CSV & JSON)
 

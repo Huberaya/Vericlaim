@@ -142,7 +142,7 @@ export default function AuditDashboard() {
     }
   }
 
-  async function runUrlAudit(url: string, hasLcaAttached: boolean) {
+  async function runUrlAudit(url: string, hasLcaAttached: boolean, renderJs = true) {
     setReport(null);
     setSourceText("");
     setError(null);
@@ -151,6 +151,7 @@ export default function AuditDashboard() {
       const result = await auditUrl(url, hasLcaAttached, {
         context: buildContext(),
         evidence: { items: evidence, legal_person: true },
+        renderJs,
       });
       setSourceText(result.extracted_source_text);
       setReport(result);

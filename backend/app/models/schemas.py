@@ -51,6 +51,7 @@ class EvaluationRequest(BaseModel):
 
 class UrlAuditRequest(BaseModel):
     url: str = Field(min_length=8, max_length=2048)
+    render_js: bool = Field(default=True, description="Active le rendu dynamique JavaScript (Next.js, Shopify Hydrogen, JSON-LD, SPAs)")
     context: AuditContext | None = None
     evidence: EvidenceDossier | None = None
 
