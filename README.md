@@ -33,7 +33,7 @@ pytest -v
 
 Le fichier `backend/pytest.ini` résout automatiquement le `PYTHONPATH`. Si PostgreSQL n'est pas démarré, le backend bascule automatiquement sur SQLite local (`vericlaim.db`) sans configuration requise.
 
-Résultat validé dans le workspace : **33 tests passants (100% de réussite)**.
+Résultat validé dans le workspace : **35 tests passants (100% de réussite)**.
 
 ### Export PDF de l'attestation d'audit
 
@@ -114,6 +114,11 @@ L'architecture supporte le cloisonnement étanche multi-organisations via l'en-t
 - **Gestion des Clés API** : génération cryptographique (`vk_live_...`), hachage SHA-256 en base de données, attribution de scopes (`audit:read`, `audit:write`, `batch:run`, `admin`) et révocation instantanée.
 - **Rétrocompatibilité démo** : en l'absence de clé API, le système bascule de manière transparente sur le tenant démo public, préservant le fonctionnement sans configuration.
 - **Interface UI intégrée** : onglet dédié « Clés API & Multi-Tenant » dans le dashboard pour créer une organisation, générer et révoquer des clés, et auditer en environnement cloisonné.
+
+### Webhooks Sécurisés (HMAC-SHA256) & Avenants Juridiques Fournisseurs
+
+- **Webhooks d'Alerte (`app/core/webhooks.py`)** : émission automatique d'alertes signées par HMAC-SHA256 (`t={timestamp},v1={hash}`) lors de la détection d'infractions critiques (`audit.violation_detected`) ou à l'achèvement d'audits (`audit.completed`). Gestion complète des abonnements et ping de test.
+- **Générateur d'Avenant Fournisseur Anti-Greenwashing** : endpoint `POST /api/v1/engine/remediation/contract-addendum` et interface dédiée pour produire instantanément l'avenant contractuel exécutoire complet (garantie d'éviction, prise en charge intégrale des amendes DGCCRF jusqu'à 1 500 000 € ou 10 % du CA, pénalités forfaitaires de 15 000 € par SKU non conforme).
 
 ### Intégration Continue (CI/CD GitHub Actions)
 

@@ -1008,3 +1008,114 @@ def test_multi_tenant_isolation_and_api_key_lifecycle():
         erp_after_revoke = client.get("/api/v1/engine/audits", headers={"X-API-Key": erp_key})
         assert erp_after_revoke.status_code == 401
 
+
+def test_webhooks_lifecycle_and_hmac_signatures():
+    from uuid import uuid4
+    from app.main import app
+    from app.core.webhooks import build_signature_header, verify_webhook_signature
+
+    with TestClient(app) as client:
+        # 1. Création d'une organisation dédiée
+        slug = f"webhook-org-{uuid4().hex[:6]}"
+        t_resp = client.post(
+            "/api/v1/engine/tenants",
+            json={"name": "Webhook Corp", "slug": slug},
+        )
+        assert t_resp.status_code == 200
+        api_key = t_resp.json()["initial_api_key"]["key"]
+
+        # 2. Enregistrement d'un webhook
+        hook_resp = client.post(
+            "/api/v1/engine/webhooks",
+            headers={"X-API-Key": api_key},
+            json={
+                "url": "https://compliance.internal.corp/webhook/alerts",
+                "description": "Système d'alerte Slack conformité",
+                "events": ["audit.violation_detected", "audit.completed"],
+            },
+        )
+        assert hook_resp.status_code == 200
+        hook_data = hook_resp.json()
+        assert hook_data["secret"].startswith("whsec_")
+        assert hook_data["url"] == "https://compliance.internal.corp/webhook/alerts"
+        hook_id = hook_data["id"]
+        secret = hook_data["secret"]
+
+        # 3. Test de signature cryptographique HMAC-SHA256
+        test_payload = '{"event":"audit.violation_detected","violations_count":2}'
+        sig_header, ts = build_signature_header(secret, test_payload)
+        assert sig_header.startswith("t=")
+        assert ",v1=" in sig_header
+
+        # Validation de signature valide
+        assert verify_webhook_signature(secret, sig_header, test_payload) is True
+
+        # Rejet en cas de payload altéré (tampering)
+        tampered_payload = '{"event":"audit.violation_detected","violations_count":0}'
+        assert verify_webhook_signature(secret, sig_header, tampered_payload) is False
+
+        # Rejet avec faux secret
+        assert verify_webhook_signature("whsec_wrongsecret123", sig_header, test_payload) is False
+
+        # 4. Liste des webhooks de l'organisation
+        list_resp = client.get("/api/v1/engine/webhooks", headers={"X-API-Key": api_key})
+        assert list_resp.status_code == 200
+        assert list_resp.json()["total"] == 1
+        assert list_resp.json()["webhooks"][0]["id"] == hook_id
+
+        # 5. Suppression du webhook
+        del_resp = client.delete(f"/api/v1/engine/webhooks/{hook_id}", headers={"X-API-Key": api_key})
+        assert del_resp.status_code == 200
+        assert del_resp.json()["status"] == "deleted"
+
+        # Liste vide après suppression
+        list_after = client.get("/api/v1/engine/webhooks", headers={"X-API-Key": api_key})
+        assert list_after.json()["total"] == 0
+
+
+def test_supplier_contract_addendum_generation():
+    from app.main import app
+
+    with TestClient(app) as client:
+        # 1. Évaluation d'un texte litigieux pour créer un audit
+        audit_resp = client.post(
+            "/api/v1/engine/evaluate",
+            json={
+                "source_text": "Emballage 100% biodégradable et sans produit chimique.",
+                "context": {
+                    "jurisdiction": "FR",
+                    "surface": "packaging",
+                    "consumer_facing": True,
+                    "supplier_name": "Fournisseur Plastiques SAS",
+                    "product_identifier": "SKU-PLAST-99",
+                },
+            },
+        )
+        assert audit_resp.status_code == 200
+        audit_id = audit_resp.json()["audit_trail"]["audit_id"]
+
+        # 2. Génération de l'Avenant Juridique Fournisseur
+        addendum_resp = client.post(
+            "/api/v1/engine/remediation/contract-addendum",
+            json={
+                "supplier_name": "Fournisseur Plastiques SAS",
+                "audit_ids": [audit_id],
+                "buyer_name": "Groupe Grande Distribution",
+                "contract_reference": "Contrat Cadre Référencement 2026",
+            },
+        )
+        assert addendum_resp.status_code == 200
+        data = addendum_resp.json()
+        assert data["addendum_id"].startswith("AVN-")
+        assert data["violations_count"] >= 2
+        assert data["articles_count"] == 6
+
+        md = data["markdown_content"]
+        assert "AVENANT N°" in md
+        assert "RELATIF À LA CONFORMITÉ RÉGLEMENTAIRE" in md
+        assert "Fournisseur Plastiques SAS" in md
+        assert "GARANTIE D'INDEMNISATION INTÉGRALE" in md
+        assert "biodégradable" in md
+        assert "sans produit chimique" in md
+
+

@@ -432,3 +432,31 @@ export type ApiKeyListResponse = {
   total: number;
   keys: ApiKeyItem[];
 };
+
+export type WebhookResponse = {
+  id: string;
+  organization_id: string;
+  url: string;
+  secret: string;
+  description: string;
+  events: string[];
+  created_at_utc: string;
+  last_triggered_at_utc: string | null;
+  is_active: boolean;
+};
+
+export type WebhookListResponse = {
+  total: number;
+  webhooks: WebhookResponse[];
+};
+
+export type ContractAddendumResponse = {
+  addendum_id: string;
+  effective_date: string;
+  buyer_name: string;
+  supplier_name: string;
+  violations_count: number;
+  total_exposure_eur: number;
+  articles_count: number;
+  markdown_content: string;
+};

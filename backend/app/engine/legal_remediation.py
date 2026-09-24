@@ -113,3 +113,133 @@ def remediation_for(
         supplier_contract_clause=clause,
         required_actions=actions,
     )
+
+
+def generate_supplier_contract_addendum(
+    supplier_name: str,
+    evaluations: list[Any],
+    *,
+    buyer_name: str = "Le Client",
+    contract_reference: str = "Contrat Cadre de Fourniture",
+    effective_date: str | None = None,
+) -> dict[str, Any]:
+    """
+    Génère un Avenant Contractuel Juridique complet (« Clause Verte & Anti-Greenwashing »)
+    opposable au fournisseur, structuré en articles exécutoires (garantie d'éviction,
+    prise en charge intégrale des amendes DGCCRF, pénalités forfaitaires et refonte des allégations).
+    """
+    today_str = effective_date or date.today().isoformat()
+    doc_id = f"AVN-{date.today().strftime('%Y%m')}-{abs(hash(supplier_name)) % 10000:04d}"
+
+    # Extraction des constats d'audits
+    violations_items: list[dict[str, str]] = []
+    remediation_clauses: list[str] = []
+    total_fines_exposure = 0
+
+    for rep in evaluations:
+        eval_items = getattr(rep, "evaluations", [])
+        exp_matrix = getattr(rep, "exposure_matrix", None)
+        if exp_matrix and getattr(exp_matrix, "max_known_fixed_fine_eur", None):
+            total_fines_exposure += int(exp_matrix.max_known_fixed_fine_eur)
+
+        for ev in eval_items:
+            is_viol = getattr(ev, "is_legal_violation", False)
+            rule_id = getattr(ev, "rule_id", "")
+            rule_title = getattr(ev, "rule_title", "")
+            claim_text = getattr(ev, "trigger_text", "")
+            remed = getattr(ev, "remediation", None)
+
+            if is_viol:
+                violations_items.append({
+                    "rule_id": rule_id,
+                    "rule_title": rule_title,
+                    "claim_text": claim_text,
+                    "legal_basis": getattr(ev, "legal_reference", "Code de la consommation / Code de l'environnement"),
+                    "proposed_rewrite": remed.recommended_rewrite if remed else "Suppression de l'allégation",
+                })
+            if remed and remed.supplier_contract_clause:
+                remediation_clauses.append(remed.supplier_contract_clause)
+
+    # Déduplication des clauses
+    unique_clauses = list(dict.fromkeys(remediation_clauses))
+
+    # Rédaction intégrale en Markdown
+    lines = [
+        f"# AVENANT N° {doc_id} AU {contract_reference.upper()}",
+        "## RELATIF À LA CONFORMITÉ RÉGLEMENTAIRE DES ALLÉGATIONS ENVIRONNEMENTALES ET À LA PRÉVENTION DU GREENWASHING",
+        "",
+        f"**Date d'effet :** {today_str}  ",
+        f"**Entre :** **{buyer_name}**, ci-après dénommé *« Le Client »*, d'une part,  ",
+        f"**Et :** **{supplier_name}**, ci-après dénommé *« Le Fournisseur »*, d'autre part.",
+        "",
+        "---",
+        "",
+        "### PRÉAMBULE",
+        "Considérant les exigences impératives issues de la Loi n° 2020-105 relative à la lutte contre le gaspillage et à l'économie circulaire (AGEC), de la Loi n° 2021-1104 portant lutte contre le dérèglement climatique (Climat et Résilience), de la Directive (UE) 2024/825 (Empowering Consumers for the Green Transition) et de l'interdiction des pratiques commerciales trompeuses au sens de l'article L. 121-2 du Code de la consommation ;",
+        "Considérant que le Client entend garantir une loyauté absolue des informations écologiques délivrées aux consommateurs et sécuriser ses approvisionnements contre tout risque d'amende administrative, pénale ou d'atteinte réputationnelle ;",
+        "",
+        "**IL A ÉTÉ CONVENU CE QUI SUIT :**",
+        "",
+        "### ARTICLE 1 — OBJET DE L'AVENANT",
+        "Le présent Avenant a pour objet de définir les obligations impératives du Fournisseur quant à la loyauté, la vérification scientifique préalable et la légalité des allégations environnementales, mentions d'éco-conception, réductions carbone, recyclabilité et certifications apposées sur les Produits et leurs Emballages livrés au Client.",
+        "",
+        "### ARTICLE 2 — CONSTAT DES MANQUEMENTS ET ALLÉGATIONS PROHIBÉES",
+    ]
+
+    if violations_items:
+        lines.append("Les audits réglementaires d'entrée ont révélé les non-conformités suivantes, que le Fournisseur s'engage à régulariser sans délai :")
+        lines.append("")
+        lines.append("| Règle Enfreinte | Allégation Litigieuse Détectée | Base Légale | Substitution Obligatoire |")
+        lines.append("|---|---|---|---|")
+        for v in violations_items:
+            lines.append(f"| **{v['rule_title']}** | « {v['claim_text']} » | {v['legal_basis']} | {v['proposed_rewrite']} |")
+        lines.append("")
+    else:
+        lines.append("Aucune infraction critique n'a été retenue lors des contrôles préalables. Le Fournisseur s'engage au maintien permanent de cette conformité.")
+        lines.append("")
+
+    lines.extend([
+        "### ARTICLE 3 — ENGAGEMENTS D'EXCLUSION ET STIPULATIONS PARTICULIÈRES",
+        "Le Fournisseur souscrit expressément aux engagements contractuels d'interdiction suivants :",
+    ])
+
+    if unique_clauses:
+        for idx, clause in enumerate(unique_clauses, start=1):
+            lines.append(f"**3.{idx}.** {clause}\n")
+    else:
+        lines.append("Le Fournisseur garantit l'exactitude des informations et le bannissement total de toute formule floue ou trompeuse.\n")
+
+    fine_cap_str = f"{total_fines_exposure:,} €".replace(",", " ") if total_fines_exposure > 0 else "1 500 000 €"
+
+    lines.extend([
+        "### ARTICLE 4 — GARANTIE D'INDEMNISATION INTÉGRALE ET PASSAGE DU RISQUE",
+        "Le Fournisseur garantit et indemnisera intégralement le Client de l'ensemble des préjudices, condamnations, astreintes et frais (notamment honoraires d'avocats, frais de rappel ou de ré-étiquetage des stocks, publication d'injonction DGCCRF) résultant d'une allégation environnementale mensongère, imprécise ou interdite apposée sur les Produits ou Emballages.",
+        f"Cette garantie couvre sans restriction l'exposition financière maximale fixée par les textes applicables (pouvant atteindre {fine_cap_str} ou jusqu'à 10 % du chiffre d'affaires annuel selon l'article L. 132-2 du Code de la consommation).",
+        "",
+        "### ARTICLE 5 — PÉNALITÉS CONTRACTUELLES ET CLAUSE RÉSOLUTOIRE",
+        "Tout manquement non rectifié dans un délai de quinze (15) jours ouvrés suivant mise en demeure par lettre recommandée ou notification électronique certifiée ouvrira droit, au choix discrétionnaire du Client :",
+        "1. À l'application d'une pénalité forfaitaire de 15 000 € par référence non conforme ;",
+        "2. Au refus des livraisons et au retour des marchandises aux frais exclusifs du Fournisseur ;",
+        "3. À la résiliation immédiate de plein droit du Contrat Cadre sans indemnité au bénéfice du Fournisseur.",
+        "",
+        "### ARTICLE 6 — ENTRÉE EN VIGUEUR ET DROIT APPLICABLE",
+        "Le présent Avenant prend effet immédiatement à compter de sa signature par les deux parties et prévaut sur toute condition générale d'achat ou de vente contraire.",
+        "",
+        "Fait en deux (2) exemplaires originaux à Nantes / Paris.",
+        "",
+        f"**Pour le Client ({buyer_name}) :** _______________________  ",
+        f"**Pour le Fournisseur ({supplier_name}) :** _______________________  ",
+    ])
+
+    full_markdown = "\n".join(lines)
+
+    return {
+        "addendum_id": doc_id,
+        "effective_date": today_str,
+        "buyer_name": buyer_name,
+        "supplier_name": supplier_name,
+        "violations_count": len(violations_items),
+        "total_exposure_eur": total_fines_exposure,
+        "articles_count": 6,
+        "markdown_content": full_markdown,
+    }

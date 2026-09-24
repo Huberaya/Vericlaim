@@ -237,3 +237,44 @@ class ApiKeyListResponse(BaseModel):
 class TenantWithKeyResponse(BaseModel):
     organization: TenantResponse
     initial_api_key: ApiKeyCreatedResponse
+
+
+class WebhookCreateRequest(BaseModel):
+    url: str = Field(min_length=8, max_length=2048)
+    description: str = Field(default="Webhook Notification", max_length=256)
+    events: list[str] = Field(default_factory=lambda: ["audit.violation_detected", "audit.completed"])
+
+
+class WebhookResponse(BaseModel):
+    id: str
+    organization_id: str
+    url: str
+    secret: str
+    description: str
+    events: list[str]
+    created_at_utc: datetime
+    last_triggered_at_utc: datetime | None = None
+    is_active: bool
+
+
+class WebhookListResponse(BaseModel):
+    total: int
+    webhooks: list[WebhookResponse]
+
+
+class ContractAddendumRequest(BaseModel):
+    supplier_name: str = Field(min_length=1, max_length=128)
+    audit_ids: list[str] = Field(default_factory=list)
+    buyer_name: str = Field(default="Le Client", max_length=128)
+    contract_reference: str = Field(default="Contrat Cadre de Fourniture", max_length=128)
+
+
+class ContractAddendumResponse(BaseModel):
+    addendum_id: str
+    effective_date: str
+    buyer_name: str
+    supplier_name: str
+    violations_count: int
+    total_exposure_eur: int
+    articles_count: int
+    markdown_content: str

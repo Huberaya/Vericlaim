@@ -41,6 +41,20 @@ class ApiKey(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
+class Webhook(Base):
+    __tablename__ = "webhooks"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    organization_id: Mapped[str] = mapped_column(String(36), index=True)
+    url: Mapped[str] = mapped_column(String(2048))
+    secret: Mapped[str] = mapped_column(String(64))
+    description: Mapped[str] = mapped_column(String(256), default="Webhook Endpoint")
+    events: Mapped[list[str]] = mapped_column(JSON, default=list)
+    created_at_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    last_triggered_at_utc: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
 class AuditRecord(Base):
     __tablename__ = "audit_records"
 

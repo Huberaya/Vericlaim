@@ -19,6 +19,7 @@ from app.core.database import (
     ApiKey,
     AuditRecord,
     Organization,
+    Webhook,
     append_audit_record,
     canonical_json,
     get_db,
@@ -32,7 +33,9 @@ from app.core.security import (
     require_auth,
     require_scopes,
 )
+from app.core.webhooks import dispatch_webhook_event, generate_webhook_secret
 from app.engine.document_extractor import DocumentExtractionError, DocumentTextExtractor
+from app.engine.legal_remediation import generate_supplier_contract_addendum
 from app.engine.pdf_exporter import generate_audit_pdf
 from app.engine.risk_assessment import (
     build_exposure_matrix,
@@ -53,6 +56,8 @@ from app.models.schemas import (
     CatalogBatchResponse,
     CatalogItemInput,
     CatalogItemResult,
+    ContractAddendumRequest,
+    ContractAddendumResponse,
     EvaluationRequest,
     EvaluationResponse,
     RuleBookResponse,
@@ -65,6 +70,9 @@ from app.models.schemas import (
     TenantResponse,
     TenantWithKeyResponse,
     UrlAuditRequest,
+    WebhookCreateRequest,
+    WebhookListResponse,
+    WebhookResponse,
 )
 
 
@@ -272,6 +280,24 @@ def _execute_evaluation(
             violations=violation_rules,
             claims=claim_types,
         )
+    except Exception:
+        pass
+
+    try:
+        webhook_payload = {
+            "audit_id": audit_id,
+            "overall_compliance": overall.value,
+            "risk_score": risk_score,
+            "violations_count": violations_count,
+            "detected_claims_count": len(claims),
+            "max_fixed_fine_eur": int(exposure.max_known_fixed_fine_eur) if exposure.max_known_fixed_fine_eur else None,
+            "supplier_name": context.supplier_name,
+            "product_identifier": context.product_identifier,
+            "record_hash": record_hash,
+        }
+        dispatch_webhook_event(db, organization_id, "audit.completed", webhook_payload)
+        if violations_count > 0:
+            dispatch_webhook_event(db, organization_id, "audit.violation_detected", webhook_payload)
     except Exception:
         pass
 
@@ -1035,3 +1061,144 @@ def revoke_api_key(
     key_record.is_active = False
     db.commit()
     return {"status": "revoked", "key_id": key_id}
+
+
+@router.post("/webhooks", response_model=WebhookResponse)
+def register_webhook(
+    body: WebhookCreateRequest,
+    tenant: TenantContext = Depends(require_auth),
+    db: Session = Depends(get_db),
+) -> WebhookResponse:
+    """Enregistre un nouveau webhook sécurisé pour recevoir les alertes réglementaires en temps réel."""
+    wh_id = str(uuid4())
+    secret = generate_webhook_secret()
+    now = datetime.now(timezone.utc)
+    wh = Webhook(
+        id=wh_id,
+        organization_id=tenant.organization.id,
+        url=body.url.strip(),
+        secret=secret,
+        description=body.description.strip(),
+        events=body.events,
+        created_at_utc=now,
+        is_active=True,
+    )
+    db.add(wh)
+    db.commit()
+
+    return WebhookResponse(
+        id=wh.id,
+        organization_id=wh.organization_id,
+        url=wh.url,
+        secret=wh.secret,
+        description=wh.description,
+        events=wh.events,
+        created_at_utc=wh.created_at_utc,
+        last_triggered_at_utc=wh.last_triggered_at_utc,
+        is_active=wh.is_active,
+    )
+
+
+@router.get("/webhooks", response_model=WebhookListResponse)
+def list_webhooks(
+    tenant: TenantContext = Depends(require_auth),
+    db: Session = Depends(get_db),
+) -> WebhookListResponse:
+    """Liste l'ensemble des webhooks configurés pour l'organisation."""
+    records = list(
+        db.scalars(
+            select(Webhook)
+            .where(Webhook.organization_id == tenant.organization.id)
+            .order_by(Webhook.created_at_utc.desc())
+        ).all()
+    )
+    items = [
+        WebhookResponse(
+            id=r.id,
+            organization_id=r.organization_id,
+            url=r.url,
+            secret=r.secret,
+            description=r.description,
+            events=r.events or [],
+            created_at_utc=r.created_at_utc,
+            last_triggered_at_utc=r.last_triggered_at_utc,
+            is_active=r.is_active,
+        )
+        for r in records
+    ]
+    return WebhookListResponse(total=len(items), webhooks=items)
+
+
+@router.delete("/webhooks/{webhook_id}")
+def delete_webhook(
+    webhook_id: str,
+    tenant: TenantContext = Depends(require_auth),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Supprime un webhook d'alerte."""
+    record = db.scalar(
+        select(Webhook).where(
+            Webhook.id == webhook_id,
+            Webhook.organization_id == tenant.organization.id,
+        )
+    )
+    if not record:
+        raise HTTPException(status_code=404, detail="Webhook introuvable.")
+
+    record.is_active = False
+    db.delete(record)
+    db.commit()
+    return {"status": "deleted", "webhook_id": webhook_id}
+
+
+@router.post("/webhooks/{webhook_id}/test")
+def test_webhook(
+    webhook_id: str,
+    tenant: TenantContext = Depends(require_auth),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Émet un événement de test signé HMAC-SHA256 vers le webhook cible."""
+    record = db.scalar(
+        select(Webhook).where(
+            Webhook.id == webhook_id,
+            Webhook.organization_id == tenant.organization.id,
+            Webhook.is_active == True,
+        )
+    )
+    if not record:
+        raise HTTPException(status_code=404, detail="Webhook introuvable ou inactif.")
+
+    test_data = {
+        "test": True,
+        "message": "Ping de vérification VeriClaim AI",
+        "organization_name": tenant.organization.name,
+    }
+    dispatched = dispatch_webhook_event(db, tenant.organization.id, "webhook.test", test_data)
+    return {"status": "dispatched" if dispatched > 0 else "failed", "webhook_id": webhook_id}
+
+
+@router.post("/remediation/contract-addendum", response_model=ContractAddendumResponse)
+def generate_contract_addendum_endpoint(
+    body: ContractAddendumRequest,
+    db: Session = Depends(get_db),
+    tenant: TenantContext = Depends(get_tenant_context),
+) -> ContractAddendumResponse:
+    """Génère l'Avenant Contractuel Fournisseur officiel Anti-Greenwashing basé sur les audits."""
+    evaluations: list[EvaluationResponse] = []
+    for audit_id in body.audit_ids:
+        rec = db.scalar(
+            select(AuditRecord).where(
+                AuditRecord.audit_id == audit_id,
+                AuditRecord.organization_id == tenant.organization.id,
+            )
+        )
+        if rec and rec.report_json:
+            evaluations.append(EvaluationResponse.model_validate(rec.report_json))
+
+    addendum = generate_supplier_contract_addendum(
+        supplier_name=body.supplier_name,
+        evaluations=evaluations,
+        buyer_name=body.buyer_name,
+        contract_reference=body.contract_reference,
+    )
+    return ContractAddendumResponse(**addendum)

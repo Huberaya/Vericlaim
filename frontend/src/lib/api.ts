@@ -5,6 +5,7 @@ import type {
   AuditHistoryResponse,
   CatalogBatchRequest,
   CatalogBatchResponse,
+  ContractAddendumResponse,
   EvidenceDossier,
   EvidenceItem,
   EvaluationRequest,
@@ -14,6 +15,8 @@ import type {
   SupplierCompareResponse,
   TenantResponse,
   TenantWithKeyResponse,
+  WebhookListResponse,
+  WebhookResponse,
 } from "@/lib/types";
 
 export const API_BASE_URL = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000").replace(/\/+$/, "");
@@ -415,4 +418,79 @@ export async function revokeApiKey(keyId: string): Promise<void> {
   if (!response.ok) {
     throw new Error(`Échec de révocation de la clé (${response.status})`);
   }
+}
+
+export async function registerWebhook(
+  url: string,
+  description = "Alerte Conformité",
+  events: string[] = ["audit.violation_detected", "audit.completed"],
+): Promise<WebhookResponse> {
+  const response = await fetch(requestUrl("/api/v1/engine/webhooks"), {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ url, description, events }),
+  });
+  if (!response.ok) {
+    let detail = `Erreur enregistrement webhook (${response.status})`;
+    try {
+      const body = await response.json();
+      if (body?.detail) detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail);
+    } catch {}
+    throw new Error(detail);
+  }
+  return (await response.json()) as WebhookResponse;
+}
+
+export async function fetchWebhooks(): Promise<WebhookListResponse> {
+  const response = await fetch(requestUrl("/api/v1/engine/webhooks"), {
+    headers: authHeaders(),
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    throw new Error(`Échec de récupération des webhooks (${response.status})`);
+  }
+  return (await response.json()) as WebhookListResponse;
+}
+
+export async function deleteWebhook(webhookId: string): Promise<void> {
+  const response = await fetch(requestUrl(`/api/v1/engine/webhooks/${encodeURIComponent(webhookId)}`), {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  if (!response.ok) {
+    throw new Error(`Échec de suppression du webhook (${response.status})`);
+  }
+}
+
+export async function testWebhook(webhookId: string): Promise<{ status: string; webhook_id: string }> {
+  const response = await fetch(requestUrl(`/api/v1/engine/webhooks/${encodeURIComponent(webhookId)}/test`), {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  if (!response.ok) {
+    throw new Error(`Échec du test webhook (${response.status})`);
+  }
+  return await response.json();
+}
+
+export async function generateContractAddendum(params: {
+  supplier_name: string;
+  audit_ids?: string[];
+  buyer_name?: string;
+  contract_reference?: string;
+}): Promise<ContractAddendumResponse> {
+  const response = await fetch(requestUrl("/api/v1/engine/remediation/contract-addendum"), {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(params),
+  });
+  if (!response.ok) {
+    let detail = `Erreur génération avenant (${response.status})`;
+    try {
+      const body = await response.json();
+      if (body?.detail) detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail);
+    } catch {}
+    throw new Error(detail);
+  }
+  return (await response.json()) as ContractAddendumResponse;
 }

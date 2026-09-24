@@ -4,18 +4,24 @@ import { useEffect, useState } from "react";
 import {
   createApiKey,
   createTenant,
+  deleteWebhook,
   fetchApiKeys,
   fetchCurrentTenant,
+  fetchWebhooks,
+  generateContractAddendum,
   getStoredApiKey,
+  registerWebhook,
   revokeApiKey,
   setStoredApiKey,
+  testWebhook,
 } from "@/lib/api";
-import type { ApiKeyItem, TenantResponse } from "@/lib/types";
+import type { ApiKeyItem, ContractAddendumResponse, TenantResponse, WebhookResponse } from "@/lib/types";
 
 export default function TenantApiKeyView() {
   const [currentKey, setCurrentKey] = useState<string>("");
   const [tenant, setTenant] = useState<TenantResponse | null>(null);
   const [apiKeys, setApiKeys] = useState<ApiKeyItem[]>([]);
+  const [webhooks, setWebhooks] = useState<WebhookResponse[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
@@ -28,6 +34,15 @@ export default function TenantApiKeyView() {
   // Formulaire nouvelle clé
   const [newKeyName, setNewKeyName] = useState("");
   const [generatedSecretKey, setGeneratedSecretKey] = useState<string | null>(null);
+
+  // Formulaire nouveau Webhook
+  const [webhookUrl, setWebhookUrl] = useState("");
+  const [webhookDesc, setWebhookDesc] = useState("");
+
+  // Générateur d'avenant contractuel
+  const [addendumSupplier, setAddendumSupplier] = useState("EcoPlast Global SAS");
+  const [addendumBuyer, setAddendumBuyer] = useState("Groupe Grande Distribution");
+  const [generatedAddendum, setGeneratedAddendum] = useState<ContractAddendumResponse | null>(null);
 
   useEffect(() => {
     const key = getStoredApiKey() || "";
@@ -48,8 +63,15 @@ export default function TenantApiKeyView() {
         } catch {
           setApiKeys([]);
         }
+        try {
+          const whData = await fetchWebhooks();
+          setWebhooks(whData.webhooks);
+        } catch {
+          setWebhooks([]);
+        }
       } else {
         setApiKeys([]);
+        setWebhooks([]);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Erreur de chargement du tenant");
@@ -125,6 +147,66 @@ export default function TenantApiKeyView() {
     }
   };
 
+  const handleRegisterWebhook = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!webhookUrl.trim()) return;
+    setIsLoading(true);
+    setError(null);
+    try {
+      await registerWebhook(webhookUrl.trim(), webhookDesc.trim() || undefined);
+      setWebhookUrl("");
+      setWebhookDesc("");
+      setSuccessMessage("Webhook enregistré avec succès.");
+      setTimeout(() => setSuccessMessage(null), 3500);
+      await loadTenantData(currentKey);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Erreur enregistrement webhook");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleDeleteWebhook = async (id: string) => {
+    if (!confirm("Supprimer ce webhook d'alerte ?")) return;
+    try {
+      await deleteWebhook(id);
+      setSuccessMessage("Webhook supprimé.");
+      setTimeout(() => setSuccessMessage(null), 3000);
+      await loadTenantData(currentKey);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Erreur suppression webhook");
+    }
+  };
+
+  const handleTestWebhook = async (id: string) => {
+    try {
+      const res = await testWebhook(id);
+      setSuccessMessage(`Test émis vers le webhook (Statut : ${res.status})`);
+      setTimeout(() => setSuccessMessage(null), 3500);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Échec du test webhook");
+    }
+  };
+
+  const handleGenerateAddendum = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!addendumSupplier.trim()) return;
+    setIsLoading(true);
+    setError(null);
+    try {
+      const res = await generateContractAddendum({
+        supplier_name: addendumSupplier.trim(),
+        buyer_name: addendumBuyer.trim() || "Le Client",
+      });
+      setGeneratedAddendum(res);
+      setSuccessMessage("Avenant contractuel anti-greenwashing généré !");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Erreur génération avenant");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   return (
     <div className="tenant-view space-y-6" style={{ maxWidth: 1040, margin: "0 auto", padding: "1.5rem 1rem" }}>
       {/* Header & Status Card */}
@@ -133,7 +215,7 @@ export default function TenantApiKeyView() {
           <div>
             <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
               <h2 style={{ fontSize: "1.35rem", fontWeight: 700, margin: 0, color: "var(--heading-color, #0f172a)" }}>
-                Isolation Multi-Tenant & Clés API
+                Isolation Multi-Tenant, Clés API & Webhooks
               </h2>
               <span
                 style={{
@@ -236,7 +318,7 @@ export default function TenantApiKeyView() {
         </div>
       )}
 
-      {/* Popup / Alerte affichant la clé secrète générée */}
+      {/* Alerte affichant la clé secrète générée */}
       {generatedSecretKey && (
         <div style={{ padding: "1.25rem", background: "#eff6ff", border: "2px solid #3b82f6", borderRadius: 10 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -276,7 +358,7 @@ export default function TenantApiKeyView() {
       )}
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: "1.5rem" }}>
-        {/* Section 1 : Basculer de clé / Saisie manuelle */}
+        {/* Section 1 : Connexion par Clé API */}
         <div className="panel" style={{ background: "var(--card-bg, #ffffff)", border: "1px solid #e2e8f0", borderRadius: 12, padding: "1.25rem" }}>
           <h3 style={{ fontSize: "1.05rem", fontWeight: 700, margin: "0 0 0.5rem", color: "#1e293b" }}>
             Connexion par Clé API
@@ -304,7 +386,7 @@ export default function TenantApiKeyView() {
           </div>
         </div>
 
-        {/* Section 2 : Créer un nouveau Tenant Organisation */}
+        {/* Section 2 : Créer un nouveau Tenant */}
         <div className="panel" style={{ background: "var(--card-bg, #ffffff)", border: "1px solid #e2e8f0", borderRadius: 12, padding: "1.25rem" }}>
           <h3 style={{ fontSize: "1.05rem", fontWeight: 700, margin: "0 0 0.5rem", color: "#1e293b" }}>
             Créer une Organisation (Nouveau Tenant)
@@ -350,7 +432,7 @@ export default function TenantApiKeyView() {
         </div>
       </div>
 
-      {/* Section 3 : Clés API enregistrées dans le Tenant actif */}
+      {/* Section 3 : Clés API du Tenant actif */}
       {currentKey && (
         <div className="panel" style={{ background: "var(--card-bg, #ffffff)", border: "1px solid #e2e8f0", borderRadius: 12, padding: "1.5rem" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem", flexWrap: "wrap", gap: "0.5rem" }}>
@@ -359,11 +441,10 @@ export default function TenantApiKeyView() {
                 Clés d&apos;Accès de l&apos;Organisation
               </h3>
               <p style={{ margin: "0.25rem 0 0", fontSize: "0.85rem", color: "#64748b" }}>
-                Gérez les tokens d&apos;API utilisés par vos scrapers de sites, pipelines CI/CD ou outils ERP.
+                Gérez les tokens d&apos;API utilisés par vos scrapers, pipelines CI/CD ou outils ERP.
               </p>
             </div>
 
-            {/* Formulaire ajout clé rapide */}
             <form onSubmit={handleGenerateKey} style={{ display: "flex", gap: "0.5rem" }}>
               <input
                 type="text"
@@ -388,9 +469,9 @@ export default function TenantApiKeyView() {
               <thead>
                 <tr style={{ borderBottom: "2px solid #e2e8f0", color: "#64748b" }}>
                   <th style={{ padding: "0.6rem 0.5rem" }}>Nom</th>
-                  <th style={{ padding: "0.6rem 0.5rem" }}>Préfixe Clé</th>
+                  <th style={{ padding: "0.6rem 0.5rem" }}>Préfixe</th>
                   <th style={{ padding: "0.6rem 0.5rem" }}>Scopes</th>
-                  <th style={{ padding: "0.6rem 0.5rem" }}>Date de création</th>
+                  <th style={{ padding: "0.6rem 0.5rem" }}>Date</th>
                   <th style={{ padding: "0.6rem 0.5rem" }}>Dernier usage</th>
                   <th style={{ padding: "0.6rem 0.5rem" }}>Statut</th>
                   <th style={{ padding: "0.6rem 0.5rem", textAlign: "right" }}>Action</th>
@@ -400,7 +481,7 @@ export default function TenantApiKeyView() {
                 {apiKeys.length === 0 ? (
                   <tr>
                     <td colSpan={7} style={{ padding: "1.5rem", textAlign: "center", color: "#94a3b8" }}>
-                      Aucune clé listée pour cette organisation.
+                      Aucune clé enregistrée pour cette organisation.
                     </td>
                   </tr>
                 ) : (
@@ -451,6 +532,167 @@ export default function TenantApiKeyView() {
           </div>
         </div>
       )}
+
+      {/* Section 4 : Webhooks d'alerte réglementaire */}
+      {currentKey && (
+        <div className="panel" style={{ background: "var(--card-bg, #ffffff)", border: "1px solid #e2e8f0", borderRadius: 12, padding: "1.5rem" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem", flexWrap: "wrap", gap: "0.5rem" }}>
+            <div>
+              <h3 style={{ fontSize: "1.1rem", fontWeight: 700, margin: 0, color: "#1e293b" }}>
+                Webhooks Sécurisés (Signature HMAC-SHA256)
+              </h3>
+              <p style={{ margin: "0.25rem 0 0", fontSize: "0.85rem", color: "#64748b" }}>
+                Recevez automatiquement les alertes dès qu&apos;une infraction critique ou une allégation trompeuse est identifiée.
+              </p>
+            </div>
+          </div>
+
+          <form onSubmit={handleRegisterWebhook} style={{ display: "flex", gap: "0.5rem", marginBottom: "1.25rem", flexWrap: "wrap" }}>
+            <input
+              type="url"
+              required
+              placeholder="https://hooks.entreprise.com/vericlaim/alerts"
+              value={webhookUrl}
+              onChange={(e) => setWebhookUrl(e.target.value)}
+              style={{ flex: 2, minWidth: 260, padding: "0.5rem", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: "0.85rem" }}
+            />
+            <input
+              type="text"
+              placeholder="Description (ex: Slack Juridique)"
+              value={webhookDesc}
+              onChange={(e) => setWebhookDesc(e.target.value)}
+              style={{ flex: 1, minWidth: 160, padding: "0.5rem", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: "0.85rem" }}
+            />
+            <button
+              type="submit"
+              disabled={isLoading || !webhookUrl.trim()}
+              style={{ padding: "0.5rem 1rem", background: "#0f172a", color: "#ffffff", border: 0, borderRadius: 6, fontWeight: 600, fontSize: "0.85rem", cursor: "pointer" }}
+            >
+              + Enregistrer Webhook
+            </button>
+          </form>
+
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem", textAlign: "left" }}>
+              <thead>
+                <tr style={{ borderBottom: "2px solid #e2e8f0", color: "#64748b" }}>
+                  <th style={{ padding: "0.5rem" }}>Description</th>
+                  <th style={{ padding: "0.5rem" }}>URL de destination</th>
+                  <th style={{ padding: "0.5rem" }}>Secret HMAC</th>
+                  <th style={{ padding: "0.5rem" }}>Événements</th>
+                  <th style={{ padding: "0.5rem", textAlign: "right" }}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {webhooks.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} style={{ padding: "1.2rem", textAlign: "center", color: "#94a3b8" }}>
+                      Aucun webhook actif pour cette organisation.
+                    </td>
+                  </tr>
+                ) : (
+                  webhooks.map((wh) => (
+                    <tr key={wh.id} style={{ borderBottom: "1px solid #f1f5f9" }}>
+                      <td style={{ padding: "0.6rem 0.5rem", fontWeight: 600 }}>{wh.description}</td>
+                      <td style={{ padding: "0.6rem 0.5rem", fontFamily: "monospace", color: "#2563eb" }}>{wh.url}</td>
+                      <td style={{ padding: "0.6rem 0.5rem" }}>
+                        <code style={{ background: "#f8fafc", padding: "0.15rem 0.35rem", borderRadius: 4 }}>
+                          {wh.secret.slice(0, 10)}••••
+                        </code>
+                      </td>
+                      <td style={{ padding: "0.6rem 0.5rem" }}>
+                        {wh.events.map((ev) => (
+                          <span key={ev} style={{ fontSize: "0.7rem", background: "#f1f5f9", padding: "0.1rem 0.3rem", borderRadius: 4, marginRight: 4 }}>
+                            {ev}
+                          </span>
+                        ))}
+                      </td>
+                      <td style={{ padding: "0.6rem 0.5rem", textAlign: "right" }}>
+                        <button
+                          type="button"
+                          onClick={() => handleTestWebhook(wh.id)}
+                          style={{ marginRight: 6, padding: "0.25rem 0.5rem", background: "#e0f2fe", color: "#0369a1", border: 0, borderRadius: 4, cursor: "pointer" }}
+                        >
+                          Tester
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteWebhook(wh.id)}
+                          style={{ padding: "0.25rem 0.5rem", background: "#fee2e2", color: "#991b1b", border: 0, borderRadius: 4, cursor: "pointer" }}
+                        >
+                          Supprimer
+                        </button>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Section 5 : Générateur d'Avenant Fournisseur Anti-Greenwashing */}
+      <div className="panel" style={{ background: "var(--card-bg, #ffffff)", border: "1px solid #e2e8f0", borderRadius: 12, padding: "1.5rem" }}>
+        <h3 style={{ fontSize: "1.1rem", fontWeight: 700, margin: "0 0 0.5rem", color: "#1e293b" }}>
+          Générateur d&apos;Avenant Juridique Fournisseur Anti-Greenwashing
+        </h3>
+        <p style={{ fontSize: "0.85rem", color: "#64748b", margin: "0 0 1rem" }}>
+          Produisez instantanément un avenant contractuel exécutoire complet avec garantie d&apos;indemnisation intégrale
+          (couverture des amendes DGCCRF jusqu&apos;à 1 500 000 € ou 10% du CA) et pénalités de 15 000 € par référence non conforme.
+        </p>
+
+        <form onSubmit={handleGenerateAddendum} style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", marginBottom: "1rem" }}>
+          <input
+            type="text"
+            required
+            placeholder="Nom du Fournisseur"
+            value={addendumSupplier}
+            onChange={(e) => setAddendumSupplier(e.target.value)}
+            style={{ flex: 1, minWidth: 220, padding: "0.55rem", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: "0.88rem" }}
+          />
+          <input
+            type="text"
+            placeholder="Nom du Client / Acheteur"
+            value={addendumBuyer}
+            onChange={(e) => setAddendumBuyer(e.target.value)}
+            style={{ flex: 1, minWidth: 220, padding: "0.55rem", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: "0.88rem" }}
+          />
+          <button
+            type="submit"
+            disabled={isLoading || !addendumSupplier.trim()}
+            style={{ padding: "0.55rem 1.25rem", background: "#4338ca", color: "#ffffff", border: 0, borderRadius: 6, fontWeight: 600, fontSize: "0.88rem", cursor: "pointer" }}
+          >
+            ⚖ Générer l&apos;Avenant Juridique
+          </button>
+        </form>
+
+        {generatedAddendum && (
+          <div style={{ marginTop: "1rem", background: "#f8fafc", border: "1px solid #cbd5e1", borderRadius: 8, padding: "1rem" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.75rem" }}>
+              <div>
+                <strong>Avenant Réf : {generatedAddendum.addendum_id}</strong>
+                <span style={{ marginLeft: "1rem", fontSize: "0.8rem", color: "#64748b" }}>
+                  {generatedAddendum.articles_count} articles contractuels structurés
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  navigator.clipboard.writeText(generatedAddendum.markdown_content);
+                  alert("Texte contractuel complet copié dans le presse-papier !");
+                }}
+                style={{ padding: "0.35rem 0.75rem", background: "#0f172a", color: "#ffffff", border: 0, borderRadius: 6, fontSize: "0.82rem", cursor: "pointer" }}
+              >
+                Copier le Contrat (Markdown)
+              </button>
+            </div>
+            <pre style={{ maxHeight: 300, overflowY: "auto", fontSize: "0.78rem", whiteSpace: "pre-wrap", background: "#ffffff", padding: "1rem", borderRadius: 6, border: "1px solid #e2e8f0" }}>
+              {generatedAddendum.markdown_content}
+            </pre>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
