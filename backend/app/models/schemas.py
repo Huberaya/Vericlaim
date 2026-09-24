@@ -49,6 +49,12 @@ class EvaluationRequest(BaseModel):
     evidence: EvidenceDossier = Field(default_factory=EvidenceDossier)
 
 
+class UrlAuditRequest(BaseModel):
+    url: str = Field(min_length=8, max_length=2048)
+    context: AuditContext | None = None
+    evidence: EvidenceDossier | None = None
+
+
 class EvaluationResponse(BaseModel):
     extracted_source_text: str = ""
     overall_compliance: OverallCompliance

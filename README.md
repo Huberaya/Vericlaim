@@ -33,7 +33,7 @@ pytest -v
 
 Le fichier `backend/pytest.ini` résout automatiquement le `PYTHONPATH`. Si PostgreSQL n'est pas démarré, le backend bascule automatiquement sur SQLite local (`vericlaim.db`) sans configuration requise.
 
-Résultat validé dans le workspace : **25 tests passants (100% de réussite)**.
+Résultat validé dans le workspace : **27 tests passants (100% de réussite)**.
 
 ### Export PDF de l'attestation d'audit
 
@@ -44,6 +44,17 @@ L'API fournit l'endpoint `POST /api/v1/engine/export/pdf` qui génère une attes
 - **Registre d'audit** (`GET /api/v1/engine/audits`, `GET /api/v1/engine/audits/{id}`) : consultation chronologique de tous les audits enregistrés avec métadonnées fournisseur, SKU, score et scellement SHA-256.
 - **Comparateur Achats** (`POST /api/v1/engine/suppliers/compare`) : benchmark déterministe côte-à-côte de plusieurs offres fournisseurs (classement par niveau de risque, identification des infractions, comparaison des plafonds d'amende et génération de clauses contractuelles d'achat).
 - **Interface dédiée** : accessible via l'onglet « Comparateur Fournisseurs » dans la barre latérale, avec démo intégrée (3 fournisseurs packaging) et sélection multi-audits depuis l'historique.
+
+### Connecteur Live aux Registres d'Écolabels Officiels
+
+- **Vérification automatique** (`GET /api/v1/engine/ecolabels/verify`) : interroge en direct les registres officiels ISO 14024 Type I (EU Ecolabel ECAT, AFNOR NF Environnement, Blauer Engel, Nordic Swan) pour valider l'authenticité d'une licence.
+- **Safe Harbor probatoire** : une licence vérifiée active automatiquement l'exonération Safe Harbor prévue par la directive européenne 2024/825 pour les allégations environnementales génériques.
+
+### Mode "Audit de Site E-Commerce / Scraper d'URL"
+
+- **Extraction et audit en direct** (`POST /api/v1/engine/evaluate/url`) : scanne une fiche produit e-commerce (Shopify, WooCommerce, Amazon, etc.) via son URL publique, filtre le bruit technique (scripts, navigation, footer) et structure le titre produit, la balise meta-description et le corps d'argumentaire pour analyse immédiate par le moteur déterministe.
+- **Bouclier de sécurité anti-SSRF** : validation stricte bloquant systématiquement les adresses de bouclage (`localhost`, `127.0.0.1`), les réseaux privés (RFC 1918), les métadonnées d'instances cloud (`169.254.169.254`), et les protocoles non autorisés.
+- **Boutiques de démonstration intégrées** : fiches produits tests prêtes à l'emploi (`https://demo-shop.vericlaim.ai/...`) fonctionnant à 100% hors-ligne pour les démonstrations et la validation continue.
 
 ### Développer l'interface
 

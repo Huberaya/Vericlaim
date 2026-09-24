@@ -121,6 +121,25 @@ export async function auditFile(
   return readResult(response);
 }
 
+export async function auditUrl(
+  url: string,
+  hasLcaAttached = false,
+  options: AuditOptions = {},
+): Promise<RegulatoryAuditResponse> {
+  const payload = {
+    url,
+    context: buildContext({ ...options.context, surface: options.context?.surface ?? "online_store" }),
+    evidence: buildDossier(hasLcaAttached, options),
+  };
+  const response = await fetch(requestUrl("/api/v1/engine/evaluate/url"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+    cache: "no-store",
+  });
+  return readResult(response);
+}
+
 export async function downloadAuditPdf(report: RegulatoryAuditResponse): Promise<void> {
   const response = await fetch(requestUrl("/api/v1/engine/export/pdf"), {
     method: "POST",

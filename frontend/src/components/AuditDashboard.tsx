@@ -7,7 +7,7 @@ import LegalScoreCard from "@/components/LegalScoreCard";
 import ProofUploadModal from "@/components/ProofUploadModal";
 import RemediationModal from "@/components/RemediationModal";
 import SupplierBenchmarkView from "@/components/SupplierBenchmarkView";
-import { auditFile, auditText, downloadAuditPdf } from "@/lib/api";
+import { auditFile, auditText, auditUrl, downloadAuditPdf } from "@/lib/api";
 import type {
   AuditContext,
   ClaimEvaluation,
@@ -141,6 +141,25 @@ export default function AuditDashboard() {
     }
   }
 
+  async function runUrlAudit(url: string, hasLcaAttached: boolean) {
+    setReport(null);
+    setSourceText("");
+    setError(null);
+    setIsLoading(true);
+    try {
+      const result = await auditUrl(url, hasLcaAttached, {
+        context: buildContext(),
+        evidence: { items: evidence, legal_person: true },
+      });
+      setSourceText(result.extracted_source_text);
+      setReport(result);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "La page e-commerce n’a pas pu être scannée ou analysée.");
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
   function clearReportForContextChange(next: () => void) {
     next();
     setReport(null);
@@ -263,6 +282,7 @@ export default function AuditDashboard() {
                   error={error}
                   onAuditText={runTextAudit}
                   onAuditFile={runFileAudit}
+                  onAuditUrl={runUrlAudit}
                   onOpenEvidence={() => setProofModalOpen(true)}
                 />
                 <LegalScoreCard

@@ -22,7 +22,7 @@ from app.engine.risk_assessment import (
     derive_risk_score,
 )
 from app.engine.rule_book import RULES, RULEBOOK_VERSION
-from app.models.legal_types import AuditTrail, EvidenceDossier, LegalAssessment, OverallCompliance, Verdict
+from app.models.legal_types import AuditTrail, EvidenceDossier, LegalAssessment, OverallCompliance, Surface, Verdict
 from app.models.schemas import (
     AuditContext,
     AuditHistoryItem,
@@ -35,6 +35,7 @@ from app.models.schemas import (
     SupplierCompareResponse,
     SupplierComparisonItem,
     SupplierSubmission,
+    UrlAuditRequest,
 )
 
 
@@ -245,6 +246,43 @@ async def evaluate_claims(request: Request, db: Session = Depends(get_db)) -> Ev
         evidence=body.evidence,
         db=db,
         extraction_method=extraction_method,
+        document_sha256=document_sha256,
+    )
+
+
+@router.post("/evaluate/url", response_model=EvaluationResponse)
+async def evaluate_ecommerce_url(
+    body: UrlAuditRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> EvaluationResponse:
+    """Scrape et audite en direct une page produit e-commerce (Shopify, WooCommerce, Amazon...)."""
+    from app.engine.url_scraper import EcommerceUrlScraper, UrlScraperError
+
+    scraper = EcommerceUrlScraper()
+    try:
+        extracted_text, document_sha256, metadata = await scraper.scrape(body.url)
+    except UrlScraperError as exc:
+        raise HTTPException(status_code=422, detail=f"Erreur d'extraction URL : {exc}") from exc
+
+    context = body.context or AuditContext()
+    # Par défaut, le scraping de page e-commerce audite sur le support boutique en ligne
+    if not body.context or body.context.surface == Surface.PACKAGING:
+        context.surface = Surface.ONLINE_STORE
+
+    if not context.product_identifier and metadata.get("page_title"):
+        context.product_identifier = metadata["page_title"][:64]
+
+    evaluator = request.app.state.evaluator
+    evidence = body.evidence or EvidenceDossier(items=[])
+
+    return _execute_evaluation(
+        evaluator=evaluator,
+        source_text=extracted_text,
+        context=context,
+        evidence=evidence,
+        db=db,
+        extraction_method="URL_SCRAPER",
         document_sha256=document_sha256,
     )
 

@@ -621,3 +621,62 @@ def test_live_ecolabel_grants_safe_harbor_in_end_to_end_audit():
         assert eu_finding["safe_harbor_applicable"] is True
         assert eu_finding["safe_harbor_reason"] is not None
         assert "ECAT" in eu_finding["safe_harbor_reason"]
+
+
+def test_url_scraper_extracts_html_and_blocks_ssrf():
+    import pytest
+    from app.engine.url_scraper import EcommerceUrlScraper, UrlScraperError, is_safe_url
+
+    # SSRF verification
+    assert is_safe_url("http://localhost:8000") is False
+    assert is_safe_url("http://127.0.0.1/admin") is False
+    assert is_safe_url("http://169.254.169.254/latest/meta-data") is False
+    assert is_safe_url("https://boutique-bio.fr/produit-123") is True
+
+    # Offline mock e-commerce scraping
+    scraper = EcommerceUrlScraper()
+    import asyncio
+    text, doc_hash, meta = asyncio.run(scraper.scrape("https://demo-shop.vericlaim.ai/produit/gourde-verte"))
+    assert "Gourde Isotherme" in text
+    assert "biodégradable" in text
+    assert len(doc_hash) == 64
+    assert meta["page_title"]
+
+    # Blocked URL error
+    with pytest.raises(UrlScraperError):
+        asyncio.run(scraper.scrape("http://127.0.0.1:9000/internal"))
+
+
+def test_api_evaluate_url_endpoint():
+    from app.main import app
+
+    with TestClient(app) as client:
+        # 1. Successful audit of e-commerce product URL
+        resp = client.post(
+            "/api/v1/engine/evaluate/url",
+            json={
+                "url": "https://demo-shop.vericlaim.ai/produit/gourde-verte",
+                "context": {
+                    "as_of_date": "2026-09-24",
+                    "jurisdiction": "FR",
+                    "consumer_facing": True,
+                },
+                "evidence": {"items": [], "legal_person": True},
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["audit_trail"]["extraction_method"] == "URL_SCRAPER"
+        assert data["overall_compliance"] == "NON_COMPLIANT"
+        assert data["violations_count"] >= 1
+        assert "Gourde Isotherme" in data["extracted_source_text"]
+
+        # 2. Rejection of forbidden / loopback URL
+        bad_resp = client.post(
+            "/api/v1/engine/evaluate/url",
+            json={
+                "url": "http://127.0.0.1:8000/etc/passwd",
+            },
+        )
+        assert bad_resp.status_code == 422
+        assert "pas autorisée" in bad_resp.json()["detail"]

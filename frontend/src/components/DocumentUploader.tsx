@@ -8,10 +8,11 @@ type Props = {
   error?: string | null;
   onAuditText: (text: string, hasLcaAttached: boolean, additionalEvidence?: EvidenceItem[]) => void | Promise<void>;
   onAuditFile: (file: File, hasLcaAttached: boolean) => void | Promise<void>;
+  onAuditUrl?: (url: string, hasLcaAttached: boolean) => void | Promise<void>;
   onOpenEvidence: () => void;
 };
 
-type Tab = "document" | "text";
+type Tab = "document" | "text" | "url";
 
 const MAX_FILE_BYTES = 15 * 1024 * 1024;
 
@@ -45,11 +46,13 @@ export default function DocumentUploader({
   error,
   onAuditText,
   onAuditFile,
+  onAuditUrl,
   onOpenEvidence,
 }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [tab, setTab] = useState<Tab>("document");
   const [text, setText] = useState("");
+  const [url, setUrl] = useState("");
   const [hasLcaAttached, setHasLcaAttached] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [fileName, setFileName] = useState<string | null>(null);
@@ -64,6 +67,23 @@ export default function DocumentUploader({
     setLocalError(null);
     setText(value);
     void onAuditText(normalized, lcaDeclared, evidence);
+  }
+
+  function submitUrl(targetUrl = url) {
+    const trimmed = targetUrl.trim();
+    if (!trimmed) {
+      setLocalError("Saisissez l'URL d'une page produit e-commerce à auditer.");
+      return;
+    }
+    if (!/^https?:\/\//i.test(trimmed)) {
+      setLocalError("L'URL doit commencer par http:// ou https://.");
+      return;
+    }
+    setLocalError(null);
+    setUrl(trimmed);
+    if (onAuditUrl) {
+      void onAuditUrl(trimmed, hasLcaAttached);
+    }
   }
 
   function submitFile(file: File) {
@@ -141,6 +161,15 @@ export default function DocumentUploader({
         >
           <span aria-hidden="true">≡</span> Coller un texte
         </button>
+        <button
+          type="button"
+          className={`uploader-tab${tab === "url" ? " is-active" : ""}`}
+          role="tab"
+          aria-selected={tab === "url"}
+          onClick={() => setTab("url")}
+        >
+          <span aria-hidden="true">🌐</span> Scraper une URL
+        </button>
       </div>
 
       {tab === "document" ? (
@@ -168,7 +197,7 @@ export default function DocumentUploader({
             Parcourir les fichiers
           </button>
         </div>
-      ) : (
+      ) : tab === "text" ? (
         <div className="paste-panel">
           <label htmlFor="source-text" className="field-caption">Texte marketing à auditer</label>
           <textarea
@@ -184,6 +213,84 @@ export default function DocumentUploader({
           <button type="button" className="button button-primary analyze-button" onClick={() => submitText()} disabled={isLoading}>
             {isLoading ? <span className="button-spinner" aria-hidden="true" /> : <span aria-hidden="true">✦</span>}
             {isLoading ? "Analyse en cours…" : "Lancer l’audit"}
+          </button>
+        </div>
+      ) : (
+        <div className="paste-panel url-scraper-panel">
+          <label htmlFor="source-url" className="field-caption">URL de la fiche produit e-commerce (Shopify, WooCommerce, Amazon...)</label>
+          <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.75rem" }}>
+            <input
+              id="source-url"
+              type="url"
+              className="source-textarea"
+              style={{ minHeight: "44px", height: "44px", padding: "0.5rem 0.75rem" }}
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              placeholder="https://votre-boutique.com/produits/shampoing-naturel"
+              disabled={isLoading}
+            />
+          </div>
+
+          <div style={{ marginBottom: "1rem" }}>
+            <span style={{ fontSize: "0.75rem", color: "var(--color-text-muted, #64748b)", display: "block", marginBottom: "0.35rem" }}>
+              Boutiques de démonstration à tester sans réseau :
+            </span>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem" }}>
+              <button
+                type="button"
+                className="button button-quiet"
+                style={{ fontSize: "0.75rem", padding: "0.25rem 0.5rem" }}
+                onClick={() => {
+                  const demo = "https://demo-shop.vericlaim.ai/produit/gourde-verte";
+                  setUrl(demo);
+                  submitUrl(demo);
+                }}
+                disabled={isLoading}
+              >
+                Gourde Nomade (Greenwashing)
+              </button>
+              <button
+                type="button"
+                className="button button-quiet"
+                style={{ fontSize: "0.75rem", padding: "0.25rem 0.5rem" }}
+                onClick={() => {
+                  const demo = "https://demo-shop.vericlaim.ai/produit/shampoing-solide-naturel";
+                  setUrl(demo);
+                  submitUrl(demo);
+                }}
+                disabled={isLoading}
+              >
+                Shampoing Solide (Sans chimie)
+              </button>
+              <button
+                type="button"
+                className="button button-quiet"
+                style={{ fontSize: "0.75rem", padding: "0.25rem 0.5rem" }}
+                onClick={() => {
+                  const demo = "https://demo-shop.vericlaim.ai/produit/lessive-ecologique-concentree";
+                  setUrl(demo);
+                  submitUrl(demo);
+                }}
+                disabled={isLoading}
+              >
+                Lessive Éco (Oxo-dégradable)
+              </button>
+            </div>
+          </div>
+
+          <div className="textarea-footer">
+            <span>Bouclier anti-SSRF actif</span>
+            <span>Extraction sélective : Titre, H1, Meta, Description produit</span>
+          </div>
+
+          <button
+            type="button"
+            className="button button-primary analyze-button"
+            onClick={() => submitUrl()}
+            disabled={isLoading}
+          >
+            {isLoading ? <span className="button-spinner" aria-hidden="true" /> : <span aria-hidden="true">✦</span>}
+            {isLoading ? "Extraction et audit en cours…" : "Scanner & Auditer la page"}
           </button>
         </div>
       )}
