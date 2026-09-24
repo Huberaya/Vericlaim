@@ -4,10 +4,14 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 
 from app.api.v1.endpoints import router as engine_router
 from app.core.config import settings
 from app.core.database import create_tables
+from app.core.limiter import limiter
 from app.engine.ecolabel_connector import LiveEcolabelConnector
 from app.engine.inference_evaluator import InferenceEvaluator
 from app.engine.proof_validator import JsonCertificateRegistry, ProofValidator
@@ -28,6 +32,10 @@ app = FastAPI(
     ),
     lifespan=lifespan,
 )
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
+
 app.state.settings = settings
 ecolabel_connector = LiveEcolabelConnector()
 if settings.verified_certificates_json and settings.verified_certificates_json != "{}":

@@ -738,3 +738,27 @@ def test_catalog_batch_evaluation_and_csv_import_export():
         exported_text = export_resp.content.decode("utf-8-sig")
         assert "SKU-CSV-1" in exported_text
         assert "Statut Conformité" in exported_text
+
+
+def test_rate_limiting_and_anti_abuse_protection():
+    from app.main import app
+    from app.core.limiter import get_client_identifier
+    from fastapi import Request
+
+    # 1. Identifier logic supports API keys and IP fallback
+    req_with_key = Request(scope={"type": "http", "headers": [(b"x-api-key", b"test-client-123")]})
+    assert get_client_identifier(req_with_key) == "apikey:test-client-123"
+
+    # 2. Rate limit rejection returning 429 Too Many Requests
+    with TestClient(app) as client:
+        headers = {"X-API-Key": "burst-test-unique-ip-1"}
+        r1 = client.get("/api/v1/engine/rate-limit-check", headers=headers)
+        assert r1.status_code == 200, r1.text
+        assert r1.json()["ratelimited"] is True
+
+        r2 = client.get("/api/v1/engine/rate-limit-check", headers=headers)
+        assert r2.status_code == 200
+
+        r3 = client.get("/api/v1/engine/rate-limit-check", headers=headers)
+        assert r3.status_code == 429
+        assert "rate limit exceeded" in r3.text.lower() or "too many requests" in r3.text.lower()

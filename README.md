@@ -33,7 +33,7 @@ pytest -v
 
 Le fichier `backend/pytest.ini` résout automatiquement le `PYTHONPATH`. Si PostgreSQL n'est pas démarré, le backend bascule automatiquement sur SQLite local (`vericlaim.db`) sans configuration requise.
 
-Résultat validé dans le workspace : **28 tests passants (100% de réussite)**.
+Résultat validé dans le workspace : **29 tests passants (100% de réussite)**.
 
 ### Export PDF de l'attestation d'audit
 
@@ -69,6 +69,17 @@ Les schémas de la base de données PostgreSQL / SQLite sont versionnés avec Al
 cd backend
 alembic upgrade head
 ```
+
+### Rate-Limiting & Protection Anti-Abus (SlowAPI)
+
+Le moteur intègre un limiteur de débit centralisé (`SlowAPI`) protégeant les endpoints sensibles contre les dénis de service et l'aspiration abusive :
+- **Identification hybride** : reconnaissance par clé API (`X-API-Key`) ou par adresse IP cliente.
+- **Plafonds ciblés** :
+  - Extraction & OCR (`POST /evaluate`) : 60 req/min.
+  - Scraper d'URL e-commerce (`POST /evaluate/url`) : 20 req/min.
+  - Audit batch de catalogue (`POST /evaluate/batch`, `POST /evaluate/batch-csv`) : 20 à 30 req/min.
+  - Génération d'attestation PDF (`POST /export/pdf`) : 30 req/min.
+- **Gestion des dépassements** : renvoi automatique d'une réponse `HTTP 429 Too Many Requests`.
 
 ### Intégration Continue (CI/CD GitHub Actions)
 

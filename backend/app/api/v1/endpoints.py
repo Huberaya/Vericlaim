@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
 from app.core.database import AuditRecord, append_audit_record, canonical_json, get_db, sha256_json
+from app.core.limiter import limiter
 from app.engine.document_extractor import DocumentExtractionError, DocumentTextExtractor
 from app.engine.pdf_exporter import generate_audit_pdf
 from app.engine.risk_assessment import (
@@ -238,7 +239,15 @@ def _execute_evaluation(
     return final_response
 
 
+@router.get("/rate-limit-check")
+@limiter.limit("2/minute")
+async def rate_limit_check(request: Request) -> dict[str, Any]:
+    """Route de test pour la vérification du rate limiting et de la protection anti-abus."""
+    return {"status": "ok", "ratelimited": True}
+
+
 @router.post("/evaluate", response_model=EvaluationResponse)
+@limiter.limit("60/minute")
 async def evaluate_claims(request: Request, db: Session = Depends(get_db)) -> EvaluationResponse:
     body, extraction_method, document_sha256 = await _read_request(request)
     if not body.source_text.strip():
@@ -257,6 +266,7 @@ async def evaluate_claims(request: Request, db: Session = Depends(get_db)) -> Ev
 
 
 @router.post("/evaluate/url", response_model=EvaluationResponse)
+@limiter.limit("20/minute")
 async def evaluate_ecommerce_url(
     body: UrlAuditRequest,
     request: Request,
@@ -382,6 +392,7 @@ def _process_catalog_batch(
 
 
 @router.post("/evaluate/batch", response_model=CatalogBatchResponse)
+@limiter.limit("30/minute")
 def evaluate_catalog_batch(
     body: CatalogBatchRequest,
     request: Request,
@@ -400,9 +411,10 @@ def evaluate_catalog_batch(
 
 
 @router.post("/evaluate/batch-csv", response_model=CatalogBatchResponse)
+@limiter.limit("20/minute")
 async def evaluate_catalog_batch_csv(
+    request: Request,
     file: UploadFile = File(...),
-    request: Request = None,
     db: Session = Depends(get_db),
 ) -> CatalogBatchResponse:
     """Audite un catalogue de produits importé via un fichier CSV."""
@@ -718,7 +730,8 @@ def list_rules() -> RuleBookResponse:
 
 
 @router.post("/export/pdf")
-def export_audit_pdf(evaluation: EvaluationResponse) -> Response:
+@limiter.limit("30/minute")
+def export_audit_pdf(evaluation: EvaluationResponse, request: Request) -> Response:
     """Génère l'attestation officielle d'audit juridique en PDF."""
     try:
         pdf_bytes = generate_audit_pdf(evaluation)
