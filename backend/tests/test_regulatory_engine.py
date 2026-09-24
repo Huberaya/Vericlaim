@@ -1256,5 +1256,104 @@ def test_compliance_watcher_target_and_execution_lifecycle(monkeypatch):
         assert del_resp.json()["status"] == "deleted"
 
 
+def test_decision_maker_excel_export_multi_sheet_ooxml():
+    """Vérifie la génération du reporting Excel décisionnel multi-feuilles (.xlsx)."""
+    import io
+    import openpyxl
+    from app.main import app
+
+    with TestClient(app) as client:
+        # 1. Effectuer une évaluation pour obtenir une EvaluationResponse
+        eval_resp = client.post(
+            "/api/v1/engine/evaluate",
+            json={
+                "source_text": "Ce produit innovant est 100% biodégradable et neutre en carbone sans chimie.",
+                "context": {
+                    "jurisdiction": "FR",
+                    "surface": "packaging",
+                    "supplier_name": "EcoFabric Corp",
+                    "product_identifier": "SKU-EXCEL-001",
+                },
+            },
+        )
+        assert eval_resp.status_code == 200
+        eval_data = eval_resp.json()
+
+        # 2. Exporter le reporting Excel officiel
+        excel_resp = client.post("/api/v1/engine/export/excel", json=eval_data)
+        assert excel_resp.status_code == 200
+        assert "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" in excel_resp.headers["content-type"]
+        assert "attachment; filename=" in excel_resp.headers["content-disposition"]
+        assert excel_resp.content.startswith(b"PK")
+
+        # 3. Charger le classeur OOXML avec openpyxl et vérifier les 4 feuilles
+        wb = openpyxl.load_workbook(io.BytesIO(excel_resp.content))
+        expected_sheets = ["Synthèse Direction", "Registre Allégations", "Plan Remédiation", "Matrice Traçabilité"]
+        assert wb.sheetnames == expected_sheets
+
+        # 4. Vérifier la feuille 1 (Synthèse Direction)
+        ws_summary = wb["Synthèse Direction"]
+        assert "VERICLAIM AI" in str(ws_summary["A1"].value)
+        assert eval_data["audit_trail"]["audit_id"] in str(ws_summary["B5"].value)
+        # Vérifier la présence de scores et statuts
+        assert ws_summary["C14"].value is not None  # Score de risque
+        assert ws_summary["A16"].value == "EXPOSITION JURIDIQUE & CHIFSTAGE DU RISQUE FINANCIER"
+
+        # 5. Vérifier la feuille 2 (Registre Allégations)
+        ws_claims = wb["Registre Allégations"]
+        assert ws_claims["A2"].value == "Réf / ID"
+        assert ws_claims["B2"].value == "Allégation Détectée (Extrait)"
+        # Vérifier qu'au moins une ligne d'allégation est renseignée
+        assert ws_claims["A3"].value is not None
+        assert "biodégradable" in str(ws_claims["B3"].value).lower() or "neutre" in str(ws_claims["B3"].value).lower()
+
+        # 6. Vérifier la feuille 3 (Plan Remédiation)
+        ws_remed = wb["Plan Remédiation"]
+        assert ws_remed["A2"].value == "Réf Allégation"
+        assert ws_remed["D2"].value == "Formulation de Remplacement Recommandée"
+        assert ws_remed["E2"].value == "Clause Contractuelle de Substitution (Avenant)"
+        assert ws_remed["D3"].value is not None
+
+        # 7. Vérifier la feuille 4 (Matrice Traçabilité)
+        ws_ledger = wb["Matrice Traçabilité"]
+        assert ws_ledger["A4"].value == "Paramètre Cryptographique"
+        assert ws_ledger["D5"].value == "CERTIFIÉ"
+        # Vérifier présence des hashes
+        ledger_content = [str(cell.value) for row in ws_ledger.iter_rows() for cell in row]
+        assert eval_data["audit_trail"]["record_hash"] in ledger_content
+
+        # 8. Vérifier l'export Excel d'un audit de catalogue (batch)
+        batch_resp = client.post(
+            "/api/v1/engine/evaluate/batch",
+            json={
+                "items": [
+                    {
+                        "sku": "SKU-EXCEL-01",
+                        "title": "Gobelet jetable",
+                        "text": "100% biodégradable",
+                        "surface": "packaging",
+                    },
+                    {
+                        "sku": "SKU-EXCEL-02",
+                        "title": "Bouteille réutilisable",
+                        "text": "Flacon plastique recyclable",
+                        "surface": "packaging",
+                    },
+                ]
+            },
+        )
+        assert batch_resp.status_code == 200
+        batch_data = batch_resp.json()
+
+        batch_excel_resp = client.post("/api/v1/engine/export/batch-excel", json=batch_data)
+        assert batch_excel_resp.status_code == 200
+        assert "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" in batch_excel_resp.headers["content-type"]
+        wb_batch = openpyxl.load_workbook(io.BytesIO(batch_excel_resp.content))
+        assert wb_batch.sheetnames == ["Synthèse Catalogue", "Détail par SKU"]
+        ws_batch_skus = wb_batch["Détail par SKU"]
+        assert ws_batch_skus["A2"].value == "SKU-EXCEL-01"
+
+
+
 
 

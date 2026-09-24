@@ -134,6 +134,16 @@ L'architecture supporte le cloisonnement étanche multi-organisations via l'en-t
 - **Déclenchement automatique de Webhooks** : émission d'un événement `watcher.regression_detected` dès qu'un drift ou une régression est constaté sur un site marchand.
 - **Interface UI dédiée (`ComplianceWatcherView`)** : onglet « Compliance Watcher (E-Com) » pour piloter les cibles, déclencher des scans unitaires ou des scans batch de la flotte, et inspecter l'historique complet des deltas.
 
+### Générateur de Reporting Excel Décisionnel (.xlsx Multi-feuilles via `openpyxl`)
+
+- **Export d'Audit Réglementaire Unitaire (`POST /api/v1/engine/export/excel`)** : compilation automatique d'un classeur OOXML standardisé à destination des comités de direction, directions juridiques et achats comprenant 4 feuilles expertes :
+  1. **Synthèse Direction** : KPIs de conformité, score de risque chiffré, exposition financière DGCCRF (plafonds personnes morales et physiques), risques pénaux, et avis d'action stratégique (suspension / validation).
+  2. **Registre Allégations** : tableau opposable recensant chaque allégation textuelle détectée, sa typologie, la règle RuleBook mobilisée, le fondement légal exact (articles du Code de l'environnement, Code de la consommation, directive EmpCo), le verdict et les preuves requises.
+  3. **Plan Remédiation & Clauses** : matrice opérationnelle indiquant les textes à proscrire, l'explication acheteur, les formulations de remplacement autorisées et la clause contractuelle de substitution à intégrer aux avenants fournisseurs.
+  4. **Matrice Traçabilité (Ledger)** : sceau cryptographique officiel, identifiant d'audit unique (UUID), empreintes SHA-256 du texte source et du rapport, et hachage de bloc certifié.
+- **Export Consolidé de Catalogue Batch (`POST /api/v1/engine/export/batch-excel`)** : export des audits multi-SKUs (500+ produits) avec synthèse macro, taux de conformité global, volume d'amendes théorique et tableau détaillé par SKU.
+- **Boutons de téléchargement direct** : intégration dans `LegalScoreCard.tsx` et dans `CatalogBatchView.tsx`.
+
 ### Intégration Continue (CI/CD GitHub Actions)
 
 Le workflow `.github/workflows/ci.yml` valide automatiquement sur chaque push et pull request :

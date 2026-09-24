@@ -35,9 +35,17 @@ type Props = {
   report: RegulatoryAuditResponse | null;
   onDownloadPdf?: () => void;
   isDownloadingPdf?: boolean;
+  onDownloadExcel?: () => void;
+  isDownloadingExcel?: boolean;
 };
 
-export default function LegalScoreCard({ report, onDownloadPdf, isDownloadingPdf }: Props) {
+export default function LegalScoreCard({
+  report,
+  onDownloadPdf,
+  isDownloadingPdf,
+  onDownloadExcel,
+  isDownloadingExcel,
+}: Props) {
   if (!report) {
     return (
       <section className="surface-card score-card score-card-empty" aria-labelledby="score-title">
@@ -143,18 +151,46 @@ export default function LegalScoreCard({ report, onDownloadPdf, isDownloadingPdf
         <div className="fine-disclaimer">Plafond conditionnel : ni amende automatique, ni montant cumulatif. Vérifiez le fondement affiché.</div>
       </div>
 
-      {onDownloadPdf && (
-        <div style={{ marginTop: "14px", marginBottom: "6px" }}>
-          <button
-            type="button"
-            className="button button-primary"
-            style={{ width: "100%", padding: "10px 14px", fontSize: "11px", display: "flex", gap: "8px", alignItems: "center", justifyContent: "center" }}
-            onClick={onDownloadPdf}
-            disabled={isDownloadingPdf}
-          >
-            <span>{isDownloadingPdf ? "⏳" : "📥"}</span>
-            <span>{isDownloadingPdf ? "Génération de l'attestation..." : "Télécharger l'Attestation d'Audit (PDF)"}</span>
-          </button>
+      {(onDownloadPdf || onDownloadExcel) && (
+        <div style={{ marginTop: "14px", marginBottom: "6px", display: "flex", flexDirection: "column", gap: "8px" }}>
+          {onDownloadPdf && (
+            <button
+              type="button"
+              className="button button-primary"
+              style={{ width: "100%", padding: "9px 12px", fontSize: "11px", display: "flex", gap: "8px", alignItems: "center", justifyContent: "center" }}
+              onClick={onDownloadPdf}
+              disabled={isDownloadingPdf}
+            >
+              <span>{isDownloadingPdf ? "⏳" : "📥"}</span>
+              <span>{isDownloadingPdf ? "Génération de l'attestation..." : "Télécharger l'Attestation d'Audit (PDF)"}</span>
+            </button>
+          )}
+          {onDownloadExcel && (
+            <button
+              type="button"
+              className="button"
+              style={{
+                width: "100%",
+                padding: "9px 12px",
+                fontSize: "11px",
+                display: "flex",
+                gap: "8px",
+                alignItems: "center",
+                justifyContent: "center",
+                background: "#047857",
+                color: "#ffffff",
+                border: 0,
+                borderRadius: "6px",
+                fontWeight: 600,
+                cursor: isDownloadingExcel ? "not-allowed" : "pointer",
+              }}
+              onClick={onDownloadExcel}
+              disabled={isDownloadingExcel}
+            >
+              <span>{isDownloadingExcel ? "⏳" : "📊"}</span>
+              <span>{isDownloadingExcel ? "Génération du classeur..." : "Exporter le Reporting Décisionnel (.XLSX)"}</span>
+            </button>
+          )}
         </div>
       )}
 

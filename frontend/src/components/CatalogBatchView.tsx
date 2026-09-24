@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { auditCatalogBatch, auditCatalogCsv, exportCatalogBatchCsv } from "@/lib/api";
+import { auditCatalogBatch, auditCatalogCsv, exportCatalogBatchCsv, downloadCatalogBatchExcel } from "@/lib/api";
 import type { CatalogBatchResponse, CatalogItemInput, OverallCompliance, RegulatoryAuditResponse } from "@/lib/types";
 
 type Props = {
@@ -340,7 +340,30 @@ export default function CatalogBatchView({ onLoadAuditText }: Props) {
                   className="button button-secondary"
                   onClick={() => exportCatalogBatchCsv(report)}
                 >
-                  📥 Exporter CSV (Excel)
+                  📥 CSV
+                </button>
+                <button
+                  type="button"
+                  className="button"
+                  style={{
+                    padding: "6px 12px",
+                    fontSize: "0.82rem",
+                    background: "#047857",
+                    color: "#fff",
+                    border: 0,
+                    borderRadius: "6px",
+                    fontWeight: 600,
+                    cursor: "pointer",
+                  }}
+                  onClick={async () => {
+                    try {
+                      await downloadCatalogBatchExcel(report);
+                    } catch (err) {
+                      alert(err instanceof Error ? err.message : "Erreur téléchargement Excel");
+                    }
+                  }}
+                >
+                  📊 Excel (.xlsx)
                 </button>
               </div>
             </div>

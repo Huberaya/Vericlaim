@@ -202,6 +202,58 @@ export async function downloadAuditPdf(report: RegulatoryAuditResponse): Promise
   window.URL.revokeObjectURL(url);
 }
 
+export async function downloadAuditExcel(report: RegulatoryAuditResponse): Promise<void> {
+  const response = await fetch(requestUrl("/api/v1/engine/export/excel"), {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(report),
+  });
+  if (!response.ok) {
+    let msg = `Erreur lors de la génération du fichier Excel (${response.status})`;
+    try {
+      const err = await response.json();
+      if (err?.detail) msg = typeof err.detail === "string" ? err.detail : JSON.stringify(err.detail);
+    } catch {}
+    throw new Error(msg);
+  }
+  const blob = await response.blob();
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  const shortId = (report.audit_trail?.audit_id || "rapport").replace(/-/g, "").slice(0, 8).toUpperCase();
+  a.download = `VeriClaim_Audit_Decisionnel_${shortId}.xlsx`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.URL.revokeObjectURL(url);
+}
+
+export async function downloadCatalogBatchExcel(batch: CatalogBatchResponse): Promise<void> {
+  const response = await fetch(requestUrl("/api/v1/engine/export/batch-excel"), {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(batch),
+  });
+  if (!response.ok) {
+    let msg = `Erreur lors de l'export Excel du catalogue (${response.status})`;
+    try {
+      const err = await response.json();
+      if (err?.detail) msg = typeof err.detail === "string" ? err.detail : JSON.stringify(err.detail);
+    } catch {}
+    throw new Error(msg);
+  }
+  const blob = await response.blob();
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  const dateStr = new Date().toISOString().slice(0, 10);
+  a.download = `VeriClaim_Catalogue_Audit_${dateStr}.xlsx`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.URL.revokeObjectURL(url);
+}
+
 export async function fetchAuditHistory(params?: {
   limit?: number;
   offset?: number;

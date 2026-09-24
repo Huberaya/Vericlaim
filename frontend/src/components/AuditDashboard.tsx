@@ -11,7 +11,7 @@ import SupplierBenchmarkView from "@/components/SupplierBenchmarkView";
 import TenantApiKeyView from "@/components/TenantApiKeyView";
 import AuditVerificationView from "@/components/AuditVerificationView";
 import ComplianceWatcherView from "@/components/ComplianceWatcherView";
-import { auditFile, auditText, auditUrl, downloadAuditPdf } from "@/lib/api";
+import { auditFile, auditText, auditUrl, downloadAuditPdf, downloadAuditExcel } from "@/lib/api";
 import type {
   AuditContext,
   ClaimEvaluation,
@@ -80,6 +80,7 @@ export default function AuditDashboard() {
   const [proofModalOpen, setProofModalOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
+  const [isDownloadingExcel, setIsDownloadingExcel] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const handleDownloadPdf = async () => {
@@ -91,6 +92,18 @@ export default function AuditDashboard() {
       alert(err instanceof Error ? err.message : "Erreur lors du téléchargement du PDF");
     } finally {
       setIsDownloadingPdf(false);
+    }
+  };
+
+  const handleDownloadExcel = async () => {
+    if (!report) return;
+    setIsDownloadingExcel(true);
+    try {
+      await downloadAuditExcel(report);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Erreur lors du téléchargement du fichier Excel");
+    } finally {
+      setIsDownloadingExcel(false);
     }
   };
 
@@ -349,6 +362,8 @@ export default function AuditDashboard() {
                   report={report}
                   onDownloadPdf={handleDownloadPdf}
                   isDownloadingPdf={isDownloadingPdf}
+                  onDownloadExcel={handleDownloadExcel}
+                  isDownloadingExcel={isDownloadingExcel}
                 />
               </div>
 
@@ -360,17 +375,38 @@ export default function AuditDashboard() {
                 <p className="card-description">Cliquez sur une zone surlignée ou une règle pour ouvrir l’explication et la clause de remédiation.</p>
               </div>
               {report && (
-                <div style={{ display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap" }}>
+                <div style={{ display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" }}>
                   <span className={badgeClass(report.overall_compliance)}>{OVERALL_LABEL[report.overall_compliance]}</span>
                   <button
                     type="button"
                     className="button button-primary"
-                    style={{ padding: "6px 14px", fontSize: "11px", display: "inline-flex", gap: "6px", alignItems: "center" }}
+                    style={{ padding: "6px 12px", fontSize: "11px", display: "inline-flex", gap: "6px", alignItems: "center" }}
                     onClick={handleDownloadPdf}
                     disabled={isDownloadingPdf}
                   >
                     <span>{isDownloadingPdf ? "⏳" : "📥"}</span>
-                    <span>{isDownloadingPdf ? "PDF..." : "Attestation PDF"}</span>
+                    <span>{isDownloadingPdf ? "PDF..." : "PDF"}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="button"
+                    style={{
+                      padding: "6px 12px",
+                      fontSize: "11px",
+                      display: "inline-flex",
+                      gap: "6px",
+                      alignItems: "center",
+                      background: "#047857",
+                      color: "#fff",
+                      border: 0,
+                      borderRadius: 6,
+                      fontWeight: 600,
+                    }}
+                    onClick={handleDownloadExcel}
+                    disabled={isDownloadingExcel}
+                  >
+                    <span>{isDownloadingExcel ? "⏳" : "📊"}</span>
+                    <span>{isDownloadingExcel ? "Excel..." : "Excel (.xlsx)"}</span>
                   </button>
                 </div>
               )}

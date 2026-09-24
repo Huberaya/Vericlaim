@@ -39,6 +39,7 @@ from app.core.webhooks import dispatch_webhook_event, generate_webhook_secret
 from app.engine.audit_verifier import verify_audit_record
 from app.engine.compliance_watcher import execute_watcher_check, run_due_watcher_checks
 from app.engine.document_extractor import DocumentExtractionError, DocumentTextExtractor
+from app.engine.excel_exporter import generate_audit_excel, generate_catalog_batch_excel
 from app.engine.legal_remediation import generate_supplier_contract_addendum
 from app.engine.pdf_exporter import generate_audit_pdf
 from app.engine.risk_assessment import (
@@ -862,6 +863,48 @@ def export_audit_pdf(evaluation: EvaluationResponse, request: Request) -> Respon
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Access-Control-Expose-Headers": "Content-Disposition",
+        },
+    )
+
+
+@router.post("/export/excel")
+@limiter.limit("30/minute")
+def export_audit_excel(evaluation: EvaluationResponse, request: Request) -> Response:
+    """Génère le reporting Excel décisionnel multi-feuilles (.xlsx) officiel."""
+    try:
+        excel_bytes = generate_audit_excel(evaluation)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Erreur de génération Excel : {exc}") from exc
+
+    short_id = evaluation.audit_trail.audit_id.replace("-", "")[:8].upper()
+    filename = f"VeriClaim_Audit_Decisionnel_{short_id}.xlsx"
+    return Response(
+        content=excel_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Access-Control-Expose-Headers": "Content-Disposition",
+        },
+    )
+
+
+@router.post("/export/batch-excel")
+@limiter.limit("20/minute")
+def export_batch_excel(batch: CatalogBatchResponse, request: Request) -> Response:
+    """Génère le reporting Excel consolidé d'un audit de catalogue (.xlsx)."""
+    try:
+        excel_bytes = generate_catalog_batch_excel(batch)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Erreur de génération Excel catalogue : {exc}") from exc
+
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    filename = f"VeriClaim_Catalogue_Audit_{timestamp}.xlsx"
+    return Response(
+        content=excel_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={
             "Content-Disposition": f'attachment; filename="{filename}"',
             "Access-Control-Expose-Headers": "Content-Disposition",
