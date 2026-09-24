@@ -28,10 +28,12 @@ cd backend
 python -m venv .venv
 . .venv/bin/activate
 pip install -r requirements.txt
-pytest -q
+pytest -v
 ```
 
-Résultat validé dans le workspace : **13 tests passants**.
+Le fichier `backend/pytest.ini` résout automatiquement le `PYTHONPATH`. Si PostgreSQL n'est pas démarré, le backend bascule automatiquement sur SQLite local (`vericlaim.db`) sans configuration requise.
+
+Résultat validé dans le workspace : **13 tests passants (100% de réussite)**.
 
 ### Développer l'interface
 
@@ -39,6 +41,8 @@ Résultat validé dans le workspace : **13 tests passants**.
 cd frontend
 npm ci
 npm run dev
+# Ou build de production :
+npm run build && npm run start
 ```
 
 `NEXT_PUBLIC_API_URL` cible l'API locale (`http://localhost:8000` par défaut). Le client utilise une URL relative sur les previews non locales, relayée par la réécriture Next vers `BACKEND_URL`; cela évite qu'un navigateur distant appelle son propre `localhost`. Vérification de types et build : `npm run typecheck && npm run build`.

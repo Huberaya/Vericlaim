@@ -41,7 +41,20 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expi
 
 
 def create_tables() -> None:
-    Base.metadata.create_all(bind=engine)
+    global engine, SessionLocal
+    try:
+        Base.metadata.create_all(bind=engine)
+    except Exception as exc:
+        # Fallback automatique sur SQLite si le serveur PostgreSQL n'est pas démarré (démos locales)
+        if not settings.database_url.startswith("sqlite"):
+            import logging
+            logging.warning("Connexion à %s impossible (%s). Bascule automatique sur SQLite local.", settings.database_url, exc)
+            fallback_url = "sqlite:///./vericlaim.db"
+            engine = create_engine(fallback_url, connect_args={"check_same_thread": False})
+            SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
+            Base.metadata.create_all(bind=engine)
+        else:
+            raise
 
 
 def get_db():
