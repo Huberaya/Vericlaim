@@ -6,13 +6,14 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
 from app.core.database import append_audit_record, canonical_json, get_db, sha256_json
 from app.engine.document_extractor import DocumentExtractionError, DocumentTextExtractor
+from app.engine.pdf_exporter import generate_audit_pdf
 from app.engine.risk_assessment import (
     build_exposure_matrix,
     derive_overall_status,
@@ -212,3 +213,23 @@ def list_rules() -> RuleBookResponse:
         for rule in RULES
     ]
     return RuleBookResponse(rulebook_version=RULEBOOK_VERSION, rules=summaries)
+
+
+@router.post("/export/pdf")
+def export_audit_pdf(evaluation: EvaluationResponse) -> Response:
+    """Génère l'attestation officielle d'audit juridique en PDF."""
+    try:
+        pdf_bytes = generate_audit_pdf(evaluation)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Erreur de génération PDF : {exc}") from exc
+
+    short_id = evaluation.audit_trail.audit_id.replace("-", "")[:8].upper()
+    filename = f"VeriClaim_Attestation_{short_id}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Access-Control-Expose-Headers": "Content-Disposition",
+        },
+    )

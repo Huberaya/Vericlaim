@@ -117,3 +117,31 @@ export async function auditFile(
   });
   return readResult(response);
 }
+
+export async function downloadAuditPdf(report: RegulatoryAuditResponse): Promise<void> {
+  const response = await fetch(requestUrl("/api/v1/engine/export/pdf"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(report),
+  });
+  if (!response.ok) {
+    let msg = `Erreur lors de la génération du PDF (${response.status})`;
+    try {
+      const err = await response.json();
+      if (err?.detail) msg = typeof err.detail === "string" ? err.detail : JSON.stringify(err.detail);
+    } catch {
+      // Ignorer
+    }
+    throw new Error(msg);
+  }
+  const blob = await response.blob();
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  const shortId = (report.audit_trail?.audit_id || "rapport").replace(/-/g, "").slice(0, 8).toUpperCase();
+  a.download = `VeriClaim_Attestation_${shortId}.pdf`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.URL.revokeObjectURL(url);
+}

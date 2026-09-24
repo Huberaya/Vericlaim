@@ -6,7 +6,7 @@ import DocumentUploader from "@/components/DocumentUploader";
 import LegalScoreCard from "@/components/LegalScoreCard";
 import ProofUploadModal from "@/components/ProofUploadModal";
 import RemediationModal from "@/components/RemediationModal";
-import { auditFile, auditText } from "@/lib/api";
+import { auditFile, auditText, downloadAuditPdf } from "@/lib/api";
 import type {
   AuditContext,
   ClaimEvaluation,
@@ -72,7 +72,20 @@ export default function AuditDashboard() {
   const [selectedAssessments, setSelectedAssessments] = useState<ClaimEvaluation[]>([]);
   const [proofModalOpen, setProofModalOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const handleDownloadPdf = async () => {
+    if (!report) return;
+    setIsDownloadingPdf(true);
+    try {
+      await downloadAuditPdf(report);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Erreur lors du téléchargement du PDF");
+    } finally {
+      setIsDownloadingPdf(false);
+    }
+  };
 
   function buildContext(): AuditContext {
     return {
@@ -202,7 +215,11 @@ export default function AuditDashboard() {
               onAuditFile={runFileAudit}
               onOpenEvidence={() => setProofModalOpen(true)}
             />
-            <LegalScoreCard report={report} />
+            <LegalScoreCard
+              report={report}
+              onDownloadPdf={handleDownloadPdf}
+              isDownloadingPdf={isDownloadingPdf}
+            />
           </div>
 
           <section className="surface-card results-card" aria-labelledby="results-title">
@@ -212,7 +229,21 @@ export default function AuditDashboard() {
                 <h2 className="card-title" id="results-title">Allégations détectées & décisions du Rule Book</h2>
                 <p className="card-description">Cliquez sur une zone surlignée ou une règle pour ouvrir l’explication et la clause de remédiation.</p>
               </div>
-              {report && <span className={badgeClass(report.overall_compliance)}>{OVERALL_LABEL[report.overall_compliance]}</span>}
+              {report && (
+                <div style={{ display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap" }}>
+                  <span className={badgeClass(report.overall_compliance)}>{OVERALL_LABEL[report.overall_compliance]}</span>
+                  <button
+                    type="button"
+                    className="button button-primary"
+                    style={{ padding: "6px 14px", fontSize: "11px", display: "inline-flex", gap: "6px", alignItems: "center" }}
+                    onClick={handleDownloadPdf}
+                    disabled={isDownloadingPdf}
+                  >
+                    <span>{isDownloadingPdf ? "⏳" : "📥"}</span>
+                    <span>{isDownloadingPdf ? "PDF..." : "Attestation PDF"}</span>
+                  </button>
+                </div>
+              )}
             </div>
 
             {!report ? (

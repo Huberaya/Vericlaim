@@ -303,3 +303,32 @@ def test_api_extracts_uploaded_text_and_returns_it_for_highlighting():
     assert data["extracted_source_text"] == "Bouteille biodégradable."
     assert data["audit_trail"]["extraction_method"] == "TEXT_FILE"
     assert data["audit_trail"]["document_sha256"]
+
+
+def test_export_audit_pdf_returns_valid_pdf():
+    from app.main import app
+
+    with TestClient(app) as client:
+        eval_resp = client.post(
+            "/api/v1/engine/evaluate",
+            json={
+                "source_text": "Packaging 100% biodégradable et neutre en carbone.",
+                "context": {
+                    "as_of_date": "2026-09-24",
+                    "jurisdiction": "FR",
+                    "surface": "packaging",
+                    "consumer_facing": True,
+                    "product_identifier": "SKU-999",
+                },
+                "evidence": {"items": [], "legal_person": True},
+            },
+        )
+        assert eval_resp.status_code == 200, eval_resp.text
+        report_data = eval_resp.json()
+
+        pdf_resp = client.post("/api/v1/engine/export/pdf", json=report_data)
+        assert pdf_resp.status_code == 200, pdf_resp.text
+        assert pdf_resp.headers["content-type"] == "application/pdf"
+        assert "attachment" in pdf_resp.headers["content-disposition"]
+        assert pdf_resp.content.startswith(b"%PDF")
+        assert len(pdf_resp.content) > 3000

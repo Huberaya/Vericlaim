@@ -33,7 +33,11 @@ pytest -v
 
 Le fichier `backend/pytest.ini` résout automatiquement le `PYTHONPATH`. Si PostgreSQL n'est pas démarré, le backend bascule automatiquement sur SQLite local (`vericlaim.db`) sans configuration requise.
 
-Résultat validé dans le workspace : **13 tests passants (100% de réussite)**.
+Résultat validé dans le workspace : **14 tests passants (100% de réussite)**.
+
+### Export PDF de l'attestation d'audit
+
+L'API fournit l'endpoint `POST /api/v1/engine/export/pdf` qui génère une attestation d'audit juridique officielle au format PDF (mise en page juridique professionnelle, horodatage, empreinte SHA-256, plafond d'exposition et remédiations contractuelles). L'attestation est téléchargeable en un clic depuis l'interface utilisateur.
 
 ### Développer l'interface
 

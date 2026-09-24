@@ -33,9 +33,11 @@ function riskTone(score: number): "low" | "medium" | "high" {
 
 type Props = {
   report: RegulatoryAuditResponse | null;
+  onDownloadPdf?: () => void;
+  isDownloadingPdf?: boolean;
 };
 
-export default function LegalScoreCard({ report }: Props) {
+export default function LegalScoreCard({ report, onDownloadPdf, isDownloadingPdf }: Props) {
   if (!report) {
     return (
       <section className="surface-card score-card score-card-empty" aria-labelledby="score-title">
@@ -140,6 +142,21 @@ export default function LegalScoreCard({ report }: Props) {
         )}
         <div className="fine-disclaimer">Plafond conditionnel : ni amende automatique, ni montant cumulatif. Vérifiez le fondement affiché.</div>
       </div>
+
+      {onDownloadPdf && (
+        <div style={{ marginTop: "14px", marginBottom: "6px" }}>
+          <button
+            type="button"
+            className="button button-primary"
+            style={{ width: "100%", padding: "10px 14px", fontSize: "11px", display: "flex", gap: "8px", alignItems: "center", justifyContent: "center" }}
+            onClick={onDownloadPdf}
+            disabled={isDownloadingPdf}
+          >
+            <span>{isDownloadingPdf ? "⏳" : "📥"}</span>
+            <span>{isDownloadingPdf ? "Génération de l'attestation..." : "Télécharger l'Attestation d'Audit (PDF)"}</span>
+          </button>
+        </div>
+      )}
 
       <div className="score-footer">
         <span>{report.detected_claims_count} allégation(s) détectée(s)</span>
