@@ -16,6 +16,10 @@ class ClaimType(str, Enum):
     COMPARATIVE = "comparative"
     QUANTIFIED_CLIMATE = "quantified_climate"
     RECYCLABLE = "recyclable"
+    COMPOSTABLE = "compostable"
+    CHEMICAL_FREE = "chemical_free"
+    ZERO_POLLUTION = "zero_pollution"
+    RECYCLED_CONTENT = "recycled_content"
 
 
 class Severity(str, Enum):

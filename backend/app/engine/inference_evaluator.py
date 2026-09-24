@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import date
 
 from app.engine.fact_extractor import FactExtractor
@@ -248,6 +249,75 @@ class InferenceEvaluator:
                 verdict = Verdict.REVIEW_REQUIRED
                 caveat = "Le moteur ne vérifie pas le contenu du rapport ni l'exactitude du chiffre; revue humaine obligatoire avant publication."
                 add_step("QUANTIFIED_PROOF_CHECK", check.detail, "Les métadonnées sont présentes, mais la preuve de fond reste à auditer.")
+
+        elif rule.rule_id == "RULE_CONSUMER_CHEMICAL_FREE":
+            verdict = Verdict.STRICTLY_PROHIBITED
+            is_violation = True
+            add_step(
+                "DECEPTIVE_CHEMICAL_FREE",
+                "L'allégation générale « sans produit chimique » ou « zéro chimie » méconnaît la composition physico-chimique de toute matière.",
+                "Pratique commerciale trompeuse caractérisée au sens des articles L. 121-2 et L. 132-2 du Code de la consommation (doctrine constante DGCCRF).",
+            )
+
+        elif rule.rule_id == "RULE_AGEC_COMPOSTABLE":
+            home_compost_mentioned = bool(re.search(r"\b(?:domicile|home|NF\s?T\s?51[- ]800)\b", claim.claim_text, re.IGNORECASE))
+            if not home_compost_mentioned:
+                verdict = Verdict.CONDITIONAL_REJECT
+                missing = [
+                    "mention obligatoire de la modalité ('en compostage domestique' ou 'en installation industrielle')",
+                    "justificatif de compostabilité domestique selon la norme NF T 51-800 pour emballage plastique",
+                ]
+                add_step(
+                    "COMPOSTABLE_SPECIFICATION_CHECK",
+                    "La mention « compostable » apparaît isolée sans précision de la modalité de compostage.",
+                    "L'article R. 541-230 interdit l'emploi du terme 'compostable' sans préciser s'il s'agit de compostage domestique ou industriel.",
+                )
+            else:
+                verdict = Verdict.REVIEW_REQUIRED
+                caveat = "La mention précise le compostage domestique. Vérifier l'attestation de conformité à la norme NF T 51-800 et la conformité des encres et colles."
+                add_step(
+                    "COMPOSTABLE_SPECIFICATION_CHECK",
+                    "Précision de compostage domestique détectée dans le texte.",
+                    "Revue requise du certificat de laboratoire accrédité (NF T 51-800 / EN 13432).",
+                )
+
+        elif rule.rule_id == "RULE_CONSUMER_ZERO_POLLUTION":
+            verdict = Verdict.CONDITIONAL_REJECT
+            missing = [
+                "ACV exhaustive multicritère démontrant l'absence totale d'impact sur tout le cycle de vie",
+                "justification scientifique de l'absence totale d'émissions ou de résidus lors de l'extraction, fabrication et usage",
+            ]
+            caveat = (
+                "Une allégation d'impact environnemental nul (« zéro déchet », « non polluant ») pour un produit manufacturé "
+                "est présumée trompeuse au sens de l'article L. 121-2 du Code de la consommation et de la directive (UE) 2024/825."
+            )
+            add_step(
+                "ABSOLUTE_ENVIRONMENTAL_IMPACT_CHECK",
+                "Détection d'une allégation d'impact nul ou d'absence absolue de déchet/pollution (« zéro déchet », « non polluant »).",
+                "La charge de la preuve scientifique intégrale repose sur l'annonceur; publication à suspendre.",
+            )
+
+        elif rule.rule_id == "RULE_AGEC_RECYCLED_UNQUANTIFIED":
+            if claim.has_specific_qualifier or re.search(r"\b\d+(?:[.,]\d+)?\s?%\b", claim.claim_text):
+                verdict = Verdict.REVIEW_REQUIRED
+                caveat = "Un pourcentage d'incorporation est détecté. Vérifier la formulation exacte « comporte au moins [X] % de matières recyclées » (R. 541-227) et la chaîne de contrôle (GRS/EuCertPlast)."
+                add_step(
+                    "RECYCLED_PERCENTAGE_PRESENT",
+                    "Un chiffre ou pourcentage est associé à la mention de matière recyclée.",
+                    "Vérifier la conformité littérale à l'article R. 541-227 et la traçabilité matière.",
+                )
+            else:
+                verdict = Verdict.NON_COMPLIANT
+                is_violation = True
+                missing = [
+                    "indication du pourcentage minimal de matières recyclées effectivement incorporées",
+                    "formulation réglementaire obligatoire : « comporte au moins [X] % de matières recyclées »",
+                ]
+                add_step(
+                    "RECYCLED_PERCENTAGE_MISSING",
+                    "Allégation d'incorporation de matière recyclée sans indication du pourcentage chiffré.",
+                    "L'article R. 541-227 du Code de l'environnement rend obligatoire la mention du pourcentage minimal; les formules globales sans chiffre sont illicites.",
+                )
 
         else:
             verdict = Verdict.REVIEW_REQUIRED

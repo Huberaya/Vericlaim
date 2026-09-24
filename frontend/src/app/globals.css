@@ -144,7 +144,7 @@ a { color: inherit; }
 .demo-section { margin-top: 16px; padding: 13px 20px 16px; border-top: 1px solid #edf0ec; background: linear-gradient(180deg,#fff 0%,#fcfdfa 100%); }
 .demo-heading { display: flex; align-items: center; gap: 10px; color: #9aa49b; font: 8px ui-monospace, monospace; letter-spacing: .1em; }
 .demo-divider { height: 1px; flex: 1; background: #edf0ec; }
-.demo-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
+.demo-buttons { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 8px; margin-top: 10px; }
 .demo-button { display: flex; min-width: 0; align-items: center; gap: 8px; padding: 9px 9px; border: 1px solid #e8ece6; border-radius: 10px; background: white; color: #445348; text-align: left; transition: .15s; }
 .demo-button:hover { transform: translateY(-1px); box-shadow: 0 5px 13px rgba(28,50,35,.06); }
 .demo-button > span:nth-child(2) { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 4px; }

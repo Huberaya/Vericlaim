@@ -18,6 +18,9 @@ const MAX_FILE_BYTES = 15 * 1024 * 1024;
 const DEMO_CRITICAL =
   "Packaging 100% biodégradable et neutre en carbone grâce à la compensation de nos forêts.";
 
+const DEMO_DECEPTIVE_LEXICON =
+  "Nettoyant ménager zéro déchet, formule 100% sans produits chimiques, emballage en plastique recyclé et barquette compostable.";
+
 const DEMO_COMPLIANT =
   "Réduction de 28% des émissions CO2 (ACV ISO 14044, cabinet tiers 2023) - Certifié Ecolabel Européen (licence FR/012/345).";
 
@@ -96,9 +99,9 @@ export default function DocumentUploader({
     if (file) submitFile(file);
   }
 
-  function runDemo(kind: "critical" | "compliant") {
+  function runDemo(kind: "critical" | "compliant" | "deceptive") {
     const isCompliantDemo = kind === "compliant";
-    const demoText = isCompliantDemo ? DEMO_COMPLIANT : DEMO_CRITICAL;
+    const demoText = kind === "compliant" ? DEMO_COMPLIANT : kind === "deceptive" ? DEMO_DECEPTIVE_LEXICON : DEMO_CRITICAL;
     const lcaDeclared = isCompliantDemo;
     setTab("text");
     setText(demoText);
@@ -215,6 +218,11 @@ export default function DocumentUploader({
           <button type="button" className="demo-button demo-danger" onClick={() => runDemo("critical")} disabled={isLoading}>
             <span className="demo-icon" aria-hidden="true">!</span>
             <span><strong>Exemple Greenwashing critique</strong><small>Allégation AGEC + compensation carbone</small></span>
+            <span className="demo-arrow" aria-hidden="true">↗</span>
+          </button>
+          <button type="button" className="demo-button demo-danger" onClick={() => runDemo("deceptive")} disabled={isLoading}>
+            <span className="demo-icon" aria-hidden="true">⌕</span>
+            <span><strong>Allégations trompeuses</strong><small>Sans chimie · Zéro déchet · Plastique recyclé</small></span>
             <span className="demo-arrow" aria-hidden="true">↗</span>
           </button>
           <button type="button" className="demo-button demo-safe" onClick={() => runDemo("compliant")} disabled={isLoading}>

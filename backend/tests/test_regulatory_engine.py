@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
+from decimal import Decimal
 import json
 
 from fastapi.testclient import TestClient
@@ -9,6 +10,7 @@ from app.engine.fact_extractor import FactExtractor
 from app.engine.inference_evaluator import InferenceEvaluator
 from app.engine.proof_validator import ProofValidator, RegistryRecord
 from app.models.legal_types import (
+    ClaimType,
     EcolabelEvidence,
     EvidenceDossier,
     LcaEvidence,
@@ -332,3 +334,101 @@ def test_export_audit_pdf_returns_valid_pdf():
         assert "attachment" in pdf_resp.headers["content-disposition"]
         assert pdf_resp.content.startswith(b"%PDF")
         assert len(pdf_resp.content) > 3000
+
+
+def test_chemical_free_claim_is_strictly_prohibited_as_deceptive_practice():
+    engine = InferenceEvaluator()
+    claims, findings = engine.evaluate_text(
+        "Nettoyant ménager 100% sans produits chimiques.",
+        EvidenceDossier(items=[]),
+        AuditContext(jurisdiction="FR", surface=Surface.PACKAGING),
+    )
+    assert len(claims) == 1
+    assert claims[0].claim_type == ClaimType.CHEMICAL_FREE
+    chem_findings = [f for f in findings if f.rule_id == "RULE_CONSUMER_CHEMICAL_FREE"]
+    assert len(chem_findings) == 1
+    assert chem_findings[0].verdict == Verdict.STRICTLY_PROHIBITED
+    assert chem_findings[0].is_legal_violation is True
+    assert chem_findings[0].sanction is not None
+    assert chem_findings[0].sanction.max_legal_person_eur == Decimal("1500000")
+
+
+def test_oxodegradable_is_strictly_prohibited():
+    engine = InferenceEvaluator()
+    claims, findings = engine.evaluate_text(
+        "Emballage en plastique oxo-dégradable.",
+        EvidenceDossier(items=[]),
+        AuditContext(jurisdiction="FR", surface=Surface.PACKAGING),
+    )
+    assert len(claims) == 1
+    assert claims[0].claim_type == ClaimType.BIODEGRADABLE
+    agec_finding = [f for f in findings if f.rule_id == "RULE_AGEC_BIODEGRADABLE"][0]
+    assert agec_finding.verdict == Verdict.STRICTLY_PROHIBITED
+    assert agec_finding.is_legal_violation is True
+
+
+def test_unquantified_recycled_content_claim_is_violation_under_agec():
+    engine = InferenceEvaluator()
+    # Unquantified claim: "en plastique recyclé" -> NON_COMPLIANT under R. 541-227
+    _, unquantified_findings = engine.evaluate_text(
+        "Flacon fabriqué en plastique recyclé.",
+        EvidenceDossier(items=[]),
+        AuditContext(jurisdiction="FR", surface=Surface.PACKAGING),
+    )
+    recycled_finding = [f for f in unquantified_findings if f.rule_id == "RULE_AGEC_RECYCLED_UNQUANTIFIED"][0]
+    assert recycled_finding.verdict == Verdict.NON_COMPLIANT
+    assert recycled_finding.is_legal_violation is True
+
+    # Quantified claim: "comporte au moins 50% de plastique recyclé" -> REVIEW_REQUIRED
+    _, quantified_findings = engine.evaluate_text(
+        "Flacon comporte au moins 50% de plastique recyclé.",
+        EvidenceDossier(items=[]),
+        AuditContext(jurisdiction="FR", surface=Surface.PACKAGING),
+    )
+    quant_finding = [f for f in quantified_findings if f.rule_id == "RULE_AGEC_RECYCLED_UNQUANTIFIED"][0]
+    assert quant_finding.verdict == Verdict.REVIEW_REQUIRED
+
+
+def test_compostable_claim_requires_home_compost_specification():
+    engine = InferenceEvaluator()
+    # Isolated "compostable" without specification
+    _, isolated_findings = engine.evaluate_text(
+        "Barquette 100% compostable.",
+        EvidenceDossier(items=[]),
+        AuditContext(jurisdiction="FR", surface=Surface.PACKAGING),
+    )
+    compost_finding = [f for f in isolated_findings if f.rule_id == "RULE_AGEC_COMPOSTABLE"][0]
+    assert compost_finding.verdict == Verdict.CONDITIONAL_REJECT
+
+    # Specified "compostable à domicile"
+    _, home_findings = engine.evaluate_text(
+        "Barquette compostable à domicile certifiée.",
+        EvidenceDossier(items=[]),
+        AuditContext(jurisdiction="FR", surface=Surface.PACKAGING),
+    )
+    home_finding = [f for f in home_findings if f.rule_id == "RULE_AGEC_COMPOSTABLE"][0]
+    assert home_finding.verdict == Verdict.REVIEW_REQUIRED
+
+
+def test_zero_waste_zero_pollution_claim_is_conditional_reject():
+    engine = InferenceEvaluator()
+    claims, findings = engine.evaluate_text(
+        "Gamme textile zéro déchet et non-polluant.",
+        EvidenceDossier(items=[]),
+        AuditContext(jurisdiction="FR", surface=Surface.PACKAGING),
+    )
+    assert any(c.claim_type == ClaimType.ZERO_POLLUTION for c in claims)
+    zero_finding = [f for f in findings if f.rule_id == "RULE_CONSUMER_ZERO_POLLUTION"][0]
+    assert zero_finding.verdict == Verdict.CONDITIONAL_REJECT
+
+
+def test_extended_nature_friendly_and_carbon_synonyms():
+    engine = InferenceEvaluator()
+    claims, _ = engine.evaluate_text(
+        "Formule qui préserve la planète, favorable à la biodiversité, et 100% compensée.",
+        EvidenceDossier(items=[]),
+        AuditContext(jurisdiction="FR", surface=Surface.PACKAGING),
+    )
+    types = {c.claim_type for c in claims}
+    assert ClaimType.NATURE_FRIENDLY in types
+    assert ClaimType.CARBON_NEUTRALITY in types

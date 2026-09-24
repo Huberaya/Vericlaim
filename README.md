@@ -33,7 +33,7 @@ pytest -v
 
 Le fichier `backend/pytest.ini` résout automatiquement le `PYTHONPATH`. Si PostgreSQL n'est pas démarré, le backend bascule automatiquement sur SQLite local (`vericlaim.db`) sans configuration requise.
 
-Résultat validé dans le workspace : **14 tests passants (100% de réussite)**.
+Résultat validé dans le workspace : **20 tests passants (100% de réussite)**.
 
 ### Export PDF de l'attestation d'audit
 
@@ -101,8 +101,12 @@ Le score est un **indice de priorité de revue**, fondé sur des poids de sévé
 
 | Identifiant | Nature du contrôle |
 |---|---|
-| `RULE_AGEC_BIODEGRADABLE` | Interdiction sur produit/emballage, aucune preuve ne crée de dérogation. |
-| `RULE_AGEC_NATURE_FRIENDLY` | Interdiction des formules équivalentes à « respectueux de l'environnement » sur le support visé. |
+| `RULE_AGEC_BIODEGRADABLE` | Interdiction sur produit/emballage (y compris oxodégradable), aucune preuve ne crée de dérogation. |
+| `RULE_AGEC_NATURE_FRIENDLY` | Interdiction des formules équivalentes à « respectueux de l'environnement » (préserve la planète, ami de la nature...) sur le support visé. |
+| `RULE_AGEC_COMPOSTABLE` | Encadrement strict de la mention « compostable » : interdiction isolée, exigence de compostabilité domestique (NF T 51-800) pour emballages plastiques. |
+| `RULE_CONSUMER_CHEMICAL_FREE` | Interdiction absolue de « sans produits chimiques » / « zéro chimie » comme pratique commerciale trompeuse par nature (L. 121-2). |
+| `RULE_CONSUMER_ZERO_POLLUTION` | Garde-fou sur « zéro déchet », « zéro pollution » et « non polluant » : promesse globale présumée infondée sans ACV exhaustive. |
+| `RULE_AGEC_RECYCLED_UNQUANTIFIED` | Interdiction de « matière recyclée » / « en plastique recyclé » sans la formule légale exacte « comporte au moins [X] % de matières recyclées » (R. 541-227). |
 | `RULE_EU_GENERIC_CLAIM` | Allégations génériques, à date-gater depuis le 27 septembre 2026; Safe Harbor uniquement si la licence est corroborée par un registre serveur et couvre le produit et la claim. |
 | `RULE_EU_CARBON_NEUTRAL_COMPENSATION` | Interdiction date-gatée de la claim produit fondée sur une compensation hors chaîne de valeur; pas de Safe Harbor par crédits carbone. |
 | `RULE_FR_CARBON_NEUTRAL_DISCLOSURE` | Règle française actuelle de publicité de neutralité, article L. 229-68; bilan, trajectoire et transparence sont contrôlés séparément de la future règle UE. |

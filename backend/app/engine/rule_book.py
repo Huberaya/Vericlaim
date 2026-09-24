@@ -86,6 +86,21 @@ CARBON_FINE = SanctionProfile(
     ),
 )
 
+CONSUMER_DECEPTIVE_FINE = SanctionProfile(
+    mechanism="Sanctions administratives et pénales (pratique commerciale trompeuse)",
+    authority="DGCCRF / Juridictions judiciaires (Code de la consommation)",
+    legal_basis="Articles L. 121-2 et L. 132-2 du Code de la consommation",
+    max_natural_person_eur=300000,
+    max_legal_person_eur=1500000,
+    may_scale_to_advertising_spend=True,
+    amount_is_automatic=False,
+    notes=(
+        "Plafond légal encouru pour pratique commerciale trompeuse : 300 000 € (personne physique), "
+        "1 500 000 € (personne morale - quintuple en application de l'art. 131-38 CP). "
+        "L'amende peut être portée de manière proportionnée à 10 % du chiffre d'affaires moyen annuel ou 50 % des dépenses engagées."
+    ),
+)
+
 
 PRODUCT_OR_PACKAGING = frozenset({Surface.PRODUCT_LABEL, Surface.PACKAGING})
 CONSUMER_MARKETING = frozenset(
@@ -347,6 +362,109 @@ RULES: tuple[RegulatoryRule, ...] = (
         notes=(
             "L'absence d'ACV déclenche un rejet conditionnel de publication dans l'outil, mais ne suffit pas à conclure automatiquement à une infraction légale.",
             "Le moteur vérifie des métadonnées et ne valide pas la méthodologie, les jeux de données ni le contenu du rapport.",
+        ),
+    ),
+    RegulatoryRule(
+        rule_id="RULE_AGEC_COMPOSTABLE",
+        title="Mention « compostable » : encadrement strict et interdiction isolée",
+        legal_reference=(
+            "Articles L. 541-9-1 et R. 541-230 du Code de l'environnement "
+            "(produits ou emballages neufs destinés au consommateur)"
+        ),
+        source_urls=(
+            "https://www.legifrance.gouv.fr/codes/article_lc/LEGIARTI000041555718",
+            "https://www.legifrance.gouv.fr/codes/article_lc/LEGIARTI000049389990",
+        ),
+        claim_types=frozenset({ClaimType.COMPOSTABLE}),
+        legal_force=LegalForce.BINDING_FR,
+        severity=Severity.HIGH,
+        rule_kind=RuleKind.EVIDENCE_GATE,
+        scope="Emballage ou produit plastique neuf destiné au consommateur.",
+        required_evidence=(
+            "Preuve de compostabilité domestique selon la norme NF T 51-800 ou EN 13432.",
+            "Pour les emballages en plastique, l'aptitude au compostage domestique est obligatoire pour revendiquer 'compostable'.",
+            "Précision expresse de la modalité ('compostable en compostage domestique' ou 'compostable en installation industrielle').",
+        ),
+        surfaces=PRODUCT_OR_PACKAGING,
+        effective_from=date(2022, 1, 1),
+        sanction=AGEC_FINE,
+        priority=3,
+        notes=(
+            "L'emploi de la mention 'compostable' sans préciser 'en compostage domestique' ou 'en installation industrielle' est interdit.",
+            "Les emballages en plastique ne peuvent être qualifiés de compostables que s'ils sont compostables en compostage domestique.",
+        ),
+    ),
+    RegulatoryRule(
+        rule_id="RULE_CONSUMER_CHEMICAL_FREE",
+        title="Mention « sans produits chimiques » : allégation trompeuse par nature",
+        legal_reference="Articles L. 121-2 et L. 132-2 du Code de la consommation; Guide DGCCRF des allégations environnementales",
+        source_urls=(
+            "https://www.legifrance.gouv.fr/codes/article_lc/LEGIARTI000028748875/2026-09-20",
+            "https://www.economie.gouv.fr/dgccrf/guide-des-allegations-environnementales",
+        ),
+        claim_types=frozenset({ClaimType.CHEMICAL_FREE}),
+        legal_force=LegalForce.BINDING_FR,
+        severity=Severity.CRITICAL,
+        rule_kind=RuleKind.ABSOLUTE_PROHIBITION,
+        scope="Toute communication commerciale ou emballage destiné aux consommateurs.",
+        surfaces=CONSUMER_MARKETING,
+        effective_from=date(2020, 1, 1),
+        sanction=CONSUMER_DECEPTIVE_FINE,
+        priority=2,
+        notes=(
+            "Toute substance matérielle (naturelle ou de synthèse) est une composition chimique au sens scientifique.",
+            "L'allégation générale 'sans produit chimique' ou 'sans chimie' est jugée trompeuse par nature par la DGCCRF.",
+        ),
+    ),
+    RegulatoryRule(
+        rule_id="RULE_CONSUMER_ZERO_POLLUTION",
+        title="Allégation « zéro déchet / zéro pollution / non polluant » : promesse globale infondée",
+        legal_reference="Article L. 121-2 du Code de la consommation; Directive (UE) 2024/825 (annexe I, point 4b)",
+        source_urls=(
+            "https://www.legifrance.gouv.fr/codes/article_lc/LEGIARTI000028748875/2026-09-20",
+            "https://eur-lex.europa.eu/eli/dir/2024/825/oj/fra",
+        ),
+        claim_types=frozenset({ClaimType.ZERO_POLLUTION}),
+        legal_force=LegalForce.BINDING_FR,
+        severity=Severity.HIGH,
+        rule_kind=RuleKind.EVIDENCE_GATE,
+        scope="Communication commerciale ou étiquetage d'un produit manufacturé ou service.",
+        required_evidence=(
+            "Démonstration exhaustive sur l'ensemble du cycle de vie prouvant l'absence totale de déchet ou de pollution.",
+            "Justification technique des étapes de fabrication, transport, usage et fin de vie.",
+        ),
+        surfaces=CONSUMER_MARKETING,
+        effective_from=date(2021, 1, 1),
+        sanction=CONSUMER_DECEPTIVE_FINE,
+        priority=6,
+        notes=(
+            "Une allégation d'absence totale d'impact sur l'environnement pour un produit manufacturé est présumée trompeuse en l'absence de preuve scientifique absolue couvrant l'ensemble du cycle de vie.",
+        ),
+    ),
+    RegulatoryRule(
+        rule_id="RULE_AGEC_RECYCLED_UNQUANTIFIED",
+        title="Mention « matière recyclée » sans proportion chiffrée obligatoire",
+        legal_reference="Articles L. 541-9-1 et R. 541-227 du Code de l'environnement (loi AGEC)",
+        source_urls=(
+            "https://www.legifrance.gouv.fr/codes/article_lc/LEGIARTI000045728450/",
+            "https://www.legifrance.gouv.fr/codes/article_lc/LEGIARTI000043959912/2026-09-24",
+        ),
+        claim_types=frozenset({ClaimType.RECYCLED_CONTENT}),
+        legal_force=LegalForce.BINDING_FR,
+        severity=Severity.HIGH,
+        rule_kind=RuleKind.EVIDENCE_GATE,
+        scope="Produits ou emballages générateurs de déchets mis sur le marché français.",
+        required_evidence=(
+            "Formulation exacte normalisée obligatoire : « comporte au moins [X] % de matières recyclées ».",
+            "Traçabilité documentaire et certification de la chaîne de contrôle (ex. GRS, EuCertPlast, ISO 14021).",
+        ),
+        surfaces=PRODUCT_OR_PACKAGING,
+        effective_from=date(2022, 1, 1),
+        sanction=AGEC_FINE,
+        priority=8,
+        notes=(
+            "L'article R. 541-227 impose obligatoirement la mention de la proportion chiffrée minimale.",
+            "Les mentions générales comme 'fabriqué avec du plastique recyclé' sans pourcentage sont prohibées sur les emballages et produits visés.",
         ),
     ),
 )

@@ -13,7 +13,11 @@ export type ClaimType =
   | "carbon_neutrality"
   | "comparative"
   | "quantified_climate"
-  | "recyclable";
+  | "recyclable"
+  | "compostable"
+  | "chemical_free"
+  | "zero_pollution"
+  | "recycled_content";
 
 /** UI classification derived from the engine's formal verdict, not an API field. */
 export type ViolationSeverity = "CRITICAL" | "WARNING" | "INFO";

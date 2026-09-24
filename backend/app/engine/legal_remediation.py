@@ -56,6 +56,30 @@ TEMPLATES: dict[str, tuple[str, str, str, list[str]]] = {
         "Le Fournisseur ne communique aucun pourcentage de réduction des émissions sans transmettre les données sources, le rapport identifié, l'année de référence, le site, l'unité fonctionnelle, les frontières du système et les hypothèses de calcul. À titre de seuil interne, le Client exige une ACV documentée selon ISO 14044. Toute valeur reste suspendue jusqu'à revue humaine et approbation écrite du périmètre de la revendication.",
         ["Joindre le rapport source et identifier le fichier.", "Documenter l'indicateur, la période et le périmètre.", "Faire relire la conclusion et la formulation par un humain."],
     ),
+    "RULE_AGEC_COMPOSTABLE": (
+        "L'article R. 541-230 du Code de l'environnement encadre strictement la mention « compostable ». Pour les emballages en plastique neufs, l'aptitude au compostage domestique (norme NF T 51-800) est obligatoire et la modalité doit être expressément indiquée (« à domicile » ou « en installation industrielle »). L'emploi isolé du terme « compostable » est prohibé.",
+        "Remplacer l'allégation isolée par la mention certifiée : « compostable en compostage domestique » (si conformité NF T 51-800 établie) avec les consignes de tri adaptées, ou supprimer l'allégation.",
+        "Le Fournisseur garantit que toute mention « compostable » apposée sur le Produit ou son Emballage respecte strictement les articles L. 541-9-1 et R. 541-230 du Code de l'environnement, est étayée par une certification NF T 51-800 en cours de validité pour le compostage domestique, et comporte la mention expresse de la modalité autorisée.",
+        ["Vérifier la certification de compostabilité domestique NF T 51-800.", "Préciser expressément 'en compostage domestique' ou 'en installation industrielle'.", "Ne pas employer la mention 'compostable' de manière isolée sur un emballage plastique."],
+    ),
+    "RULE_CONSUMER_CHEMICAL_FREE": (
+        "Au sens physico-chimique et selon la doctrine constante de la DGCCRF, toute matière (naturelle, végétale, minérale ou de synthèse, y compris l'eau) est chimiquement constituée. L'allégation générale « sans produit chimique » ou « zéro chimie » est trompeuse par nature au sens de l'article L. 121-2 du Code de la consommation.",
+        "Supprimer « sans produits chimiques ». Mentionner uniquement l'absence ciblée d'une substance précise et controversée (ex: « sans solvants chlorés », « formulé sans parabènes ») sous réserve que cette substance ne fasse pas déjà l'objet d'une interdiction légale générale.",
+        "Le Fournisseur s'interdit formellement d'utiliser les allégations « sans produit chimique », « zéro chimie », « chemical-free » ou toute formule analogue sur les emballages, notices ou supports promotionnels. Seules des allégations négatives ciblées, vérifiables et non trompeuses sur une substance spécifique pourront être autorisées après accord écrit préalable du Client.",
+        ["Supprimer l'allégation globale 'sans produit chimique'.", "Remplacer par l'exclusion vérifiée et licite d'une substance chimique précise.", "S'assurer que la substance exclue n'est pas déjà obligatoirement bannie par la loi."],
+    ),
+    "RULE_CONSUMER_ZERO_POLLUTION": (
+        "Affirmer qu'un produit manufacturé est « zéro déchet », « non polluant » ou « sans aucun impact » sur l'environnement constitue une allégation globale trompeuse au sens du Code de la consommation et de la Directive (UE) 2024/825, chaque cycle de vie générant des impacts mesurables (matières premières, transport, fin de vie).",
+        "Remplacer les formules absolues (« zéro déchet », « non polluant ») par des données relatives mesurables et limitées à une étape précise (ex: « flacon rechargeable permettant d'éviter 80 % de déchet plastique à l'usage comparé au format standard »).",
+        "Le Fournisseur garantit qu'aucune allégation d'impact environnemental nul (« zéro déchet », « zéro pollution », « non polluant ») n'est apposée sans démonstration scientifique absolue et complète sur l'ensemble du cycle de vie du Produit, validée préalablement par un tiers indépendant.",
+        ["Bannir les promesses absolues 'zéro déchet' ou 'non polluant'.", "Décrire uniquement les actions réelles de réduction avec indicateur chiffré.", "Documenter l'impact résiduel sur l'ensemble du cycle de vie."],
+    ),
+    "RULE_AGEC_RECYCLED_UNQUANTIFIED": (
+        "L'article R. 541-227 du Code de l'environnement interdit les mentions vagues relatives à l'incorporation de matières recyclées. La formule réglementaire obligatoire est « comporte au moins [X] % de matières recyclées ».",
+        "Remplacer la mention vague par la formule réglementaire exacte : « Emballage comportant au moins [X] % de matières recyclées », adossée à une traçabilité matière certifiée.",
+        "Le Fournisseur garantit que toute référence à l'incorporation de matières recyclées sur le Produit ou l'Emballage utilise strictement la formule réglementaire « comporte au moins [X] % de matières recyclées » conformément à l'article R. 541-227 du Code de l'environnement, et remet au Client les certificats de chaîne de contrôle de matière recyclée correspondants.",
+        ["Calculer et certifier le pourcentage exact de matière recyclée incorporée.", "Employer la formule légale exacte 'comporte au moins [X] % de matières recyclées'.", "Fournir les certificats de chaîne de contrôle matière."],
+    ),
 }
 
 
