@@ -36,7 +36,7 @@ Depuis un poste d’administration sécurisé, avec le rôle propriétaire et sa
 infra/neon/01_bootstrap_roles.sql
 ```
 
-Le script refuse une base contenant des tables métier et refuse tout rôle existant avec `SUPERUSER` ou `BYPASSRLS`.
+Le script vérifie que la base effectivement connectée est `vericlaim`, refuse une base contenant des tables métier et refuse tout rôle existant avec `SUPERUSER` ou `BYPASSRLS`. Il accepte les rôles préprovisionnés seulement s’ils sont encore `NOLOGIN` : il définit alors leurs premiers mots de passe et active `LOGIN`. Dès qu’un rôle peut se connecter, une nouvelle exécution échoue plutôt que de risquer une rotation de credential non planifiée.
 
 Après cette opération, stocker les deux URLs dans les secrets GitHub Environment `production`. Ne les envoyez pas dans la conversation.
 
