@@ -91,7 +91,6 @@ def build_exposure_matrix(
 ) -> tuple[ExposureMatrix, str]:
     items: list[ExposureItem] = []
     seen_bases: set[str] = set()
-    candidate_fixed: list[Decimal] = []
     subject_is_legal_person = dossier.legal_person
 
     for finding in evaluations:
@@ -110,8 +109,6 @@ def build_exposure_matrix(
             operation_spend = context.operation_spend_eur or dossier.advertising_spend_eur
             if operation_spend is not None:
                 calculated = max(calculated or Decimal(0), operation_spend)
-        if fixed is not None:
-            candidate_fixed.append(Decimal(str(fixed)))
         items.append(
             ExposureItem(
                 category=ExposureCategory.ADMINISTRATIVE,
@@ -165,7 +162,6 @@ def build_exposure_matrix(
             )
         )
 
-    maximum_fixed = max(candidate_fixed) if candidate_fixed else None
     calculation_notes = [
         "Le score de risque est une priorité de revue, pas une probabilité d'infraction ni un montant d'amende.",
         "Les plafonds affichés ne sont ni automatiques ni nécessairement cumulables; l'outil retient le plus grand plafond fixe identifié, sans additionner les règles.",

@@ -1,5 +1,5 @@
-import AuditDashboard from "@/components/AuditDashboard";
+import AuthGate from "@/components/AuthGate";
 
 export default function HomePage() {
-  return <AuditDashboard />;
+  return <AuthGate />;
 }

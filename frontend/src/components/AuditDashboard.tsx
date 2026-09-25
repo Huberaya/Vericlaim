@@ -1,16 +1,20 @@
 "use client";
 
 import { useState } from "react";
+import CatalogPanel from "@/components/CatalogPanel";
 import ClaimHighlighter from "@/components/ClaimHighlighter";
 import DocumentUploader from "@/components/DocumentUploader";
 import LegalScoreCard from "@/components/LegalScoreCard";
 import ProofUploadModal from "@/components/ProofUploadModal";
 import RemediationModal from "@/components/RemediationModal";
+import SecureDocumentVault from "@/components/SecureDocumentVault";
 import { auditFile, auditText } from "@/lib/api";
 import type {
   AuditContext,
+  AuthSession,
   ClaimEvaluation,
   EvidenceItem,
+  OrganizationMembership,
   RegulatoryAuditResponse,
   Surface,
 } from "@/lib/types";
@@ -62,7 +66,31 @@ function evidenceLabel(item: EvidenceItem): string {
   }
 }
 
-export default function AuditDashboard() {
+type Props = {
+  auth: AuthSession;
+  activeMembership: OrganizationMembership;
+  isSessionActionLoading: boolean;
+  onLogout: () => void;
+  onSwitchOrganization: (organizationId: string) => void;
+};
+
+function userInitials(label: string): string {
+  return label
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0])
+    .join("")
+    .toUpperCase() || "VC";
+}
+
+export default function AuditDashboard({
+  auth,
+  activeMembership,
+  isSessionActionLoading,
+  onLogout,
+  onSwitchOrganization,
+}: Props) {
   const [surface, setSurface] = useState<Surface>("packaging");
   const [auditDate, setAuditDate] = useState(parisToday);
   const [consumerFacing, setConsumerFacing] = useState(true);
@@ -73,6 +101,7 @@ export default function AuditDashboard() {
   const [proofModalOpen, setProofModalOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [catalogRevision, setCatalogRevision] = useState(0);
 
   function buildContext(): AuditContext {
     return {
@@ -142,6 +171,8 @@ export default function AuditDashboard() {
         <div className="sidebar-section-label">ESPACE DE TRAVAIL</div>
         <nav className="sidebar-nav" aria-label="Navigation principale">
           <a className="sidebar-link sidebar-link-active" href="#audit"><span className="nav-icon">◈</span> Audit des allégations<span className="nav-indicator" /></a>
+          <a className="sidebar-link" href="#catalog"><span className="nav-icon">◫</span> Catalogue achats</a>
+          <a className="sidebar-link" href="#documents"><span className="nav-icon">▣</span> Pièces fournisseurs</a>
           <a className="sidebar-link" href="#results-title"><span className="nav-icon">⌘</span> Rapport d’analyse<span className="nav-count">08</span></a>
         </nav>
         <div className="sidebar-rule-card">
@@ -151,15 +182,33 @@ export default function AuditDashboard() {
           <span>JURIDICTION FR / UE</span>
         </div>
         <div className="sidebar-bottom">
-          <span className="sidebar-status-dot" /> Moteur déterministe actif
-          <small>Règle de transposition UE : état serveur configurable</small>
+          <span className="sidebar-status-dot" /> Session SSO sécurisée
+          <small>{activeMembership.organization.slug} · Règle de transposition UE : état serveur configurable</small>
         </div>
       </aside>
 
       <main className="main-area" id="main-content">
         <header className="topbar flex items-center justify-between">
-          <div className="breadcrumb"><span>Conformité produit</span><b>/</b><strong>Audit environnemental</strong></div>
-          <div className="topbar-meta"><span className="secure-label"><span>●</span> SESSION LOCALE</span><span className="avatar">VC</span></div>
+          <div className="breadcrumb"><span>{activeMembership.organization.name}</span><b>/</b><strong>Audit environnemental</strong></div>
+          <div className="topbar-meta">
+            <label className="workspace-switcher">
+              <span className="visually-hidden">Organisation active</span>
+              <select
+                value={activeMembership.organization.id}
+                disabled={isLoading || isSessionActionLoading}
+                onChange={(event) => onSwitchOrganization(event.target.value)}
+              >
+                {auth.memberships.map((membership) => (
+                  <option key={membership.id} value={membership.organization.id}>
+                    {membership.organization.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <span className="secure-label"><span>●</span> {activeMembership.role.name.toUpperCase()}</span>
+            <span className="avatar" title={auth.user.email}>{userInitials(auth.user.display_name || auth.user.email)}</span>
+            <button type="button" className="topbar-logout" onClick={onLogout} disabled={isSessionActionLoading}>Déconnexion</button>
+          </div>
         </header>
 
         <div className="page-content" id="audit">
@@ -204,6 +253,21 @@ export default function AuditDashboard() {
             />
             <LegalScoreCard report={report} />
           </div>
+
+          <CatalogPanel
+            key={`catalog-${activeMembership.organization.id}`}
+            canRead={activeMembership.role.permissions.includes("catalog:read")}
+            canManage={activeMembership.role.permissions.includes("catalog:manage")}
+            onCatalogChanged={() => setCatalogRevision((current) => current + 1)}
+          />
+
+          <SecureDocumentVault
+            key={`vault-${activeMembership.organization.id}`}
+            canManage={activeMembership.role.permissions.includes("documents:manage")}
+            canRunAnalysis={activeMembership.role.permissions.includes("audit:run")}
+            canReadCatalog={activeMembership.role.permissions.includes("catalog:read")}
+            catalogRevision={catalogRevision}
+          />
 
           <section className="surface-card results-card" aria-labelledby="results-title">
             <div className="results-header">

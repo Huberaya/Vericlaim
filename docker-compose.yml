@@ -14,20 +14,128 @@ services:
       retries: 12
     restart: unless-stopped
 
+  minio:
+    # Single-node local reference topology. Shared deployments keep MinIO as
+    # the selected S3-compatible store, but use a TLS/KMS-backed deployment
+    # and a least-privilege service account rather than these root credentials.
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?Set MINIO_ROOT_USER in .env}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?Set MINIO_ROOT_PASSWORD in .env}
+      # Browser form uploads are signed but still require an explicit CORS
+      # origin. Do not use a wildcard with authenticated browser sessions.
+      MINIO_API_CORS_ALLOW_ORIGIN: ${MINIO_API_CORS_ALLOW_ORIGIN:-http://localhost:3000}
+    volumes:
+      - minio-data:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+      start_period: 10s
+    restart: unless-stopped
+
+  minio-init:
+    image: quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?Set MINIO_ROOT_USER in .env}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?Set MINIO_ROOT_PASSWORD in .env}
+      DOCUMENT_QUARANTINE_BUCKET: ${DOCUMENT_QUARANTINE_BUCKET:-vericlaim-quarantine}
+      DOCUMENT_CLEAN_BUCKET: ${DOCUMENT_CLEAN_BUCKET:-vericlaim-documents}
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        mc alias set local http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}"
+        mc mb --ignore-existing "local/$${DOCUMENT_QUARANTINE_BUCKET}"
+        mc mb --ignore-existing "local/$${DOCUMENT_CLEAN_BUCKET}"
+        # Quarantine is never a source of truth. Expiry is a second cleanup
+        # control if a browser abandons an upload intent or a worker crashes.
+        mc ilm rule add --expire-days 1 "local/$${DOCUMENT_QUARANTINE_BUCKET}" || true
+    restart: "no"
+
+  clamav:
+    # Fresh signatures are persisted separately from application data.
+    image: clamav/clamav:1.5.4_base
+    volumes:
+      - clamav-data:/var/lib/clamav
+    healthcheck:
+      test: ["CMD-SHELL", "clamdscan --ping 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    restart: unless-stopped
+
   backend:
     build:
       context: ./backend
-    environment:
+    environment: &backend_environment
       APP_ENV: ${APP_ENV:-development}
       DATABASE_URL: postgresql+psycopg://vericlaim:${POSTGRES_PASSWORD:-vericlaim-dev-only}@postgres:5432/vericlaim
-      CORS_ORIGINS: http://localhost:3000
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
+      AUTH_SESSION_SECRET: ${AUTH_SESSION_SECRET:?Set AUTH_SESSION_SECRET in .env}
+      AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-false}
+      OIDC_ISSUER: ${OIDC_ISSUER:-}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
+      OIDC_REDIRECT_URI: ${OIDC_REDIRECT_URI:-}
+      OIDC_DISCOVERY_URL: ${OIDC_DISCOVERY_URL:-}
       EU_2024_825_FR_TRANSPOSITION_STATUS: ${EU_2024_825_FR_TRANSPOSITION_STATUS:-unknown}
       VERICLAIM_CERTIFICATE_REGISTRY_JSON: "${VERICLAIM_CERTIFICATE_REGISTRY_JSON:-[]}"
-      TESSERACT_LANGUAGES: fra+eng
-      MAX_UPLOAD_BYTES: 15728640
-      MAX_PDF_PAGES: 25
+      TESSERACT_LANGUAGES: ${TESSERACT_LANGUAGES:-fra+eng}
+      MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-15728640}
+      DOCUMENT_EXTRACTION_MAX_ATTEMPTS: ${DOCUMENT_EXTRACTION_MAX_ATTEMPTS:-3}
+      DOCUMENT_EXTRACTION_RETRY_BASE_SECONDS: ${DOCUMENT_EXTRACTION_RETRY_BASE_SECONDS:-30}
+      DOCUMENT_EXTRACTION_LEASE_SECONDS: ${DOCUMENT_EXTRACTION_LEASE_SECONDS:-900}
+      DOCUMENT_EXTRACTION_POLL_SECONDS: ${DOCUMENT_EXTRACTION_POLL_SECONDS:-2}
+      DOCUMENT_OCR_TIMEOUT_SECONDS: ${DOCUMENT_OCR_TIMEOUT_SECONDS:-20}
+      DOCUMENT_OCR_RENDER_SCALE: ${DOCUMENT_OCR_RENDER_SCALE:-2}
+      DOCUMENT_MAX_IMAGE_PIXELS: ${DOCUMENT_MAX_IMAGE_PIXELS:-40000000}
+      DOCUMENT_SEGMENT_MAX_CHARS: ${DOCUMENT_SEGMENT_MAX_CHARS:-2000}
+      ANALYSIS_DETECTION_MAX_ATTEMPTS: ${ANALYSIS_DETECTION_MAX_ATTEMPTS:-3}
+      ANALYSIS_DETECTION_RETRY_BASE_SECONDS: ${ANALYSIS_DETECTION_RETRY_BASE_SECONDS:-30}
+      ANALYSIS_DETECTION_LEASE_SECONDS: ${ANALYSIS_DETECTION_LEASE_SECONDS:-300}
+      ANALYSIS_DETECTION_POLL_SECONDS: ${ANALYSIS_DETECTION_POLL_SECONDS:-2}
+      MAX_PDF_PAGES: ${MAX_PDF_PAGES:-25}
+      DOCUMENT_STORAGE_BACKEND: s3
+      # Internal operations stay on Docker's private network. The signing
+      # client uses localhost so returned URLs work from the browser.
+      DOCUMENT_STORAGE_ENDPOINT: http://minio:9000
+      DOCUMENT_STORAGE_PUBLIC_ENDPOINT: ${DOCUMENT_STORAGE_PUBLIC_ENDPOINT:-http://localhost:9000}
+      DOCUMENT_STORAGE_REGION: ${DOCUMENT_STORAGE_REGION:-eu-west-3}
+      DOCUMENT_STORAGE_ACCESS_KEY: ${MINIO_ROOT_USER:?Set MINIO_ROOT_USER in .env}
+      DOCUMENT_STORAGE_SECRET_KEY: ${MINIO_ROOT_PASSWORD:?Set MINIO_ROOT_PASSWORD in .env}
+      DOCUMENT_QUARANTINE_BUCKET: ${DOCUMENT_QUARANTINE_BUCKET:-vericlaim-quarantine}
+      DOCUMENT_CLEAN_BUCKET: ${DOCUMENT_CLEAN_BUCKET:-vericlaim-documents}
+      # Encryption is mandatory in staging/production. Local MinIO keeps this
+      # disabled unless a KMS/SSE configuration is intentionally supplied.
+      DOCUMENT_STORAGE_SSE_MODE: ${DOCUMENT_STORAGE_SSE_MODE:-none}
+      DOCUMENT_STORAGE_SSE_KMS_KEY_ID: ${DOCUMENT_STORAGE_SSE_KMS_KEY_ID:-}
+      DOCUMENT_UPLOAD_TTL_SECONDS: ${DOCUMENT_UPLOAD_TTL_SECONDS:-900}
+      DOCUMENT_DOWNLOAD_TTL_SECONDS: ${DOCUMENT_DOWNLOAD_TTL_SECONDS:-300}
+      DOCUMENT_SCANNER_MODE: clamav
+      DOCUMENT_CLAMAV_HOST: clamav
+      DOCUMENT_CLAMAV_PORT: 3310
+      DOCUMENT_CLAMAV_TIMEOUT_SECONDS: ${DOCUMENT_CLAMAV_TIMEOUT_SECONDS:-30}
+      # Compose is a local single-instance environment: apply reviewed
+      # migrations before boot. Multi-replica production uses a dedicated
+      # one-shot migrator job instead.
+      AUTO_CREATE_SCHEMA: "false"
+    command: ["sh", "-c", "alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port 8000"]
     depends_on:
       postgres:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      clamav:
         condition: service_healthy
     ports:
       - "8000:8000"
@@ -37,6 +145,33 @@ services:
       timeout: 3s
       retries: 8
       start_period: 10s
+    restart: unless-stopped
+
+  document-worker:
+    # OCR/PDF parsing executes outside the API process. It uses the same
+    # reviewed runtime image, but runs with an unprivileged numeric UID and no
+    # browser-facing port.
+    build:
+      context: ./backend
+    environment: *backend_environment
+    command: ["python", "-m", "app.workers.document_extraction_worker"]
+    depends_on:
+      backend:
+        condition: service_healthy
+    user: "10001:10001"
+    restart: unless-stopped
+
+  analysis-worker:
+    # Claim detection is independently durable and does not run in the API
+    # process. It only reads tenant-scoped, already-extracted C4 segments.
+    build:
+      context: ./backend
+    environment: *backend_environment
+    command: ["python", "-m", "app.workers.analysis_detection_worker"]
+    depends_on:
+      backend:
+        condition: service_healthy
+    user: "10001:10001"
     restart: unless-stopped
 
   frontend:
@@ -57,3 +192,5 @@ services:
 
 volumes:
   postgres-data:
+  minio-data:
+  clamav-data:

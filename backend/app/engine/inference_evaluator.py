@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import date
-
 from app.engine.fact_extractor import FactExtractor
 from app.engine.legal_remediation import remediation_for
 from app.engine.proof_validator import ProofValidator
-from app.engine.rule_book import RULES, RULE_BY_ID, RegulatoryRule, RuleKind
+from app.engine.rule_book import RULES, RegulatoryRule
 from app.models.legal_types import (
     CarbonOffsetEvidence,
-    ClaimType,
     DetectedClaim,
     EvidenceCheck,
     EvidenceDossier,
@@ -18,7 +15,6 @@ from app.models.legal_types import (
     LegalAssessment,
     LegalForce,
     ReasoningStep,
-    Severity,
     Surface,
     Verdict,
 )

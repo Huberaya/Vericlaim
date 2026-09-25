@@ -11,7 +11,11 @@ from pydantic import ValidationError
 from sqlalchemy.orm import Session
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
-from app.core.database import append_audit_record, canonical_json, get_db, sha256_json
+from app.core.database import append_audit_record, get_db, sha256_json
+from app.documents.scanner import MalwareScanError, MalwareScannerUnavailableError
+from app.documents.security import DocumentSecurityValidationError, inspect_document_bytes
+from app.identity.dependencies import TenantPrincipal, require_permission, request_id_from_request
+from app.identity.service import append_audit_event
 from app.engine.document_extractor import DocumentExtractionError, DocumentTextExtractor
 from app.engine.risk_assessment import (
     build_exposure_matrix,
@@ -19,7 +23,7 @@ from app.engine.risk_assessment import (
     derive_risk_score,
 )
 from app.engine.rule_book import RULES, RULEBOOK_VERSION
-from app.models.legal_types import AuditTrail, EvidenceDossier, LegalAssessment, Verdict
+from app.models.legal_types import AuditTrail, EvidenceDossier, Verdict
 from app.models.schemas import AuditContext, EvaluationRequest, EvaluationResponse, RuleBookResponse, RuleSummary
 
 
@@ -83,11 +87,38 @@ async def _read_request(request: Request) -> tuple[EvaluationRequest, str, str |
         payload = await uploaded.read(maximum + 1)
         if len(payload) > maximum:
             raise HTTPException(status_code=413, detail=f"Fichier trop volumineux (maximum {maximum} octets).")
-        document_hash = hashlib.sha256(payload).hexdigest()
+        # Do not hand untrusted bytes to PDF/image/OCR libraries until their
+        # extension, MIME type and magic bytes are coherent and malware scan
+        # has returned a clean verdict. This legacy endpoint remains ephemeral
+        # (it stores no file) but cannot bypass the secure ingestion boundary.
+        try:
+            inspected = inspect_document_bytes(
+                payload,
+                filename=uploaded.filename,
+                declared_content_type=uploaded.content_type,
+                max_size_bytes=maximum,
+            )
+        except DocumentSecurityValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        try:
+            scan = request.app.state.document_scanner.scan(payload)
+        except MalwareScannerUnavailableError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="Le contrôle antivirus est indisponible; le document ne peut pas être analysé.",
+            ) from exc
+        except MalwareScanError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="Le contrôle antivirus n’a pas produit de verdict exploitable.",
+            ) from exc
+        if not scan.is_clean:
+            raise HTTPException(status_code=422, detail="Le fichier a été rejeté par les contrôles de sécurité.")
+        document_hash = inspected.sha256
         try:
             extracted_text, extraction_method = DocumentTextExtractor().extract(
-                uploaded.filename,
-                uploaded.content_type,
+                inspected.source_filename,
+                inspected.content_type,
                 payload,
             )
         except DocumentExtractionError as exc:
@@ -117,7 +148,11 @@ def _audit_limitations(evaluator_status: str) -> list[str]:
 
 
 @router.post("/evaluate", response_model=EvaluationResponse)
-async def evaluate_claims(request: Request, db: Session = Depends(get_db)) -> EvaluationResponse:
+async def evaluate_claims(
+    request: Request,
+    db: Session = Depends(get_db),
+    principal: TenantPrincipal = Depends(require_permission("audit:run", csrf_protected=True)),
+) -> EvaluationResponse:
     body, extraction_method, document_sha256 = await _read_request(request)
     if not body.source_text.strip():
         raise HTTPException(status_code=422, detail="Fournissez source_text ou un document exploitable.")
@@ -162,12 +197,28 @@ async def evaluate_claims(request: Request, db: Session = Depends(get_db)) -> Ev
     try:
         previous_hash, record_hash, created_at = append_audit_record(
             db,
+            organization_id=principal.organization_id,
             audit_id=audit_id,
             source_sha256=source_sha256,
             evidence_manifest_sha256=evidence_manifest_sha256,
             report_sha256=report_sha256,
             summary=summary,
             created_at_utc=now,
+        )
+        append_audit_event(
+            db,
+            organization_id=principal.organization_id,
+            actor_user_id=principal.user_id,
+            entity_type="regulatory_audit",
+            entity_id=None,
+            action="regulatory_audit.completed",
+            payload={
+                "legacy_audit_id": audit_id,
+                "report_sha256": report_sha256,
+                "overall_compliance": overall.value,
+                "risk_score": risk_score,
+            },
+            request_id=request_id_from_request(request),
         )
     except Exception as exc:
         db.rollback()
@@ -196,7 +247,9 @@ async def evaluate_claims(request: Request, db: Session = Depends(get_db)) -> Ev
 
 
 @router.get("/rules", response_model=RuleBookResponse)
-def list_rules() -> RuleBookResponse:
+def list_rules(
+    _: TenantPrincipal = Depends(require_permission("rules:read")),
+) -> RuleBookResponse:
     summaries = [
         RuleSummary(
             rule_id=rule.rule_id,

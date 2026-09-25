@@ -11,12 +11,12 @@ from app.engine.proof_validator import ProofValidator, RegistryRecord
 from app.models.legal_types import (
     EcolabelEvidence,
     EvidenceDossier,
-    LcaEvidence,
     OverallCompliance,
     Surface,
     Verdict,
 )
 from app.models.schemas import AuditContext
+from tests.auth_support import authenticate_client
 
 
 class InMemoryCertificateRegistry:
@@ -256,6 +256,7 @@ def test_api_returns_auditable_structured_report():
     from app.main import app
 
     with TestClient(app) as client:
+        authenticate_client(client, role_code="analyst")
         response = client.post(
             "/api/v1/engine/evaluate",
             json={
@@ -281,23 +282,33 @@ def test_api_returns_auditable_structured_report():
 
 
 def test_api_extracts_uploaded_text_and_returns_it_for_highlighting():
+    from app.documents.scanner import TestCleanMalwareScanner
     from app.main import app
 
-    with TestClient(app) as client:
-        response = client.post(
-            "/api/v1/engine/evaluate",
-            data={
-                "context_json": json.dumps({
-                    "as_of_date": "2026-09-24",
-                    "jurisdiction": "FR",
-                    "surface": "packaging",
-                    "consumer_facing": True,
-                    "product_identifier": "SKU-1",
-                }),
-                "evidence_json": json.dumps({"items": [], "legal_person": True}),
-            },
-            files={"document": ("etiquette.txt", "Bouteille biodégradable.".encode("utf-8"), "text/plain")},
-        )
+    # Development defaults deliberately fail closed without ClamAV. Inject the
+    # test-only scanner at the application boundary so this extraction test
+    # does not weaken the production/development security policy.
+    original_scanner = app.state.document_scanner
+    app.state.document_scanner = TestCleanMalwareScanner()
+    try:
+        with TestClient(app) as client:
+            authenticate_client(client, role_code="analyst")
+            response = client.post(
+                "/api/v1/engine/evaluate",
+                data={
+                    "context_json": json.dumps({
+                        "as_of_date": "2026-09-24",
+                        "jurisdiction": "FR",
+                        "surface": "packaging",
+                        "consumer_facing": True,
+                        "product_identifier": "SKU-1",
+                    }),
+                    "evidence_json": json.dumps({"items": [], "legal_person": True}),
+                },
+                files={"document": ("etiquette.txt", "Bouteille biodégradable.".encode("utf-8"), "text/plain")},
+            )
+    finally:
+        app.state.document_scanner = original_scanner
     assert response.status_code == 200, response.text
     data = response.json()
     assert data["extracted_source_text"] == "Bouteille biodégradable."

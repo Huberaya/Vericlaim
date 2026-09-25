@@ -1,0 +1,242 @@
+erDiagram
+    ORGANIZATIONS ||--o{ MEMBERSHIPS : has
+    USERS ||--o{ MEMBERSHIPS : joins
+    ROLES ||--o{ MEMBERSHIPS : grants
+    USERS ||--o{ AUTH_SESSIONS : authenticates
+    ORGANIZATIONS o|--o{ AUTH_SESSIONS : active_context
+    ORGANIZATIONS ||--o{ AUDIT_RECORDS : owns
+
+    ORGANIZATIONS ||--o{ SUPPLIERS : owns
+    ORGANIZATIONS ||--o{ PRODUCTS : owns
+    SUPPLIERS ||--o{ PRODUCTS : supplies
+
+    ORGANIZATIONS ||--o{ DOCUMENTS : owns
+    ORGANIZATIONS ||--o{ DOCUMENT_UPLOADS : owns
+    SUPPLIERS o|--o{ DOCUMENTS : relates_to
+    PRODUCTS o|--o{ DOCUMENTS : relates_to
+    DOCUMENTS ||--o{ DOCUMENT_UPLOADS : upload_intents
+    USERS o|--o{ DOCUMENT_UPLOADS : requests
+    DOCUMENTS ||--o{ DOCUMENT_VERSIONS : versions
+    DOCUMENT_VERSIONS o|--o| DOCUMENT_UPLOADS : finalized_by
+    ORGANIZATIONS ||--o{ DOCUMENT_EXTRACTION_JOBS : owns
+    USERS o|--o{ DOCUMENT_EXTRACTION_JOBS : requests
+    DOCUMENT_VERSIONS ||--o| DOCUMENT_EXTRACTION_JOBS : extraction_job
+    DOCUMENT_VERSIONS ||--o{ DOCUMENT_SEGMENTS : extracts
+
+    ORGANIZATIONS ||--o{ CERTIFICATES : owns
+    DOCUMENT_VERSIONS o|--o{ CERTIFICATES : evidenced_by
+    ORGANIZATIONS ||--o{ EVIDENCE : owns
+    CERTIFICATES o|--o{ EVIDENCE : materializes
+    DOCUMENT_VERSIONS o|--o{ EVIDENCE : originates
+
+    ORGANIZATIONS ||--o{ ANALYSES : owns
+    SUPPLIERS o|--o{ ANALYSES : evaluated_for
+    PRODUCTS o|--o{ ANALYSES : evaluated_for
+    ANALYSES ||--o{ ANALYSIS_DOCUMENTS : consumes
+    DOCUMENT_VERSIONS ||--o{ ANALYSIS_DOCUMENTS : attached
+    ANALYSES ||--o{ ANALYSIS_VERSIONS : snapshots
+    ORGANIZATIONS ||--o{ ANALYSIS_DETECTION_JOBS : owns
+    USERS o|--o{ ANALYSIS_DETECTION_JOBS : requests
+    ANALYSIS_VERSIONS ||--o| ANALYSIS_DETECTION_JOBS : detection_job
+    ANALYSIS_VERSIONS ||--o{ CLAIMS : detects
+    DOCUMENT_SEGMENTS o|--o{ CLAIMS : cites
+    CLAIMS ||--o{ EVIDENCE_LINKS : relates
+    EVIDENCE ||--o{ EVIDENCE_LINKS : supports
+    ANALYSIS_VERSIONS ||--o{ RISKS : produces
+    ANALYSIS_VERSIONS ||--o{ RECOMMENDATIONS : produces
+    ANALYSIS_VERSIONS ||--o{ VALIDATIONS : reviewed_by
+    ANALYSIS_VERSIONS ||--o{ REPORTS : exported_as
+
+    REGULATIONS ||--o{ RULES : contains
+    RULES ||--o{ RULE_VERSIONS : versions
+    RULES o|--o{ RISKS : explains
+
+    SUPPLIERS ||--o{ EVIDENCE_REQUESTS : receives
+    CLAIMS o|--o{ EVIDENCE_REQUESTS : requests_for
+    ORGANIZATIONS ||--o{ AUDIT_EVENTS : logs
+
+    ORGANIZATIONS {
+        uuid id PK
+        string slug UK
+        string status
+        string data_region
+    }
+    USERS {
+        uuid id PK
+        string email UK
+        string identity_provider
+        string external_subject
+    }
+    MEMBERSHIPS {
+        uuid id PK
+        uuid organization_id FK
+        uuid user_id FK
+        uuid role_id FK
+        string status
+    }
+    AUTH_SESSIONS {
+        uuid id PK
+        uuid user_id FK
+        uuid active_organization_id FK
+        string token_hash
+        string csrf_token_hash
+        datetime expires_at
+        datetime revoked_at
+    }
+    AUDIT_RECORDS {
+        int sequence PK
+        uuid organization_id FK
+        string audit_id UK
+        string record_hash UK
+    }
+    SUPPLIERS {
+        uuid id PK
+        uuid organization_id FK
+        string legal_name
+        string external_reference
+        string idempotency_key
+        string request_sha256
+        datetime deleted_at
+    }
+    PRODUCTS {
+        uuid id PK
+        uuid organization_id FK
+        uuid supplier_id FK
+        string reference
+        string lifecycle_status
+        string idempotency_key
+        string request_sha256
+        datetime deleted_at
+    }
+    DOCUMENTS {
+        uuid id PK
+        uuid organization_id FK
+        string document_key
+        string status
+    }
+    DOCUMENT_UPLOADS {
+        uuid id PK
+        uuid organization_id FK
+        uuid document_id FK
+        uuid requested_by_user_id FK
+        uuid finalized_document_version_id FK UK
+        string quarantine_storage_key UK
+        string source_filename
+        string declared_content_type
+        int declared_size_bytes
+        string uploaded_sha256
+        string status
+        datetime expires_at
+        string scan_engine
+    }
+    DOCUMENT_VERSIONS {
+        uuid id PK
+        uuid organization_id FK
+        uuid document_id FK
+        int version_number
+        string sha256
+        string storage_key
+        string extraction_status
+        string extracted_text_sha256
+    }
+    DOCUMENT_EXTRACTION_JOBS {
+        uuid id PK
+        uuid organization_id FK
+        uuid document_version_id FK UK
+        uuid requested_by_user_id FK
+        string status
+        int attempt_count
+        int max_attempts
+        datetime available_at
+        datetime lease_expires_at
+        string error_code
+    }
+    DOCUMENT_SEGMENTS {
+        uuid id PK
+        uuid organization_id FK
+        uuid document_version_id FK
+        int sequence_number
+        int page_number
+        string segment_type
+        int start_offset
+        int end_offset
+        string source_sha256
+    }
+    ANALYSES {
+        uuid id PK
+        uuid organization_id FK
+        string analysis_key
+        string status
+    }
+    ANALYSIS_VERSIONS {
+        uuid id PK
+        uuid organization_id FK
+        uuid analysis_id FK
+        int version_number
+        string idempotency_key UK
+        string request_sha256
+        string input_manifest_sha256
+        string result_sha256
+        string rulebook_version
+    }
+    ANALYSIS_DETECTION_JOBS {
+        uuid id PK
+        uuid organization_id FK
+        uuid analysis_version_id FK UK
+        uuid requested_by_user_id FK
+        string status
+        int attempt_count
+        int max_attempts
+        datetime available_at
+        datetime lease_expires_at
+        string error_code
+    }
+    CLAIMS {
+        uuid id PK
+        uuid organization_id FK
+        uuid analysis_version_id FK
+        string category
+        string claim_type
+        string status
+    }
+    EVIDENCE {
+        uuid id PK
+        uuid organization_id FK
+        string evidence_type
+        string status
+    }
+    EVIDENCE_LINKS {
+        uuid id PK
+        uuid organization_id FK
+        uuid claim_id FK
+        uuid evidence_id FK
+        string relation
+    }
+    REGULATIONS {
+        uuid id PK
+        string jurisdiction_code
+        string identifier
+        string official_url
+        string status
+    }
+    RULES {
+        uuid id PK
+        uuid organization_id FK
+        uuid regulation_id FK
+        string rule_key
+        string legal_force
+    }
+    RULE_VERSIONS {
+        uuid id PK
+        uuid organization_id FK
+        uuid rule_id FK
+        int version_number
+        string source_url
+    }
+    AUDIT_EVENTS {
+        uuid id PK
+        uuid organization_id FK
+        string entity_type
+        string action
+        string event_hash
+    }
