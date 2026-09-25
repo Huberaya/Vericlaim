@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from dotenv import load_dotenv
+
+load_dotenv()
 
 
 @dataclass(frozen=True)
@@ -16,6 +19,15 @@ class Settings:
     max_upload_bytes: int = 15 * 1024 * 1024
     max_pdf_pages: int = 25
     max_source_chars: int = 100_000
+
+
+def _normalize_database_url(raw_url: str) -> str:
+    url = raw_url.strip()
+    if url.startswith("postgres://"):
+        return "postgresql+psycopg://" + url[len("postgres://"):]
+    if url.startswith("postgresql://") and not url.startswith("postgresql+"):
+        return "postgresql+psycopg://" + url[len("postgresql://"):]
+    return url
 
 
 def get_settings() -> Settings:
@@ -36,10 +48,11 @@ def get_settings() -> Settings:
     except ValueError:
         max_pdf_pages = 25
 
+    raw_db_url = os.getenv("DATABASE_URL", "sqlite:///./vericlaim.db")
     return Settings(
         app_name=os.getenv("APP_NAME", "VeriClaim AI — Regulatory Rule Engine"),
         environment=os.getenv("APP_ENV", "development"),
-        database_url=os.getenv("DATABASE_URL", "sqlite:///./vericlaim.db"),
+        database_url=_normalize_database_url(raw_db_url),
         cors_origins=origins,
         eu_2024_825_fr_transposition_status=status,
         verified_certificates_json=os.getenv("VERICLAIM_CERTIFICATE_REGISTRY_JSON", "{}"),

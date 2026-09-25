@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { Show, SignInButton, UserButton } from "@clerk/nextjs";
 import ClaimHighlighter from "@/components/ClaimHighlighter";
 import DocumentUploader from "@/components/DocumentUploader";
 import CatalogBatchView from "@/components/CatalogBatchView";
@@ -273,7 +274,31 @@ export default function AuditDashboard() {
       <main className="main-area" id="main-content">
         <header className="topbar flex items-center justify-between">
           <div className="breadcrumb"><span>Conformité produit</span><b>/</b><strong>Audit environnemental</strong></div>
-          <div className="topbar-meta"><span className="secure-label"><span>●</span> SESSION LOCALE</span><span className="avatar">VC</span></div>
+          <div className="topbar-meta" style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+            <span className="secure-label"><span>●</span> SESSION SÉCURISÉE</span>
+            <Show when="signed-out">
+              <SignInButton mode="modal">
+                <button
+                  type="button"
+                  style={{
+                    padding: "4px 10px",
+                    background: "#0f172a",
+                    color: "#ffffff",
+                    border: 0,
+                    borderRadius: 6,
+                    fontSize: "11px",
+                    fontWeight: 600,
+                    cursor: "pointer",
+                  }}
+                >
+                  Connexion
+                </button>
+              </SignInButton>
+            </Show>
+            <Show when="signed-in">
+              <UserButton />
+            </Show>
+          </div>
         </header>
 
         <div className="page-content" id="audit">
