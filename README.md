@@ -273,6 +273,21 @@ Un instantané personnalisé peut également être injecté via la variable d'en
 
 Ne mettez dans cette configuration que des données vérifiées par un processus interne fiable. La preuve doit couvrir le SKU/catégorie, être valide à la date d'évaluation et démontrer une performance pertinente pour le sens exact de la claim. Même un certificat valide ne contourne pas l'interdiction AGEC de la mention « biodégradable ».
 
+## Déploiement en Production (Render & Railway)
+
+Le backend est entièrement conteneurisé et prêt pour le déploiement cloud managé :
+
+### Option A : Déploiement en 1 clic sur Render (Blueprint)
+1. Créer un compte sur [Render.com](https://render.com).
+2. Cliquer sur **New +** > **Blueprint** et sélectionner le dépôt `Huberaya/Vericlaim`.
+3. Le fichier `render.yaml` configure automatiquement le service web Docker avec la sonde `/healthz`, la région Francfort (`eu-central-1`) et les variables d'environnement pré-renseignées.
+
+### Option B : Déploiement sur Railway
+1. Créer un projet sur [Railway.app](https://railway.app).
+2. Lier le dépôt GitHub `Huberaya/Vericlaim`.
+3. Railway utilise automatiquement le `Dockerfile` et applique les migrations via `start.sh`.
+4. Renseigner les variables `DATABASE_URL` (Neon PostgreSQL) et `CLERK_SECRET_KEY`.
+
 ## Configuration sensible
 
 - `EU_2024_825_FR_TRANSPOSITION_STATUS`: `unknown` par défaut; configurer seulement après validation juridique de la mesure française en vigueur.

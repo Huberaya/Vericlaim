@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: vericlaim-backend
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    plan: free
+    region: frankfurt
+    healthCheckPath: /healthz
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: DATABASE_URL
+        value: postgresql://neondb_owner:npg_upcUHG54QvXs@ep-wandering-block-b1n2jm2i-pooler.c-5.eu-central-1.aws.neon.tech/neondb?sslmode=require
+      - key: CLERK_JWKS_URL
+        value: https://meet-asp-6564.clerk.accounts.dev/.well-known/jwks.json
+      - key: CLERK_SECRET_KEY
+        value: sk_test_XLUXm9CDUAcqGqU8eRw9NXhJYmlRGXKPcE7YchwkkV
+      - key: CORS_ORIGINS
+        value: "*"
