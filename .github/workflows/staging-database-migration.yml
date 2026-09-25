@@ -1,0 +1,99 @@
+name: Staging database migration
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: "Choose APPLY to run the reviewed Alembic chain against staging."
+        required: true
+        type: choice
+        default: "DO_NOT_APPLY"
+        options:
+          - "DO_NOT_APPLY"
+          - "APPLY"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vericlaim-staging-database-migration
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    if: github.ref == 'refs/heads/main' && inputs.confirmation == 'APPLY'
+    name: Manual staging database migration
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: staging
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out reviewed main revision
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install reviewed backend dependencies
+        working-directory: backend
+        env:
+          PIP_DISABLE_PIP_VERSION_CHECK: "1"
+          PIP_NO_CACHE_DIR: "1"
+        run: |
+          set -euo pipefail
+          python --version
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Confirm the migration credential is present
+        env:
+          DATABASE_URL_MIGRATOR: ${{ secrets.DATABASE_URL_MIGRATOR }}
+        run: |
+          set -euo pipefail
+          test -n "${DATABASE_URL_MIGRATOR:-}" || {
+            echo "DATABASE_URL_MIGRATOR is not configured in the GitHub staging environment." >&2
+            exit 1
+          }
+
+      - name: Apply reviewed Alembic migrations as vericlaim_migrator
+        working-directory: backend
+        env:
+          APP_ENV: development
+          AUTO_CREATE_SCHEMA: "false"
+          DATABASE_URL: ${{ secrets.DATABASE_URL_MIGRATOR }}
+        run: |
+          set -euo pipefail
+          python -m alembic current
+          python -m alembic upgrade head
+          python -m alembic current
+
+      - name: Apply runtime grants as vericlaim_migrator
+        env:
+          DATABASE_URL_MIGRATOR: ${{ secrets.DATABASE_URL_MIGRATOR }}
+        run: |
+          set -euo pipefail
+          python infra/neon/run_post_migration_grants.py
+
+      - name: Derive the expected Alembic revision from reviewed source
+        id: revision
+        working-directory: backend
+        env:
+          APP_ENV: development
+          AUTO_CREATE_SCHEMA: "false"
+          DATABASE_URL: ${{ secrets.DATABASE_URL_MIGRATOR }}
+        run: |
+          set -euo pipefail
+          revision="$(python -m alembic heads | awk '{print $1}')"
+          test -n "$revision"
+          printf 'revision=%s\n' "$revision" >> "$GITHUB_OUTPUT"
+
+      - name: Verify runtime RLS and least privilege as vericlaim_app
+        env:
+          DATABASE_URL_APP: ${{ secrets.DATABASE_URL_APP }}
+          EXPECTED_REVISION: ${{ steps.revision.outputs.revision }}
+        run: |
+          set -euo pipefail
+          test -n "${DATABASE_URL_APP:-}" || {
+            echo "DATABASE_URL_APP is not configured in the GitHub staging environment." >&2
+            exit 1
+          }
+          python infra/neon/verify_runtime.py --expected-revision "$EXPECTED_REVISION"
