@@ -19,6 +19,7 @@ Ce runbook couvre la migration de la base Neon européenne `vericlaim`. Il est v
 - les rôles `vericlaim_migrator` et `vericlaim_app` sont non-superuser et `NOBYPASSRLS` ;
 - le rôle propriétaire ne figure dans aucun secret GitHub ou Vercel ;
 - la branche `main` est protégée ;
+- la CI GitHub `Continuous integration` a réussi sur la pull request avant son merge ;
 - l’environnement GitHub `production` exige une validation humaine ;
 - les environnements GitHub `staging` et `production` ont chacun leurs propres secrets :
 
@@ -39,7 +40,7 @@ infra/neon/01_bootstrap_roles.sql
 
 Le script vérifie que la base effectivement connectée est `vericlaim`, refuse une base contenant des tables métier et refuse tout rôle existant avec `SUPERUSER` ou `BYPASSRLS`. Il accepte les rôles préprovisionnés seulement s’ils sont encore `NOLOGIN` : il définit alors leurs premiers mots de passe et active `LOGIN`. Dès qu’un rôle peut se connecter, une nouvelle exécution échoue plutôt que de risquer une rotation de credential non planifiée.
 
-Après cette opération, stocker les deux URLs dans les secrets GitHub Environment `production`. Ne les envoyez pas dans la conversation.
+Après chaque activation, stocker les deux URLs uniquement dans l’environnement GitHub correspondant (`staging` ou `production`). Ne réemployez jamais une URL entre environnements et ne les envoyez pas dans la conversation.
 
 ## Validation staging obligatoire
 
