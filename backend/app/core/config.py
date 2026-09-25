@@ -19,6 +19,8 @@ class Settings:
     max_upload_bytes: int = 15 * 1024 * 1024
     max_pdf_pages: int = 25
     max_source_chars: int = 100_000
+    clerk_jwks_url: str = "https://meet-asp-6564.clerk.accounts.dev/.well-known/jwks.json"
+    clerk_secret_key: str | None = None
 
 
 def _normalize_database_url(raw_url: str) -> str:
@@ -48,6 +50,12 @@ def get_settings() -> Settings:
     except ValueError:
         max_pdf_pages = 25
 
+    clerk_jwks = os.getenv(
+        "CLERK_JWKS_URL",
+        "https://meet-asp-6564.clerk.accounts.dev/.well-known/jwks.json",
+    )
+    clerk_secret = os.getenv("CLERK_SECRET_KEY", "sk_test_XLUXm9CDUAcqGqU8eRw9NXhJYmlRGXKPcE7YchwkkV")
+
     raw_db_url = os.getenv("DATABASE_URL", "sqlite:///./vericlaim.db")
     return Settings(
         app_name=os.getenv("APP_NAME", "VeriClaim AI — Regulatory Rule Engine"),
@@ -60,6 +68,8 @@ def get_settings() -> Settings:
         max_upload_bytes=max(1024, max_upload_bytes),
         max_pdf_pages=max(1, max_pdf_pages),
         max_source_chars=max(1000, int(os.getenv("MAX_SOURCE_CHARS", "100000"))),
+        clerk_jwks_url=clerk_jwks,
+        clerk_secret_key=clerk_secret,
     )
 
 

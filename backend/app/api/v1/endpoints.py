@@ -1011,6 +1011,22 @@ def create_tenant(
     )
 
 
+@router.get("/auth/me")
+def get_current_user_profile(
+    tenant: TenantContext = Depends(get_tenant_context),
+) -> dict[str, Any]:
+    """Retourne l'identité et le tenant rattachés à la session active (Clerk ou Clé API)."""
+    return {
+        "is_authenticated": tenant.is_authenticated,
+        "user_id": tenant.user_id,
+        "organization_id": tenant.organization.id,
+        "organization_name": tenant.organization.name,
+        "organization_slug": tenant.organization.slug,
+        "tier": tenant.organization.tier,
+        "scopes": tenant.scopes,
+    }
+
+
 @router.get("/tenants/current", response_model=TenantResponse)
 def get_current_tenant_info(
     tenant: TenantContext = Depends(get_tenant_context),

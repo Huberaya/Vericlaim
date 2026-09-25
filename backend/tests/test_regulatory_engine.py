@@ -1354,6 +1354,76 @@ def test_decision_maker_excel_export_multi_sheet_ooxml():
         assert ws_batch_skus["A2"].value == "SKU-EXCEL-01"
 
 
+def test_clerk_jwt_authentication_and_tenant_provisioning(monkeypatch):
+    """Vérifie la validation JWT Clerk à la volée et le provisionnement automatique du tenant."""
+    from uuid import uuid4
+    from app.main import app
+    import app.core.security as sec
+
+    random_sub = f"user_2clerk_test_{uuid4().hex[:6]}"
+
+    # Mock du décodeur JWT Clerk
+    def mock_verify_clerk_jwt(token: str):
+        if token == "valid_clerk_jwt_token.xyz.abc":
+            return {
+                "sub": random_sub,
+                "email": "compliance@greensas.com",
+                "org_name": "Green SAS RSE",
+                "org_slug": "greensas-rse",
+            }
+        return None
+
+    monkeypatch.setattr(sec, "verify_clerk_jwt", mock_verify_clerk_jwt)
+
+    with TestClient(app) as client:
+        # 1. Appel sans token -> Tenant démo public
+        anon_resp = client.get("/api/v1/engine/auth/me")
+        assert anon_resp.status_code == 200
+        assert anon_resp.json()["is_authenticated"] is False
+        assert anon_resp.json()["organization_id"] == "default"
+
+        # 2. Appel avec jeton JWT Clerk invalide -> 401 Unauthorized
+        bad_resp = client.get(
+            "/api/v1/engine/auth/me",
+            headers={"Authorization": "Bearer invalid_token.123.456"},
+        )
+        assert bad_resp.status_code == 401
+        assert "Session Clerk invalide" in bad_resp.json()["detail"]
+
+        # 3. Appel avec jeton JWT Clerk valide -> Auto-provisioning du tenant dans Neon / PostgreSQL
+        clerk_resp = client.get(
+            "/api/v1/engine/auth/me",
+            headers={"Authorization": "Bearer valid_clerk_jwt_token.xyz.abc"},
+        )
+        assert clerk_resp.status_code == 200
+        auth_data = clerk_resp.json()
+        assert auth_data["is_authenticated"] is True
+        assert auth_data["user_id"] == random_sub
+        assert auth_data["organization_id"] == f"clerk_{random_sub}"
+        assert "Green SAS" in auth_data["organization_name"]
+
+        # 4. Effectuer un audit sous cette session Clerk -> Audit rattaché au tenant Clerk
+        eval_resp = client.post(
+            "/api/v1/engine/evaluate",
+            headers={"Authorization": "Bearer valid_clerk_jwt_token.xyz.abc"},
+            json={
+                "source_text": "Packaging écologique en kraft naturel.",
+                "context": {"supplier_name": "Fournisseur Test", "product_identifier": "SKU-CLERK-1"},
+            },
+        )
+        assert eval_resp.status_code == 200
+        assert eval_resp.json()["audit_trail"]["tenant_id"] == f"clerk_{random_sub}"
+
+        # 5. Consulter l'historique sous ce tenant
+        hist_resp = client.get(
+            "/api/v1/engine/audits",
+            headers={"Authorization": "Bearer valid_clerk_jwt_token.xyz.abc"},
+        )
+        assert hist_resp.status_code == 200
+        assert hist_resp.json()["total"] == 1
+
+
+
 
 
 

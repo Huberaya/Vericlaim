@@ -39,11 +39,30 @@ export function setStoredApiKey(key: string | null): void {
   }
 }
 
+export function setClerkSessionToken(token: string | null): void {
+  if (typeof window === "undefined") return;
+  if (token) {
+    (window as any).__VERICLAIM_CLERK_TOKEN__ = token;
+  } else {
+    delete (window as any).__VERICLAIM_CLERK_TOKEN__;
+  }
+}
+
+export function getClerkSessionToken(): string | null {
+  if (typeof window === "undefined") return null;
+  return (window as any).__VERICLAIM_CLERK_TOKEN__ || null;
+}
+
 function authHeaders(extra: Record<string, string> = {}): Record<string, string> {
   const headers = { ...extra };
   const key = getStoredApiKey();
   if (key) {
     headers["X-API-Key"] = key;
+  } else {
+    const clerkToken = getClerkSessionToken();
+    if (clerkToken) {
+      headers["Authorization"] = `Bearer ${clerkToken}`;
+    }
   }
   return headers;
 }
@@ -419,6 +438,25 @@ export async function fetchCurrentTenant(): Promise<TenantResponse> {
     throw new Error(`Échec de récupération du tenant (${response.status})`);
   }
   return (await response.json()) as TenantResponse;
+}
+
+export async function fetchCurrentAuthProfile(): Promise<{
+  is_authenticated: boolean;
+  user_id: string | null;
+  organization_id: string;
+  organization_name: string;
+  organization_slug: string;
+  tier: string;
+  scopes: string[];
+}> {
+  const response = await fetch(requestUrl("/api/v1/engine/auth/me"), {
+    headers: authHeaders(),
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    throw new Error(`Échec de récupération du profil (${response.status})`);
+  }
+  return await response.json();
 }
 
 export async function createTenant(name: string, slug?: string, tier = "standard"): Promise<TenantWithKeyResponse> {

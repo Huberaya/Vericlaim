@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { Show, SignInButton, UserButton } from "@clerk/nextjs";
+import { useEffect, useState } from "react";
+import { Show, SignInButton, UserButton, useAuth } from "@clerk/nextjs";
 import ClaimHighlighter from "@/components/ClaimHighlighter";
 import DocumentUploader from "@/components/DocumentUploader";
 import CatalogBatchView from "@/components/CatalogBatchView";
@@ -12,7 +12,14 @@ import SupplierBenchmarkView from "@/components/SupplierBenchmarkView";
 import TenantApiKeyView from "@/components/TenantApiKeyView";
 import AuditVerificationView from "@/components/AuditVerificationView";
 import ComplianceWatcherView from "@/components/ComplianceWatcherView";
-import { auditFile, auditText, auditUrl, downloadAuditPdf, downloadAuditExcel } from "@/lib/api";
+import {
+  auditFile,
+  auditText,
+  auditUrl,
+  downloadAuditPdf,
+  downloadAuditExcel,
+  setClerkSessionToken,
+} from "@/lib/api";
 import type {
   AuditContext,
   ClaimEvaluation,
@@ -69,6 +76,7 @@ function evidenceLabel(item: EvidenceItem): string {
 }
 
 export default function AuditDashboard() {
+  const { getToken, isSignedIn } = useAuth();
   const [currentView, setCurrentView] = useState<"audit" | "benchmark" | "catalog" | "tenants" | "verify" | "watcher">("audit");
   const [surface, setSurface] = useState<Surface>("packaging");
   const [auditDate, setAuditDate] = useState(parisToday);
@@ -83,6 +91,22 @@ export default function AuditDashboard() {
   const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
   const [isDownloadingExcel, setIsDownloadingExcel] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    async function syncClerkAuth() {
+      if (isSignedIn) {
+        try {
+          const token = await getToken();
+          setClerkSessionToken(token);
+        } catch {
+          setClerkSessionToken(null);
+        }
+      } else {
+        setClerkSessionToken(null);
+      }
+    }
+    syncClerkAuth();
+  }, [isSignedIn, getToken]);
 
   const handleDownloadPdf = async () => {
     if (!report) return;
