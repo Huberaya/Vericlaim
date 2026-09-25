@@ -18,15 +18,17 @@ Ce runbook couvre la migration de la base Neon européenne `vericlaim`. Il est v
 - la base cible est `vericlaim` dans le projet Neon européen ;
 - les rôles `vericlaim_migrator` et `vericlaim_app` sont non-superuser et `NOBYPASSRLS` ;
 - le rôle propriétaire ne figure dans aucun secret GitHub ou Vercel ;
-- la branche `main` est protégée et l’environnement GitHub `production` exige une validation humaine ;
-- les secrets suivants existent **uniquement** dans l’environnement GitHub `production` :
+- la branche `main` est protégée ;
+- la CI GitHub `Continuous integration` a réussi sur la pull request avant son merge ;
+- l’environnement GitHub `production` exige une validation humaine ;
+- les environnements GitHub `staging` et `production` ont chacun leurs propres secrets :
 
   ```text
   DATABASE_URL_MIGRATOR
   DATABASE_URL_APP
   ```
 
-Les deux URLs visent `/vericlaim`, utilisent TLS et des mots de passe distincts. `DATABASE_URL_MIGRATOR` utilise le schéma SQLAlchemy `postgresql+psycopg://`; `DATABASE_URL_APP` fait de même.
+Dans chaque environnement, les deux URLs visent `/vericlaim`, utilisent TLS et des mots de passe distincts. Les credentials de `staging` ne sont jamais réemployés en `production`. `DATABASE_URL_MIGRATOR` utilise le schéma SQLAlchemy `postgresql+psycopg://`; `DATABASE_URL_APP` fait de même.
 
 ## Activation initiale des identités
 
@@ -36,11 +38,31 @@ Depuis un poste d’administration sécurisé, avec le rôle propriétaire et sa
 infra/neon/01_bootstrap_roles.sql
 ```
 
-Le script refuse une base contenant des tables métier et refuse tout rôle existant avec `SUPERUSER` ou `BYPASSRLS`.
+Le script vérifie que la base effectivement connectée est `vericlaim`, refuse une base contenant des tables métier et refuse tout rôle existant avec `SUPERUSER` ou `BYPASSRLS`. Il accepte les rôles préprovisionnés seulement s’ils sont encore `NOLOGIN` : il définit alors leurs premiers mots de passe et active `LOGIN`. Dès qu’un rôle peut se connecter, une nouvelle exécution échoue plutôt que de risquer une rotation de credential non planifiée.
 
-Après cette opération, stocker les deux URLs dans les secrets GitHub Environment `production`. Ne les envoyez pas dans la conversation.
+Après chaque activation, stocker les deux URLs uniquement dans l’environnement GitHub correspondant (`staging` ou `production`). Ne réemployez jamais une URL entre environnements et ne les envoyez pas dans la conversation.
 
-## Déclenchement de migration
+## Validation staging obligatoire
+
+1. Créer une branche Neon `staging` isolée depuis la baseline `production`, avec un compute lecture-écriture dédié.
+2. Activer sur cette branche des credentials `vericlaim_migrator` et `vericlaim_app` distincts de ceux de production.
+3. Configurer les deux URLs uniquement dans l’environnement GitHub `staging`.
+4. Ouvrir **GitHub → Actions → Staging database migration**.
+5. Choisir la branche `main`, puis `APPLY` dans le champ de confirmation.
+6. Vérifier le succès de toutes les étapes :
+
+   ```text
+   alembic current
+   alembic upgrade head
+   post-migration runtime grants
+   runtime RLS and least-privilege verification
+   ```
+
+7. Consigner le SHA Git, la révision Alembic et les contrôles RLS/RBAC/audit avant toute promotion.
+
+## Déclenchement de migration production
+
+Uniquement après validation humaine explicite de staging :
 
 1. Vérifier que la pull request contenant les migrations a été revue et fusionnée dans `main`.
 2. Ouvrir **GitHub → Actions → Production database migration**.

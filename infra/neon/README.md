@@ -24,12 +24,22 @@ Le compte propriétaire Neon ne doit pas être configuré comme `DATABASE_URL` d
 ## Ordre strict d’exécution
 
 1. Avec le compte propriétaire sur la nouvelle base, exécuter `01_bootstrap_roles.sql`.
-2. Créer dans le secret manager :
+   Le script accepte les rôles préprovisionnés uniquement s’ils sont encore `NOLOGIN`, leur attribue alors leurs premiers mots de passe distincts et refuse toute réexécution après activation afin d’éviter une rotation silencieuse. Il vérifie aussi que la base réellement connectée correspond à `target_database`.
+2. Créer dans le secret manager deux URLs SQLAlchemy distinctes :
 
    ```text
-   DATABASE_URL_MIGRATOR=postgresql+psycopg://vericlaim_migrator:…@…/vericlaim?sslmode=require
-   DATABASE_URL=postgresql+psycopg://vericlaim_app:…@…/vericlaim?sslmode=require
+   DATABASE_URL_MIGRATOR
+     rôle : vericlaim_migrator
+     base : vericlaim
+     TLS  : sslmode=require
+
+   DATABASE_URL_APP
+     rôle : vericlaim_app
+     base : vericlaim
+     TLS  : sslmode=require
    ```
+
+   Les deux valeurs utilisent le schéma `postgresql+psycopg`, mais leurs mots de passe et leur hôte ne doivent pas apparaître dans ce dépôt.
 
 3. Lancer Alembic **avec `DATABASE_URL_MIGRATOR`** :
 

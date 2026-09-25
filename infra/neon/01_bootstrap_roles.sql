@@ -18,6 +18,15 @@
   \quit
 \endif
 
+-- A database-name argument alone is not enough: protect against connecting to
+-- one database while granting CONNECT on another one.
+SELECT (current_database() = :'target_database') AS vericlaim_target_database_matches \gset
+\if :vericlaim_target_database_matches
+\else
+  \echo 'Refusing bootstrap: current database does not match target_database.'
+  \quit
+\endif
+
 BEGIN;
 
 -- Refuse accidental execution against a populated application schema.
@@ -35,8 +44,32 @@ BEGIN
 END
 $$;
 
--- Create credentials only once. Existing roles are normalized below but their
--- passwords are never overwritten by this bootstrap script.
+-- The landing zone may pre-provision these exact roles as NOLOGIN identities.
+-- That is the only existing-role state accepted here. A LOGIN role would make
+-- rerunning this file capable of silently rotating a live credential, so fail
+-- closed before changing anything.
+DO $$
+DECLARE
+  candidate record;
+BEGIN
+  FOR candidate IN
+    SELECT rolname, rolcanlogin, rolsuper, rolbypassrls
+    FROM pg_roles
+    WHERE rolname IN ('vericlaim_migrator', 'vericlaim_app')
+  LOOP
+    IF candidate.rolsuper OR candidate.rolbypassrls THEN
+      RAISE EXCEPTION 'Role % is privileged; refuse to reuse it for VeriClaim.', candidate.rolname;
+    END IF;
+    IF candidate.rolcanlogin THEN
+      RAISE EXCEPTION 'Role % already has LOGIN; refusing to rotate an existing credential.', candidate.rolname;
+    END IF;
+  END LOOP;
+END
+$$;
+
+-- For roles that do not exist, create the first credential immediately. For
+-- the approved pre-provisioned NOLOGIN roles, the ALTER statements below set
+-- their first credential exactly once and enable LOGIN.
 SELECT format(
   'CREATE ROLE vericlaim_migrator LOGIN NOCREATEDB NOCREATEROLE NOINHERIT PASSWORD %L',
   :'migrator_password'
@@ -51,26 +84,53 @@ SELECT format(
 WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vericlaim_app')
 \gexec
 
--- A non-superuser cannot safely normalize SUPERUSER/BYPASSRLS attributes on
--- a pre-existing role. Fail closed instead of weakening a privileged role.
+SELECT format(
+  'ALTER ROLE vericlaim_migrator LOGIN NOCREATEDB NOCREATEROLE NOINHERIT PASSWORD %L',
+  :'migrator_password'
+)
+WHERE EXISTS (
+  SELECT 1
+  FROM pg_roles
+  WHERE rolname = 'vericlaim_migrator'
+    AND NOT rolcanlogin
+)
+\gexec
+
+SELECT format(
+  'ALTER ROLE vericlaim_app LOGIN NOCREATEDB NOCREATEROLE NOINHERIT PASSWORD %L',
+  :'app_password'
+)
+WHERE EXISTS (
+  SELECT 1
+  FROM pg_roles
+  WHERE rolname = 'vericlaim_app'
+    AND NOT rolcanlogin
+)
+\gexec
+
+-- Verify the credentials are now constrained. A non-superuser cannot safely
+-- normalize SUPERUSER/BYPASSRLS, so reject privilege drift rather than weaken
+-- a privileged identity.
 DO $$
 DECLARE
   candidate record;
 BEGIN
   FOR candidate IN
-    SELECT rolname, rolsuper, rolbypassrls
+    SELECT rolname, rolcanlogin, rolsuper, rolbypassrls, rolcreaterole, rolcreatedb, rolinherit
     FROM pg_roles
     WHERE rolname IN ('vericlaim_migrator', 'vericlaim_app')
   LOOP
-    IF candidate.rolsuper OR candidate.rolbypassrls THEN
-      RAISE EXCEPTION 'Role % is privileged; refuse to reuse it for VeriClaim.', candidate.rolname;
+    IF NOT candidate.rolcanlogin
+      OR candidate.rolsuper
+      OR candidate.rolbypassrls
+      OR candidate.rolcreaterole
+      OR candidate.rolcreatedb
+      OR candidate.rolinherit THEN
+      RAISE EXCEPTION 'Role % does not meet VeriClaim least-privilege bootstrap requirements.', candidate.rolname;
     END IF;
   END LOOP;
 END
 $$;
-
-ALTER ROLE vericlaim_migrator LOGIN NOCREATEDB NOCREATEROLE NOINHERIT;
-ALTER ROLE vericlaim_app LOGIN NOCREATEDB NOCREATEROLE NOINHERIT;
 
 -- The runtime role cannot create arbitrary objects. The migration role owns
 -- objects it creates through Alembic.
