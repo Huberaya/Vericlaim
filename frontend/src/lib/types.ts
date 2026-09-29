@@ -580,3 +580,573 @@ export function violationSeverity(evaluation: ClaimEvaluation): ViolationSeverit
   ) return "WARNING";
   return "INFO";
 }
+
+export type PersistentEvidenceType =
+  | "certificate"
+  | "lca_report"
+  | "environmental_declaration"
+  | "lab_report"
+  | "recycling_route"
+  | "ghg_inventory"
+  | "ghg_reduction_plan"
+  | "carbon_offset"
+  | "standard"
+  | "other";
+
+export type PersistentEvidenceStatus =
+  | "pending"
+  | "present"
+  | "partial"
+  | "missing"
+  | "expired"
+  | "out_of_scope"
+  | "verified"
+  | "rejected";
+
+export type PersistentEvidenceRelation =
+  | "supports"
+  | "partially_supports"
+  | "contradicts"
+  | "not_related"
+  | "review_required";
+
+export type PersistentEvidence = {
+  id: string;
+  evidence_type: PersistentEvidenceType;
+  status: PersistentEvidenceStatus;
+  reference: string | null;
+  issuer: string | null;
+  issued_on: string | null;
+  expires_on: string | null;
+  product_scope: string | null;
+  supplier_id: string | null;
+  product_id: string | null;
+  document_version_id: string | null;
+  certificate_id: string | null;
+  evidence_metadata: Record<string, unknown>;
+  verified_at: string | null;
+  verified_by_user_id: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type PersistentEvidenceList = {
+  items: PersistentEvidence[];
+  next_cursor: string | null;
+};
+
+export type PersistentEvidenceCreateRequest = {
+  evidence_type: PersistentEvidenceType;
+  reference?: string | null;
+  issuer?: string | null;
+  issued_on?: string | null;
+  expires_on?: string | null;
+  product_scope?: string | null;
+  supplier_id?: string | null;
+  product_id?: string | null;
+  document_version_id?: string | null;
+  certificate_id?: string | null;
+  status?: PersistentEvidenceStatus;
+  evidence_metadata?: Record<string, unknown>;
+};
+
+export type PersistentEvidenceLink = {
+  id: string;
+  claim_id: string;
+  evidence_id: string;
+  relation: PersistentEvidenceRelation;
+  coverage_status: PersistentEvidenceStatus;
+  validity_as_of: string | null;
+  confidence_score: number | null;
+  rationale: string | null;
+  reviewed_by_user_id: string | null;
+  reviewed_at: string | null;
+  created_at: string;
+  evidence?: PersistentEvidence | null;
+};
+
+export type ClaimWithEvidenceLinks = {
+  claim: PersistentClaim;
+  evidence_links: PersistentEvidenceLink[];
+  coverage_status: PersistentEvidenceStatus;
+  is_sufficient: boolean;
+  explanation: string;
+};
+
+export type EvidenceMatrix = {
+  analysis_id: string;
+  analysis_version_id: string;
+  version_number: number;
+  total_claims: number;
+  claims_with_evidence: number;
+  claims_missing_evidence: number;
+  claims_expired_evidence: number;
+  claims_out_of_scope_evidence: number;
+  matrix_rows: ClaimWithEvidenceLinks[];
+  disclaimer: string;
+};
+
+export type ValidationDecision = "pending" | "validated" | "contested";
+
+export type Validation = {
+  id: string;
+  analysis_version_id: string;
+  claim_id: string;
+  decision: ValidationDecision;
+  reviewer_user_id: string;
+  reviewer_display_name: string | null;
+  comment: string | null;
+  rationale: string | null;
+  decided_at: string;
+  created_at: string;
+};
+
+export type ValidationCreateRequest = {
+  analysis_version_id: string;
+  claim_id: string;
+  decision: ValidationDecision;
+  comment?: string | null;
+  rationale?: string | null;
+};
+
+export type EvidenceRequestStatus =
+  | "draft"
+  | "sent"
+  | "received"
+  | "fulfilled"
+  | "cancelled"
+  | "overdue";
+
+export type EvidenceRequestItem = {
+  type: string;
+  name: string;
+  notes?: string | null;
+};
+
+export type EvidenceRequest = {
+  id: string;
+  supplier_id: string;
+  supplier_name: string | null;
+  product_id: string | null;
+  product_name: string | null;
+  claim_id: string | null;
+  claim_text: string | null;
+  status: EvidenceRequestStatus;
+  subject: string;
+  message: string;
+  requested_items: EvidenceRequestItem[];
+  due_at: string | null;
+  sent_at: string | null;
+  last_reminded_at: string | null;
+  created_by_user_id: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type EvidenceRequestList = {
+  items: EvidenceRequest[];
+  next_cursor: string | null;
+};
+
+export type EvidenceRequestCreateRequest = {
+  supplier_id: string;
+  product_id?: string | null;
+  claim_id?: string | null;
+  subject: string;
+  message: string;
+  requested_items?: EvidenceRequestItem[];
+  due_at?: string | null;
+};
+
+export type EvidenceRequestUpdateRequest = {
+  status?: EvidenceRequestStatus;
+  subject?: string;
+  message?: string;
+  requested_items?: EvidenceRequestItem[];
+  due_at?: string | null;
+};
+
+export type TemplateGenerationRequest = {
+  claim_id?: string | null;
+  supplier_id?: string | null;
+  product_id?: string | null;
+  target_evidence_type?: PersistentEvidenceType | null;
+};
+
+export type TemplateGenerationResponse = {
+  subject: string;
+  message: string;
+  requested_items: EvidenceRequestItem[];
+  suggested_due_days: number;
+};
+
+// ---------------------------------------------------------------------------
+// Chantier 7 — Regulatory Governance & Rule Book Models
+// ---------------------------------------------------------------------------
+
+export type Jurisdiction = "FR" | "EU" | "INTERNATIONAL";
+
+export type LegalStatus =
+  | "in_force"
+  | "pending_transposition"
+  | "proposal"
+  | "superseded"
+  | "repealed";
+
+export type ReviewStatus =
+  | "approved_legal"
+  | "under_review"
+  | "draft"
+  | "deprecated";
+
+export type ConfidenceLevel = "high" | "medium" | "low";
+
+export type OfficialCitation = {
+  article: string;
+  source_title: string;
+  text_excerpt: string;
+  url: string;
+  effective_date: string | null;
+};
+
+export type SafeHarborSchema = {
+  safe_harbor_id: string;
+  title: string;
+  evidence_kind: string;
+  conditions: string[];
+};
+
+export type RuleGovernanceReview = {
+  review_status: ReviewStatus;
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+  confidence_level: ConfidenceLevel;
+  legal_notes: string | null;
+};
+
+export type RegulatoryRuleSummary = {
+  rule_id: string;
+  title: string;
+  legal_reference: string;
+  jurisdiction: Jurisdiction;
+  legal_status: LegalStatus;
+  legal_force: string;
+  severity: string;
+  rule_kind: string;
+  claim_types: string[];
+  effective_from: string | null;
+  transposition_deadline: string | null;
+  confidence_level: ConfidenceLevel;
+  review_status: ReviewStatus;
+  has_safe_harbors: boolean;
+  has_sanctions: boolean;
+  incomplete_coverage_warning: string | null;
+};
+
+export type RegulatoryRuleDetail = {
+  rule_id: string;
+  title: string;
+  legal_reference: string;
+  jurisdiction: Jurisdiction;
+  legal_status: LegalStatus;
+  legal_force: string;
+  severity: string;
+  rule_kind: string;
+  scope: string;
+  claim_types: string[];
+  official_citations: OfficialCitation[];
+  source_urls: string[];
+  required_evidence: string[];
+  safe_harbors: SafeHarborSchema[];
+  surfaces: string[];
+  effective_from: string | null;
+  effective_until: string | null;
+  transposition_deadline: string | null;
+  sanction: SanctionProfile | null;
+  priority: number;
+  notes: string[];
+  governance_review: RuleGovernanceReview;
+  incomplete_coverage_warning: string | null;
+  disclaimer: string;
+};
+
+export type RuleBookSummaryResponse = {
+  rulebook_version: string;
+  release_date: string;
+  sha256_fingerprint: string;
+  total_rules: number;
+  jurisdiction_breakdown: Record<string, number>;
+  legal_status_breakdown: Record<string, number>;
+  coverage_warnings_count: number;
+  governance_statement: string;
+  disclaimer: string;
+};
+
+export type RuleFieldDiff = {
+  field: string;
+  old_value: unknown;
+  new_value: unknown;
+};
+
+export type RuleDiffItem = {
+  rule_id: string;
+  diff_type: "added" | "modified" | "deprecated";
+  title: string;
+  summary: string;
+  field_diffs?: RuleFieldDiff[];
+};
+
+export type RuleBookChangelogEntry = {
+  version: string;
+  release_date: string;
+  title: string;
+  description: string;
+  diff_items: RuleDiffItem[];
+};
+
+export type RuleReviewSubmissionRequest = {
+  review_status: ReviewStatus;
+  confidence_level: ConfidenceLevel;
+  legal_notes?: string | null;
+};
+
+// ---------------------------------------------------------------------------
+// Chantier 8 — B2B Pilot Pack Models
+// ---------------------------------------------------------------------------
+
+export type PilotOverviewKPIs = {
+  total_suppliers: number;
+  total_products: number;
+  total_documents: number;
+  total_analyses: number;
+  total_claims_detected: number;
+  claims_validated: number;
+  claims_contested: number;
+  claims_pending_review: number;
+  claims_with_sufficient_evidence: number;
+  claims_missing_evidence: number;
+  claims_expired_evidence: number;
+  pending_evidence_requests: number;
+  overdue_evidence_requests: number;
+  global_compliance_rate_percent: number;
+  critical_risk_claims_count: number;
+};
+
+export type SupplierRiskSummary = {
+  supplier_id: string;
+  supplier_name: string;
+  country_code: string | null;
+  products_count: number;
+  claims_count: number;
+  missing_evidence_count: number;
+  pending_requests_count: number;
+  risk_level: "high" | "medium" | "low";
+};
+
+export type PilotOverviewResponse = {
+  organization_id: string;
+  organization_name: string;
+  kpis: PilotOverviewKPIs;
+  top_risk_suppliers: SupplierRiskSummary[];
+  rulebook_version: string;
+  generated_at: string;
+  disclaimer: string;
+};
+
+export type PreAuditFinding = {
+  claim_text: string;
+  category: string;
+  claim_type: string;
+  severity: string;
+  legal_basis: string;
+  coverage_status: string;
+  validation_decision: string;
+  reviewer_comment: string | null;
+  remediation_advice: string;
+};
+
+export type PreAuditReportResponse = {
+  report_id: string;
+  organization_id: string;
+  organization_name: string;
+  generated_at: string;
+  as_of_date: string;
+  jurisdiction: string;
+  rulebook_version: string;
+  rulebook_sha256: string;
+  summary_kpis: PilotOverviewKPIs;
+  findings: PreAuditFinding[];
+  remediation_summary: string[];
+  audit_trail_signature: string;
+  legal_disclaimer: string;
+};
+
+export type CatalogImportItem = {
+  supplier_legal_name: string;
+  supplier_country?: string | null;
+  supplier_email?: string | null;
+  product_reference?: string | null;
+  product_name?: string | null;
+  product_category?: string | null;
+};
+
+export type CatalogImportResult = {
+  suppliers_created: number;
+  suppliers_reused: number;
+  products_created: number;
+  products_reused: number;
+  errors: string[];
+};
+
+export type RetentionPolicyResponse = {
+  organization_id: string;
+  documents_retention_years: number;
+  audit_trail_retention_years: number;
+  evidence_archive_retention_years: number;
+  gdpr_contact_email: string;
+  encryption_standard: string;
+  storage_region: string;
+  export_formats_supported: string[];
+  last_policy_review: string;
+};
+
+// ---------------------------------------------------------------------------
+// Chantier 9 — Enterprise Industrialization Models
+// ---------------------------------------------------------------------------
+
+export type ApiKeyCreateRequest = {
+  name: string;
+  scopes: string[];
+  rate_limit_per_minute?: number;
+  expires_in_days?: number | null;
+};
+
+export type ApiKeyCreatedResponse = {
+  id: string;
+  name: string;
+  prefix: string;
+  raw_api_key: string;
+  scopes: string[];
+  rate_limit_per_minute: number;
+  expires_at: string | null;
+  created_at: string;
+};
+
+export type ApiKeySummary = {
+  id: string;
+  name: string;
+  prefix: string;
+  scopes: string[];
+  rate_limit_per_minute: number;
+  is_active: boolean;
+  last_used_at: string | null;
+  expires_at: string | null;
+  created_at: string;
+};
+
+export type EnterpriseMetricsResponse = {
+  uptime_seconds: number;
+  service_status: string;
+  database_status: string;
+  storage_status: string;
+  workers_status: string;
+  active_tenants_count: number;
+  total_analyses_completed: number;
+  average_analysis_latency_ms: number;
+  total_api_requests: number;
+  error_rate_percent: number;
+  open_alerts_count: number;
+  memory_usage_mb: number;
+  cpu_utilization_percent: number;
+  timestamp: string;
+};
+
+export type EnterpriseAlert = {
+  id: string;
+  severity: "info" | "warning" | "critical";
+  category: "security" | "quota" | "sso" | "system";
+  title: string;
+  message: string;
+  occurred_at: string;
+  is_acknowledged: boolean;
+};
+
+export type LegalHoldRequest = {
+  case_reference: string;
+  reason: string;
+  expires_at?: string | null;
+};
+
+export type LegalHoldResponse = {
+  id: string;
+  case_reference: string;
+  reason: string;
+  is_active: boolean;
+  created_by: string;
+  created_at: string;
+  expires_at: string | null;
+};
+
+// ---------------------------------------------------------------------------
+// Chantier 10 — Regulatory PDF Reporting & Opposable Dossier
+// ---------------------------------------------------------------------------
+
+export type PdfExportOptions = {
+  document_title?: string;
+  product_identifier?: string;
+  surface?: string;
+  include_evidence_matrix?: boolean;
+  include_remediation_clauses?: boolean;
+};
+
+// ---------------------------------------------------------------------------
+// Chantier 11 — Tamper-Evident Audit Chain & Ledger Integrity
+// ---------------------------------------------------------------------------
+
+export type AuditEventLog = {
+  id: string;
+  organization_id: string;
+  actor_user_id: string | null;
+  entity_type: string;
+  entity_id: string | null;
+  action: string;
+  occurred_at: string;
+  request_id: string | null;
+  payload_json: Record<string, unknown>;
+  payload_sha256: string;
+  previous_event_hash: string | null;
+  event_hash: string;
+};
+
+export type AuditChainVerification = {
+  is_valid: boolean;
+  organization_id: string;
+  total_events: number;
+  head_event_hash: string | null;
+  genesis_event_hash: string | null;
+  first_event_at: string | null;
+  last_event_at: string | null;
+  tampered_event_id: string | null;
+  error_detail: string | null;
+  verified_at: string;
+};
+
+export type AuditIntegrityCertificate = {
+  organization_id: string;
+  organization_name: string;
+  certificate_id: string;
+  chain_length: number;
+  head_event_hash: string;
+  merkle_digest: string;
+  verification_status: string;
+  certified_at: string;
+  issuer: string;
+  legal_disclaimer: string;
+};
+
+
+
+
+
+
+

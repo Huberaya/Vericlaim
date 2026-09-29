@@ -12,16 +12,57 @@ import type {
   DocumentUploadCompletion,
   DocumentUploadInstruction,
   DocumentVersionSegments,
+  EvidenceMatrix,
   PersistentAnalysisDetail,
   PersistentAnalysisEnqueueResponse,
   PersistentAnalysisVersionDetail,
+  PersistentEvidence,
+  PersistentEvidenceCreateRequest,
+  PersistentEvidenceLink,
+  PersistentEvidenceList,
+  PersistentEvidenceRelation,
+  PersistentEvidenceStatus,
+  PersistentEvidenceType,
   StoredDocumentDetail,
   EvidenceDossier,
   EvidenceItem,
   EvaluationRequest,
+  EvidenceRequest,
+  EvidenceRequestCreateRequest,
+  EvidenceRequestList,
+  EvidenceRequestStatus,
+  EvidenceRequestUpdateRequest,
   LcaEvidence,
   RegulatoryAuditResponse,
   StoredDocument,
+  TemplateGenerationRequest,
+  TemplateGenerationResponse,
+  Validation,
+  ValidationCreateRequest,
+  ConfidenceLevel,
+  Jurisdiction,
+  LegalStatus,
+  RegulatoryRuleDetail,
+  RegulatoryRuleSummary,
+  RuleBookChangelogEntry,
+  RuleBookSummaryResponse,
+  RuleReviewSubmissionRequest,
+  CatalogImportItem,
+  CatalogImportResult,
+  PilotOverviewResponse,
+  PreAuditReportResponse,
+  RetentionPolicyResponse,
+  ApiKeyCreateRequest,
+  ApiKeyCreatedResponse,
+  ApiKeySummary,
+  EnterpriseAlert,
+  EnterpriseMetricsResponse,
+  LegalHoldRequest,
+  LegalHoldResponse,
+  PdfExportOptions,
+  AuditEventLog,
+  AuditChainVerification,
+  AuditIntegrityCertificate,
 } from "@/lib/types";
 
 export const API_BASE_URL = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000").replace(/\/+$/, "");
@@ -420,3 +461,572 @@ export async function auditFile(
   });
   return readResult(response);
 }
+
+// ---------------------------------------------------------------------------
+// Persistent Evidence Registry and Claim-Evidence Matrix (Chantier 6.2)
+// ---------------------------------------------------------------------------
+
+export async function listPersistentEvidence(params: {
+  supplierId?: string | null;
+  productId?: string | null;
+  evidenceType?: PersistentEvidenceType | null;
+  status?: PersistentEvidenceStatus | null;
+  query?: string | null;
+  limit?: number;
+  cursor?: string | null;
+} = {}): Promise<PersistentEvidenceList> {
+  const query = new URLSearchParams();
+  if (params.supplierId) query.set("supplier_id", params.supplierId);
+  if (params.productId) query.set("product_id", params.productId);
+  if (params.evidenceType) query.set("evidence_type", params.evidenceType);
+  if (params.status) query.set("status", params.status);
+  if (params.query) query.set("query", params.query);
+  if (params.limit) query.set("limit", String(params.limit));
+  if (params.cursor) query.set("cursor", params.cursor);
+
+  const qs = query.toString();
+  const response = await fetch(requestUrl(`/api/v1/evidence${qs ? `?${qs}` : ""}`), {
+    credentials: "include",
+    cache: "no-store",
+  });
+  return readJson<PersistentEvidenceList>(response);
+}
+
+export async function getPersistentEvidence(evidenceId: string): Promise<PersistentEvidence> {
+  const response = await fetch(requestUrl(`/api/v1/evidence/${evidenceId}`), {
+    credentials: "include",
+    cache: "no-store",
+  });
+  return readJson<PersistentEvidence>(response);
+}
+
+export async function createPersistentEvidence(
+  payload: PersistentEvidenceCreateRequest,
+): Promise<{ evidence: PersistentEvidence; idempotent_replay: boolean }> {
+  const response = await fetch(requestUrl("/api/v1/evidence"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...csrfHeaders() },
+    body: JSON.stringify(payload),
+    credentials: "include",
+    cache: "no-store",
+  });
+  return readJson<{ evidence: PersistentEvidence; idempotent_replay: boolean }>(response);
+}
+
+export async function updatePersistentEvidence(
+  evidenceId: string,
+  payload: Partial<PersistentEvidenceCreateRequest>,
+): Promise<PersistentEvidence> {
+  const response = await fetch(requestUrl(`/api/v1/evidence/${evidenceId}`), {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...csrfHeaders() },
+    body: JSON.stringify(payload),
+    credentials: "include",
+    cache: "no-store",
+  });
+  return readJson<PersistentEvidence>(response);
+}
+
+export async function deletePersistentEvidence(evidenceId: string): Promise<void> {
+  const response = await fetch(requestUrl(`/api/v1/evidence/${evidenceId}`), {
+    method: "DELETE",
+    headers: csrfHeaders(),
+    credentials: "include",
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(errorText || `Échec suppression preuve (${response.status})`);
+  }
+}
+
+export async function linkClaimEvidence(
+  claimId: string,
+  payload: {
+    evidence_id: string;
+    relation?: PersistentEvidenceRelation;
+    coverage_status?: PersistentEvidenceStatus;
+    validity_as_of?: string | null;
+    confidence_score?: number | null;
+    rationale?: string | null;
+  },
+): Promise<PersistentEvidenceLink> {
+  const response = await fetch(requestUrl(`/api/v1/claims/${claimId}/evidence-links`), {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...csrfHeaders() },
+    body: JSON.stringify(payload),
+    credentials: "include",
+    cache: "no-store",
+  });
+  return readJson<PersistentEvidenceLink>(response);
+}
+
+export async function getClaimEvidenceLinks(claimId: string): Promise<PersistentEvidenceLink[]> {
+  const response = await fetch(requestUrl(`/api/v1/claims/${claimId}/evidence-links`), {
+    credentials: "include",
+    cache: "no-store",
+  });
+  return readJson<PersistentEvidenceLink[]>(response);
+}
+
+export async function unlinkClaimEvidence(linkId: string): Promise<void> {
+  const response = await fetch(requestUrl(`/api/v1/evidence-links/${linkId}`), {
+    method: "DELETE",
+    headers: csrfHeaders(),
+    credentials: "include",
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(errorText || `Échec déliaison preuve (${response.status})`);
+  }
+}
+
+export async function getAnalysisEvidenceMatrix(
+  analysisId: string,
+  versionNumber?: number,
+): Promise<EvidenceMatrix> {
+  const qs = versionNumber !== undefined ? `?version=${versionNumber}` : "";
+  const response = await fetch(requestUrl(`/api/v1/analyses/${analysisId}/evidence-matrix${qs}`), {
+    credentials: "include",
+    cache: "no-store",
+  });
+  return readJson<EvidenceMatrix>(response);
+}
+
+// ---------------------------------------------------------------------------
+// Chantier 6.3 — Human Review Validations & Supplier Evidence Requests
+// ---------------------------------------------------------------------------
+
+export async function recordValidation(payload: ValidationCreateRequest): Promise<Validation> {
+  const response = await fetch(requestUrl("/api/v1/validations"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...csrfHeaders() },
+    body: JSON.stringify(payload),
+    credentials: "include",
+    cache: "no-store",
+  });
+  return readJson<Validation>(response);
+}
+
+export async function getVersionValidations(
+  analysisId: string,
+  versionNumber: number,
+): Promise<Validation[]> {
+  const response = await fetch(
+    requestUrl(`/api/v1/analyses/${analysisId}/versions/${versionNumber}/validations`),
+    {
+      credentials: "include",
+      cache: "no-store",
+    },
+  );
+  return readJson<Validation[]>(response);
+}
+
+export async function createEvidenceRequest(
+  payload: EvidenceRequestCreateRequest,
+): Promise<EvidenceRequest> {
+  const response = await fetch(requestUrl("/api/v1/evidence-requests"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...csrfHeaders() },
+    body: JSON.stringify(payload),
+    credentials: "include",
+    cache: "no-store",
+  });
+  return readJson<EvidenceRequest>(response);
+}
+
+export async function listEvidenceRequests(params?: {
+  supplier_id?: string;
+  product_id?: string;
+  status?: EvidenceRequestStatus;
+  limit?: number;
+  cursor?: string;
+}): Promise<EvidenceRequestList> {
+  const searchParams = new URLSearchParams();
+  if (params?.supplier_id) searchParams.set("supplier_id", params.supplier_id);
+  if (params?.product_id) searchParams.set("product_id", params.product_id);
+  if (params?.status) searchParams.set("status", params.status);
+  if (params?.limit) searchParams.set("limit", String(params.limit));
+  if (params?.cursor) searchParams.set("cursor", params.cursor);
+
+  const qs = searchParams.toString();
+  const url = `/api/v1/evidence-requests${qs ? `?${qs}` : ""}`;
+  const response = await fetch(requestUrl(url), {
+    credentials: "include",
+    cache: "no-store",
+  });
+  return readJson<EvidenceRequestList>(response);
+}
+
+export async function getEvidenceRequest(requestId: string): Promise<EvidenceRequest> {
+  const response = await fetch(requestUrl(`/api/v1/evidence-requests/${requestId}`), {
+    credentials: "include",
+    cache: "no-store",
+  });
+  return readJson<EvidenceRequest>(response);
+}
+
+export async function updateEvidenceRequest(
+  requestId: string,
+  payload: EvidenceRequestUpdateRequest,
+): Promise<EvidenceRequest> {
+  const response = await fetch(requestUrl(`/api/v1/evidence-requests/${requestId}`), {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...csrfHeaders() },
+    body: JSON.stringify(payload),
+    credentials: "include",
+    cache: "no-store",
+  });
+  return readJson<EvidenceRequest>(response);
+}
+
+export async function sendEvidenceRequest(requestId: string): Promise<EvidenceRequest> {
+  const response = await fetch(requestUrl(`/api/v1/evidence-requests/${requestId}/send`), {
+    method: "POST",
+    headers: csrfHeaders(),
+    credentials: "include",
+    cache: "no-store",
+  });
+  return readJson<EvidenceRequest>(response);
+}
+
+export async function remindEvidenceRequest(requestId: string): Promise<EvidenceRequest> {
+  const response = await fetch(requestUrl(`/api/v1/evidence-requests/${requestId}/remind`), {
+    method: "POST",
+    headers: csrfHeaders(),
+    credentials: "include",
+    cache: "no-store",
+  });
+  return readJson<EvidenceRequest>(response);
+}
+
+export async function deleteEvidenceRequest(requestId: string): Promise<void> {
+  const response = await fetch(requestUrl(`/api/v1/evidence-requests/${requestId}`), {
+    method: "DELETE",
+    headers: csrfHeaders(),
+    credentials: "include",
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(errorText || `Échec suppression demande (${response.status})`);
+  }
+}
+
+export async function generateEvidenceRequestTemplate(
+  payload: TemplateGenerationRequest,
+): Promise<TemplateGenerationResponse> {
+  const response = await fetch(requestUrl("/api/v1/evidence-requests/generate-template"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...csrfHeaders() },
+    body: JSON.stringify(payload),
+    credentials: "include",
+    cache: "no-store",
+  });
+  return readJson<TemplateGenerationResponse>(response);
+}
+
+// ---------------------------------------------------------------------------
+// Chantier 7 — Regulatory Governance & Rule Book API
+// ---------------------------------------------------------------------------
+
+export async function getRuleBookOverview(): Promise<RuleBookSummaryResponse> {
+  const response = await fetch(requestUrl("/api/v1/regulatory/rulebook"), {
+    credentials: "include",
+    cache: "no-store",
+  });
+  return readJson<RuleBookSummaryResponse>(response);
+}
+
+export async function listRegulatoryRules(filters?: {
+  jurisdiction?: Jurisdiction;
+  legal_status?: LegalStatus;
+  legal_force?: string;
+  severity?: string;
+  claim_type?: string;
+  confidence_level?: ConfidenceLevel;
+  search?: string;
+}): Promise<RegulatoryRuleSummary[]> {
+  const params = new URLSearchParams();
+  if (filters?.jurisdiction) params.set("jurisdiction", filters.jurisdiction);
+  if (filters?.legal_status) params.set("legal_status", filters.legal_status);
+  if (filters?.legal_force) params.set("legal_force", filters.legal_force);
+  if (filters?.severity) params.set("severity", filters.severity);
+  if (filters?.claim_type) params.set("claim_type", filters.claim_type);
+  if (filters?.confidence_level) params.set("confidence_level", filters.confidence_level);
+  if (filters?.search) params.set("search", filters.search);
+
+  const qs = params.toString();
+  const url = `/api/v1/regulatory/rules${qs ? `?${qs}` : ""}`;
+  const response = await fetch(requestUrl(url), {
+    credentials: "include",
+    cache: "no-store",
+  });
+  return readJson<RegulatoryRuleSummary[]>(response);
+}
+
+export async function getRegulatoryRuleDetail(ruleId: string): Promise<RegulatoryRuleDetail> {
+  const response = await fetch(requestUrl(`/api/v1/regulatory/rules/${encodeURIComponent(ruleId)}`), {
+    credentials: "include",
+    cache: "no-store",
+  });
+  return readJson<RegulatoryRuleDetail>(response);
+}
+
+export async function getRuleBookChangelog(): Promise<RuleBookChangelogEntry[]> {
+  const response = await fetch(requestUrl("/api/v1/regulatory/changelog"), {
+    credentials: "include",
+    cache: "no-store",
+  });
+  return readJson<RuleBookChangelogEntry[]>(response);
+}
+
+export async function submitRuleReview(
+  ruleId: string,
+  payload: RuleReviewSubmissionRequest,
+): Promise<RegulatoryRuleDetail> {
+  const response = await fetch(requestUrl(`/api/v1/regulatory/rules/${encodeURIComponent(ruleId)}/review`), {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...csrfHeaders() },
+    body: JSON.stringify(payload),
+    credentials: "include",
+    cache: "no-store",
+  });
+  return readJson<RegulatoryRuleDetail>(response);
+}
+
+// ---------------------------------------------------------------------------
+// Chantier 8 — B2B Pilot Pack API
+// ---------------------------------------------------------------------------
+
+export async function getPilotOverview(): Promise<PilotOverviewResponse> {
+  const response = await fetch(requestUrl("/api/v1/pilot/overview"), {
+    credentials: "include",
+    cache: "no-store",
+  });
+  return readJson<PilotOverviewResponse>(response);
+}
+
+export async function getPreAuditReport(): Promise<PreAuditReportResponse> {
+  const response = await fetch(requestUrl("/api/v1/pilot/pre-audit-report"), {
+    credentials: "include",
+    cache: "no-store",
+  });
+  return readJson<PreAuditReportResponse>(response);
+}
+
+export async function importPilotCatalog(
+  items: CatalogImportItem[],
+): Promise<CatalogImportResult> {
+  const response = await fetch(requestUrl("/api/v1/pilot/import-catalog"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...csrfHeaders() },
+    body: JSON.stringify({ items }),
+    credentials: "include",
+    cache: "no-store",
+  });
+  return readJson<CatalogImportResult>(response);
+}
+
+export async function exportPilotDossier(): Promise<Record<string, unknown>> {
+  const response = await fetch(requestUrl("/api/v1/pilot/export-dossier"), {
+    credentials: "include",
+    cache: "no-store",
+  });
+  return readJson<Record<string, unknown>>(response);
+}
+
+export async function getRetentionPolicy(): Promise<RetentionPolicyResponse> {
+  const response = await fetch(requestUrl("/api/v1/pilot/retention-policy"), {
+    credentials: "include",
+    cache: "no-store",
+  });
+  return readJson<RetentionPolicyResponse>(response);
+}
+
+// ---------------------------------------------------------------------------
+// Chantier 9 — Enterprise Industrialization API
+// ---------------------------------------------------------------------------
+
+export async function createApiKey(
+  payload: ApiKeyCreateRequest,
+): Promise<ApiKeyCreatedResponse> {
+  const response = await fetch(requestUrl("/api/v1/enterprise/api-keys"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...csrfHeaders() },
+    body: JSON.stringify(payload),
+    credentials: "include",
+    cache: "no-store",
+  });
+  return readJson<ApiKeyCreatedResponse>(response);
+}
+
+export async function listApiKeys(): Promise<ApiKeySummary[]> {
+  const response = await fetch(requestUrl("/api/v1/enterprise/api-keys"), {
+    credentials: "include",
+    cache: "no-store",
+  });
+  return readJson<ApiKeySummary[]>(response);
+}
+
+export async function revokeApiKey(keyId: string): Promise<void> {
+  const response = await fetch(requestUrl(`/api/v1/enterprise/api-keys/${encodeURIComponent(keyId)}`), {
+    method: "DELETE",
+    headers: csrfHeaders(),
+    credentials: "include",
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(errorText || `Échec de révocation de la clé (${response.status})`);
+  }
+}
+
+export async function getEnterpriseMetrics(): Promise<EnterpriseMetricsResponse> {
+  const response = await fetch(requestUrl("/api/v1/enterprise/metrics"), {
+    credentials: "include",
+    cache: "no-store",
+  });
+  return readJson<EnterpriseMetricsResponse>(response);
+}
+
+export async function getEnterpriseAlerts(): Promise<EnterpriseAlert[]> {
+  const response = await fetch(requestUrl("/api/v1/enterprise/alerts"), {
+    credentials: "include",
+    cache: "no-store",
+  });
+  return readJson<EnterpriseAlert[]>(response);
+}
+
+export async function createLegalHold(
+  payload: LegalHoldRequest,
+): Promise<LegalHoldResponse> {
+  const response = await fetch(requestUrl("/api/v1/enterprise/legal-holds"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...csrfHeaders() },
+    body: JSON.stringify(payload),
+    credentials: "include",
+    cache: "no-store",
+  });
+  return readJson<LegalHoldResponse>(response);
+}
+
+export async function listLegalHolds(): Promise<LegalHoldResponse[]> {
+  const response = await fetch(requestUrl("/api/v1/enterprise/legal-holds"), {
+    credentials: "include",
+    cache: "no-store",
+  });
+  return readJson<LegalHoldResponse[]>(response);
+}
+
+// ---------------------------------------------------------------------------
+// Chantier 10 — Regulatory PDF Reporting & Opposable Dossier
+// ---------------------------------------------------------------------------
+
+export async function downloadPdfReport(
+  report: RegulatoryAuditResponse,
+  options?: PdfExportOptions,
+): Promise<void> {
+  const response = await fetch(requestUrl("/api/v1/reports/pdf"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...csrfHeaders() },
+    body: JSON.stringify({
+      evaluation_response: report,
+      document_title: options?.document_title || "Rapport d'Audit Pré-Réglementaire Allégations",
+      product_identifier: options?.product_identifier || "SKU-PROD-001",
+      surface: options?.surface || "packaging",
+      include_evidence_matrix: options?.include_evidence_matrix ?? true,
+      include_remediation_clauses: options?.include_remediation_clauses ?? true,
+    }),
+    credentials: "include",
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(errorText || `Échec de génération du PDF (${response.status})`);
+  }
+  const blob = await response.blob();
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `rapport-pre-audit-${new Date().toISOString().slice(0, 10)}.pdf`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  window.URL.revokeObjectURL(url);
+}
+
+export async function downloadDossierPack(
+  report: RegulatoryAuditResponse,
+  options?: PdfExportOptions,
+): Promise<void> {
+  const response = await fetch(requestUrl("/api/v1/reports/dossier"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...csrfHeaders() },
+    body: JSON.stringify({
+      evaluation_response: report,
+      document_title: options?.document_title || "Dossier Probatoire Réglementaire",
+      product_identifier: options?.product_identifier || "SKU-PROD-001",
+      surface: options?.surface || "packaging",
+    }),
+    credentials: "include",
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(errorText || `Échec de génération du dossier ZIP (${response.status})`);
+  }
+  const blob = await response.blob();
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `dossier-probatoire-${new Date().toISOString().slice(0, 10)}.zip`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  window.URL.revokeObjectURL(url);
+}
+
+// ---------------------------------------------------------------------------
+// Chantier 11 — Tamper-Evident Audit Chain & Ledger Integrity API
+// ---------------------------------------------------------------------------
+
+export async function listAuditEvents(params?: {
+  entity_type?: string;
+  action?: string;
+  limit?: number;
+}): Promise<AuditEventLog[]> {
+  const q = new URLSearchParams();
+  if (params?.entity_type) q.set("entity_type", params.entity_type);
+  if (params?.action) q.set("action", params.action);
+  if (params?.limit) q.set("limit", String(params.limit));
+
+  const endpoint = `/api/v1/audit/events${q.toString() ? `?${q.toString()}` : ""}`;
+  const response = await fetch(requestUrl(endpoint), {
+    credentials: "include",
+    cache: "no-store",
+  });
+  return readJson<AuditEventLog[]>(response);
+}
+
+export async function verifyAuditChain(): Promise<AuditChainVerification> {
+  const response = await fetch(requestUrl("/api/v1/audit/verify"), {
+    credentials: "include",
+    cache: "no-store",
+  });
+  return readJson<AuditChainVerification>(response);
+}
+
+export async function getAuditIntegrityCertificate(): Promise<AuditIntegrityCertificate> {
+  const response = await fetch(requestUrl("/api/v1/audit/integrity-certificate"), {
+    credentials: "include",
+    cache: "no-store",
+  });
+  return readJson<AuditIntegrityCertificate>(response);
+}
+
+
+
+
+
+
+

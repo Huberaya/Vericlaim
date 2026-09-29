@@ -1,3 +1,5 @@
+import { useState } from "react";
+import { downloadDossierPack, downloadPdfReport } from "@/lib/api";
 import type { ApiDecimal, RegulatoryAuditResponse } from "@/lib/types";
 
 const COMPLIANCE_LABEL: Record<RegulatoryAuditResponse["overall_compliance"], string> = {
@@ -36,6 +38,9 @@ type Props = {
 };
 
 export default function LegalScoreCard({ report }: Props) {
+  const [isExportingPdf, setIsExportingPdf] = useState(false);
+  const [isExportingZip, setIsExportingZip] = useState(false);
+
   if (!report) {
     return (
       <section className="surface-card score-card score-card-empty" aria-labelledby="score-title">
@@ -144,6 +149,44 @@ export default function LegalScoreCard({ report }: Props) {
       <div className="score-footer">
         <span>{report.detected_claims_count} allégation(s) détectée(s)</span>
         <span>{report.violations_count} constat(s) juridique(s) retenu(s)</span>
+      </div>
+
+      <div className="mt-4 pt-3 border-t border-slate-200 dark:border-slate-800 flex flex-wrap gap-2">
+        <button
+          type="button"
+          disabled={isExportingPdf}
+          onClick={async () => {
+            setIsExportingPdf(true);
+            try {
+              await downloadPdfReport(report);
+            } catch (err: unknown) {
+              alert(err instanceof Error ? err.message : "Erreur de téléchargement PDF");
+            } finally {
+              setIsExportingPdf(false);
+            }
+          }}
+          className="flex-1 inline-flex items-center justify-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-2 text-xs font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-50 transition"
+        >
+          <span>📄</span> {isExportingPdf ? "Génération PDF..." : "Exporter Rapport PDF"}
+        </button>
+
+        <button
+          type="button"
+          disabled={isExportingZip}
+          onClick={async () => {
+            setIsExportingZip(true);
+            try {
+              await downloadDossierPack(report);
+            } catch (err: unknown) {
+              alert(err instanceof Error ? err.message : "Erreur d'export du dossier ZIP");
+            } finally {
+              setIsExportingZip(false);
+            }
+          }}
+          className="flex-1 inline-flex items-center justify-center gap-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-700 dark:text-slate-200 shadow-sm hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-50 transition"
+        >
+          <span>📦</span> {isExportingZip ? "Archivage..." : "Pack Probatoire ZIP"}
+        </button>
       </div>
     </section>
   );

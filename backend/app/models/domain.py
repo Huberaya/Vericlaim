@@ -794,6 +794,13 @@ class Evidence(UUIDPrimaryKeyMixin, TimestampMixin, TenantScopedMixin, SoftDelet
         Uuid(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
 
+    document_version: Mapped[DocumentVersion | None] = relationship(foreign_keys=[document_version_id])
+    certificate: Mapped[Certificate | None] = relationship(foreign_keys=[certificate_id])
+    supplier: Mapped[Supplier | None] = relationship(foreign_keys=[supplier_id])
+    product: Mapped[Product | None] = relationship(foreign_keys=[product_id])
+    verified_by_user: Mapped[User | None] = relationship(foreign_keys=[verified_by_user_id])
+    evidence_links: Mapped[list[EvidenceLink]] = relationship(back_populates="evidence", cascade="all, delete-orphan")
+
     __table_args__ = (
         CheckConstraint(
             "expires_on IS NULL OR issued_on IS NULL OR expires_on >= issued_on",
@@ -1033,6 +1040,8 @@ class EvidenceLink(UUIDPrimaryKeyMixin, TimestampMixin, TenantScopedMixin, Base)
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     claim: Mapped[Claim] = relationship(back_populates="evidence_links")
+    evidence: Mapped[Evidence] = relationship(back_populates="evidence_links", foreign_keys=[evidence_id])
+    reviewed_by_user: Mapped[User | None] = relationship(foreign_keys=[reviewed_by_user_id])
 
     __table_args__ = (
         UniqueConstraint("claim_id", "evidence_id", name="uq_evidence_links_claim_evidence"),
@@ -1221,6 +1230,8 @@ class Validation(UUIDPrimaryKeyMixin, TimestampMixin, TenantScopedMixin, Base):
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     analysis_version: Mapped[AnalysisVersion] = relationship(back_populates="validations")
+    claim: Mapped[Claim | None] = relationship(foreign_keys=[claim_id])
+    reviewer_user: Mapped[User | None] = relationship(foreign_keys=[reviewer_user_id])
 
 
 class Report(UUIDPrimaryKeyMixin, TimestampMixin, TenantScopedMixin, Base):
@@ -1276,6 +1287,11 @@ class EvidenceRequest(UUIDPrimaryKeyMixin, TimestampMixin, TenantScopedMixin, So
         Uuid(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
 
+    supplier: Mapped[Supplier] = relationship(foreign_keys=[supplier_id])
+    product: Mapped[Product | None] = relationship(foreign_keys=[product_id])
+    claim: Mapped[Claim | None] = relationship(foreign_keys=[claim_id])
+    created_by_user: Mapped[User | None] = relationship(foreign_keys=[created_by_user_id])
+
 
 class AuditEvent(UUIDPrimaryKeyMixin, TimestampMixin, TenantScopedMixin, Base):
     """Append-only business audit event. Hash chaining is per organization."""
@@ -1305,3 +1321,36 @@ class AuditEvent(UUIDPrimaryKeyMixin, TimestampMixin, TenantScopedMixin, Base):
         ),
         Index("ix_audit_events_organization_occurred", "organization_id", "occurred_at"),
     )
+
+
+class ApiKey(UUIDPrimaryKeyMixin, TimestampMixin, TenantScopedMixin, Base):
+    """B2B Partner & Enterprise programmatic access key with rate limits."""
+
+    __tablename__ = "api_keys"
+
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    prefix: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    key_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    scopes_json: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    rate_limit_per_minute: Mapped[int] = mapped_column(Integer, nullable=False, default=120)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_by_user_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+
+class LegalHold(UUIDPrimaryKeyMixin, TimestampMixin, TenantScopedMixin, Base):
+    """E-Discovery and forensic legal hold lock preventing data deletion during litigation or official inquiry."""
+
+    __tablename__ = "legal_holds"
+
+    case_reference: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_by_user_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
