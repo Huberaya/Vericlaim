@@ -42,12 +42,18 @@ from app.identity.roles import ensure_system_roles
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    create_tables()
-    # Alembic seeds shared databases; this keeps explicit local/test schemas
-    # equivalent without overwriting existing role permissions.
-    with SessionLocal() as db:
-        ensure_system_roles(db)
-        db.commit()
+    try:
+        create_tables()
+        # Alembic seeds shared databases; this keeps explicit local/test schemas
+        # equivalent without overwriting existing role permissions.
+        with SessionLocal() as db:
+            ensure_system_roles(db)
+            db.commit()
+    except Exception as exc:
+        if settings.is_production_like:
+            raise
+        import logging
+        logging.getLogger("uvicorn.error").warning("Database startup initialization deferred/failed: %s", exc)
     yield
 
 
