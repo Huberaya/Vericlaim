@@ -162,6 +162,13 @@ def get_settings() -> Settings:
                 "refusing the SQLite development default."
             )
         database_url = "sqlite:///./vericlaim.db"
+    else:
+        # Normalize postgres / postgresql connection strings to use psycopg (v3) driver
+        if database_url.startswith("postgres://"):
+            database_url = "postgresql+psycopg://" + database_url[len("postgres://"):]
+        elif database_url.startswith("postgresql://") and not database_url.startswith("postgresql+"):
+            database_url = "postgresql+psycopg://" + database_url[len("postgresql://"):]
+
     if is_production_like and not database_url.startswith(("postgresql://", "postgresql+")):
         raise RuntimeError(
             "DATABASE_URL must use PostgreSQL in staging/production so tenant RLS is enforceable."
