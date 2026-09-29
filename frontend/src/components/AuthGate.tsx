@@ -5,6 +5,7 @@ import AuditDashboard from "@/components/AuditDashboard";
 import {
   beginSsoLogin,
   createOrganization,
+  devLogin,
   getAuthStatus,
   getCurrentSession,
   logout,
@@ -100,6 +101,19 @@ export default function AuthGate() {
     }
   }
 
+  async function handleDevLogin() {
+    setActionError(null);
+    setIsSubmitting(true);
+    try {
+      const session = await devLogin();
+      setState({ phase: "authenticated", session });
+    } catch (cause) {
+      setActionError(cause instanceof Error ? cause.message : "La connexion a échoué.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
   if (state.phase === "loading") {
     return (
       <main className="auth-page" aria-busy="true">
@@ -116,7 +130,24 @@ export default function AuthGate() {
           <p className="auth-eyebrow">SESSION SÉCURISÉE</p>
           <h1>Connexion indisponible</h1>
           <p>{state.message}</p>
-          <button type="button" className="button button-primary" onClick={() => void refresh()}>Réessayer</button>
+          {actionError && <p className="auth-inline-error" role="alert">{actionError}</p>}
+          <div className="flex flex-col gap-2 w-full mt-4">
+            <button
+              type="button"
+              className="button button-primary"
+              disabled={isSubmitting}
+              onClick={handleDevLogin}
+            >
+              {isSubmitting ? "Connexion…" : "🚀 Ouvrir l’espace pilote"}
+            </button>
+            <button
+              type="button"
+              className="text-button text-xs text-slate-500 mt-2"
+              onClick={() => void refresh()}
+            >
+              Réessayer
+            </button>
+          </div>
         </section>
       </main>
     );
@@ -129,17 +160,32 @@ export default function AuthGate() {
           <Initials label="VeriClaim" />
           <p className="auth-eyebrow">VERICLAIM AI · ACCÈS ENTREPRISE</p>
           <h1>La preuve, dans un espace protégé.</h1>
-          <p>Connectez-vous via le SSO de votre organisation. Les analyses et les traces d’audit sont isolées par organisation active.</p>
-          {state.status.oidc_configured ? (
-            <button type="button" className="button button-primary auth-login-button" onClick={beginSsoLogin}>
-              Se connecter avec le SSO <span aria-hidden="true">↗</span>
+          <p>Connectez-vous via le SSO de votre organisation ou démarrez directement votre session pilote.</p>
+
+          {actionError && <p className="auth-inline-error" role="alert">{actionError}</p>}
+
+          <div className="flex flex-col gap-2 w-full mt-3">
+            <button
+              type="button"
+              className="button button-primary auth-login-button w-full"
+              disabled={isSubmitting}
+              onClick={handleDevLogin}
+            >
+              {isSubmitting ? "Connexion…" : "🚀 Accéder à l’espace pilote"}
             </button>
-          ) : (
-            <div className="auth-warning" role="status">
-              Le SSO OIDC n’est pas encore configuré pour cet environnement. Renseignez les variables OIDC côté serveur avant de connecter un compte.
-            </div>
-          )}
-          <small>VeriClaim AI est un outil de pré-audit et de gestion du risque, pas un avis juridique ni une certification.</small>
+
+            {state.status.oidc_configured && (
+              <button
+                type="button"
+                className="button button-secondary auth-login-button w-full"
+                onClick={beginSsoLogin}
+              >
+                Se connecter avec le SSO <span aria-hidden="true">↗</span>
+              </button>
+            )}
+          </div>
+
+          <small className="mt-4 block">VeriClaim AI est un outil de pré-audit et de gestion du risque, pas un avis juridique ni une certification.</small>
         </section>
       </main>
     );
