@@ -1353,4 +1353,3 @@ class LegalHold(UUIDPrimaryKeyMixin, TimestampMixin, TenantScopedMixin, Base):
     created_by_user_id: Mapped[UUID | None] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
-

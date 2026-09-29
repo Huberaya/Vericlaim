@@ -59,7 +59,7 @@ jobs:
         run: |
           set -euo pipefail
           DATABASE_URL='postgresql+psycopg://vericlaim@db.invalid:5432/vericlaim' \
-            AUTO_CREATE_SCHEMA=false python -m alembic heads | grep -Fx 'd3c8a6e1b409 (head)'
+            AUTO_CREATE_SCHEMA=false python -m alembic heads | grep -Fx 'e8f9a1b2c3d4 (head)'
           DATABASE_URL='postgresql+psycopg://vericlaim@db.invalid:5432/vericlaim' \
             AUTO_CREATE_SCHEMA=false python -m alembic upgrade head --sql > /tmp/vericlaim-alembic.sql
           grep -F 'ENABLE ROW LEVEL SECURITY' /tmp/vericlaim-alembic.sql >/dev/null

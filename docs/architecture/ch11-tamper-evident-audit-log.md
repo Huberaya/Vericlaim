@@ -44,7 +44,7 @@ CREATE TABLE audit_events (
     payload_sha256 VARCHAR(64) NOT NULL,
     previous_event_hash VARCHAR(64) NULL,
     event_hash VARCHAR(64) NOT NULL,
-    
+
     CONSTRAINT uq_audit_events_organization_hash UNIQUE (organization_id, event_hash),
     CONSTRAINT ck_audit_events_payload_sha256_length CHECK (length(payload_sha256) = 64),
     CONSTRAINT ck_audit_events_event_hash_length CHECK (length(event_hash) = 64),

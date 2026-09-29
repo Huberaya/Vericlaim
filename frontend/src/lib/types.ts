@@ -1143,10 +1143,3 @@ export type AuditIntegrityCertificate = {
   issuer: string;
   legal_disclaimer: string;
 };
-
-
-
-
-
-
-

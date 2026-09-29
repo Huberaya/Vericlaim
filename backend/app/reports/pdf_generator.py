@@ -351,7 +351,7 @@ class RegulatoryPdfReportGenerator:
         explanation = getattr(item.remediation, "buyer_explanation", "") if hasattr(item, "remediation") else ""
         if not explanation and hasattr(item, "reasoning_steps") and item.reasoning_steps:
             explanation = " · ".join([s.finding for s in item.reasoning_steps[:2]])
-        
+
         wrapped_exp = textwrap.wrap(explanation or "Conformité validée au regard des critères du Rule Book.", width=95)
         exp_y = self.current_y + 55
         for exp_line in wrapped_exp[:2]:

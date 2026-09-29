@@ -1023,10 +1023,3 @@ export async function getAuditIntegrityCertificate(): Promise<AuditIntegrityCert
   });
   return readJson<AuditIntegrityCertificate>(response);
 }
-
-
-
-
-
-
-

@@ -253,4 +253,3 @@ export default function PersistentAnalysisPanel({ version, canRun, supplierId = 
     </section>
   );
 }
-
