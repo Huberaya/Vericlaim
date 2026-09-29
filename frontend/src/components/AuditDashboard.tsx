@@ -4,8 +4,14 @@ import { useState } from "react";
 import CatalogPanel from "@/components/CatalogPanel";
 import ClaimHighlighter from "@/components/ClaimHighlighter";
 import DocumentUploader from "@/components/DocumentUploader";
+import EvidenceRegistryPanel from "@/components/EvidenceRegistryPanel";
+import { EvidenceRequestsListPanel } from "@/components/EvidenceRequestsListPanel";
 import LegalScoreCard from "@/components/LegalScoreCard";
+import { PilotExecutiveSummaryPanel } from "@/components/PilotExecutiveSummaryPanel";
+import { EnterpriseAdminPanel } from "@/components/EnterpriseAdminPanel";
+import { AuditTrailExplorer } from "@/components/AuditTrailExplorer";
 import ProofUploadModal from "@/components/ProofUploadModal";
+import { RegulatoryRulebookPanel } from "@/components/RegulatoryRulebookPanel";
 import RemediationModal from "@/components/RemediationModal";
 import SecureDocumentVault from "@/components/SecureDocumentVault";
 import { auditFile, auditText } from "@/lib/api";
@@ -170,9 +176,15 @@ export default function AuditDashboard({
         </a>
         <div className="sidebar-section-label">ESPACE DE TRAVAIL</div>
         <nav className="sidebar-nav" aria-label="Navigation principale">
+          <a className="sidebar-link" href="#pilot-summary"><span className="nav-icon">📊</span> Tableau de bord pilote</a>
           <a className="sidebar-link sidebar-link-active" href="#audit"><span className="nav-icon">◈</span> Audit des allégations<span className="nav-indicator" /></a>
           <a className="sidebar-link" href="#catalog"><span className="nav-icon">◫</span> Catalogue achats</a>
           <a className="sidebar-link" href="#documents"><span className="nav-icon">▣</span> Pièces fournisseurs</a>
+          <a className="sidebar-link" href="#evidence-registry"><span className="nav-icon">🛡️</span> Registre probatoire</a>
+          <a className="sidebar-link" href="#evidence-requests"><span className="nav-icon">✉️</span> Demandes fournisseurs</a>
+          <a className="sidebar-link" href="#regulatory-rulebook"><span className="nav-icon">⚖️</span> Référentiel réglementaire</a>
+          <a className="sidebar-link" href="#enterprise-admin"><span className="nav-icon">🏢</span> Administration Entreprise</a>
+          <a className="sidebar-link" href="#audit-ledger"><span className="nav-icon">🔒</span> Journal d&apos;Audit Scellé</a>
           <a className="sidebar-link" href="#results-title"><span className="nav-icon">⌘</span> Rapport d’analyse<span className="nav-count">08</span></a>
         </nav>
         <div className="sidebar-rule-card">
@@ -212,6 +224,13 @@ export default function AuditDashboard({
         </header>
 
         <div className="page-content" id="audit">
+          <section id="pilot-summary" aria-label="Synthèse Exécutive Pilote B2B" className="mb-8">
+            <PilotExecutiveSummaryPanel
+              key={`pilot-${activeMembership.organization.id}`}
+              canManageCatalog={activeMembership.role.permissions.includes("catalog:manage")}
+            />
+          </section>
+
           <section className="page-hero">
             <div>
               <div className="page-kicker"><span className="kicker-line" /> AUDIT RÉGLEMENTAIRE · FRANCE / UNION EUROPÉENNE</div>
@@ -268,6 +287,39 @@ export default function AuditDashboard({
             canReadCatalog={activeMembership.role.permissions.includes("catalog:read")}
             catalogRevision={catalogRevision}
           />
+
+          <section id="evidence-registry" aria-label="Registre probatoire">
+            <EvidenceRegistryPanel
+              key={`evidence-${activeMembership.organization.id}`}
+              canManage={activeMembership.role.permissions.includes("evidence:manage")}
+            />
+          </section>
+
+          <section id="evidence-requests" aria-label="Demandes de preuves fournisseurs" className="mt-8">
+            <EvidenceRequestsListPanel key={`requests-${activeMembership.organization.id}`} />
+          </section>
+
+          <section id="regulatory-rulebook" aria-label="Référentiel réglementaire et Rule Book" className="mt-8">
+            <RegulatoryRulebookPanel
+              key={`rules-${activeMembership.organization.id}`}
+              canManage={activeMembership.role.permissions.includes("rules:manage")}
+            />
+          </section>
+
+          <section id="enterprise-admin" aria-label="Administration Entreprise et Intégrations" className="mt-8">
+            <EnterpriseAdminPanel
+              key={`enterprise-${activeMembership.organization.id}`}
+              canManage={
+                activeMembership.role.permissions.includes("organization:manage") ||
+                activeMembership.role.code === "owner" ||
+                activeMembership.role.code === "admin"
+              }
+            />
+          </section>
+
+          <section id="audit-ledger" aria-label="Journal d'Audit Immuable et Scellement Cryptographique" className="mt-8">
+            <AuditTrailExplorer key={`audit-ledger-${activeMembership.organization.id}`} />
+          </section>
 
           <section className="surface-card results-card" aria-labelledby="results-title">
             <div className="results-header">

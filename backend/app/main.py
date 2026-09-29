@@ -7,13 +7,29 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.analyses import claims_router
 from app.api.v1.analyses import router as analyses_router
+from app.api.v1.audit import router as audit_router
 from app.api.v1.auth import router as auth_router
 from app.api.v1.catalog import product_router, supplier_router
 from app.api.v1.documents import router as documents_router
 from app.api.v1.documents import upload_router as document_upload_router
 from app.api.v1.documents import version_router as document_version_router
 from app.api.v1.endpoints import router as engine_router
+from app.api.v1.enterprise import router as enterprise_router
+from app.api.v1.evidence import (
+    analyses_evidence_router,
+    claims_evidence_router,
+    evidence_links_router,
+    router as evidence_router,
+)
 from app.api.v1.organizations import router as organizations_router
+from app.api.v1.pilot import router as pilot_router
+from app.api.v1.regulatory import router as regulatory_router
+from app.api.v1.reports import router as reports_router
+from app.api.v1.review import (
+    analysis_validations_router,
+    evidence_requests_router,
+    validations_router,
+)
 from app.core.config import settings
 from app.core.database import SessionLocal, create_tables
 from app.documents.scanner import build_malware_scanner
@@ -79,6 +95,18 @@ app.include_router(document_upload_router)
 app.include_router(document_version_router)
 app.include_router(analyses_router)
 app.include_router(claims_router)
+app.include_router(evidence_router)
+app.include_router(evidence_links_router)
+app.include_router(claims_evidence_router)
+app.include_router(analyses_evidence_router)
+app.include_router(validations_router)
+app.include_router(analysis_validations_router)
+app.include_router(evidence_requests_router)
+app.include_router(regulatory_router)
+app.include_router(pilot_router)
+app.include_router(enterprise_router)
+app.include_router(reports_router)
+app.include_router(audit_router)
 app.include_router(engine_router)
 
 

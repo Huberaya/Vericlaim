@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import EvidenceMatrixModal from "@/components/EvidenceMatrixModal";
+import { HumanReviewModal } from "@/components/HumanReviewModal";
 import {
   createIdempotencyKey,
   createPersistentAnalysis,
@@ -8,6 +10,7 @@ import {
   retryPersistentAnalysis,
 } from "@/lib/api";
 import type {
+  PersistentAnalysisDetail,
   PersistentAnalysisEnqueueResponse,
   PersistentAnalysisStatus,
   PersistentAnalysisVersionDetail,
@@ -34,11 +37,11 @@ const STATUS_COPY: Record<PersistentAnalysisStatus, { label: string; detail: str
     detail: "Le worker recherche les motifs lexicaux citables sans qualification juridique.",
     tone: "running",
   },
-  checking_evidence: { label: "Hors périmètre", detail: "Aucun rapprochement de preuve n’est exécuté dans ce parcours.", tone: "pending" },
-  scoring: { label: "Hors périmètre", detail: "Aucun score juridique n’est calculé dans ce parcours.", tone: "pending" },
+  checking_evidence: { label: "Vérification des preuves", detail: "Rapprochement probatoire en cours.", tone: "running" },
+  scoring: { label: "Évaluation du risque", detail: "Calcul des indices de risque explicables.", tone: "running" },
   completed: {
-    label: "Passages citables persistés",
-    detail: "Les passages détectés, leurs offsets, leur page et leur empreinte source sont consultables ci-dessous.",
+    label: "Allégations & Preuves persistées",
+    detail: "Les passages détectés, preuves associées et matrice de couverture sont consultables.",
     tone: "completed",
   },
   failed: {
@@ -60,6 +63,8 @@ export default function PersistentAnalysisPanel({ version, canRun, supplierId = 
   const [isRetrying, setIsRetrying] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [refreshError, setRefreshError] = useState<string | null>(null);
+  const [isMatrixOpen, setIsMatrixOpen] = useState(false);
+  const [isReviewOpen, setIsReviewOpen] = useState(false);
 
   const currentAnalysis = detail?.analysis ?? queued?.analysis ?? null;
   const currentVersion = detail?.version ?? queued?.version ?? null;
@@ -74,6 +79,8 @@ export default function PersistentAnalysisPanel({ version, canRun, supplierId = 
     setRefreshError(null);
     setIsStarting(false);
     setIsRetrying(false);
+    setIsMatrixOpen(false);
+    setIsReviewOpen(false);
   }, [version.id]);
 
   useEffect(() => {
@@ -140,9 +147,9 @@ export default function PersistentAnalysisPanel({ version, canRun, supplierId = 
     <section className="persistent-analysis" aria-label="Analyse persistante des allégations">
       <div className="persistent-analysis-heading">
         <div>
-          <span className="persistent-analysis-eyebrow">03 · ANALYSE PERSISTANTE</span>
-          <strong>Détecter les allégations citables</strong>
-          <p>Réutilise les segments extraits de cette version ; aucun fichier n’est renvoyé au navigateur ou au moteur prototype.</p>
+          <span className="persistent-analysis-eyebrow">03 · ANALYSE PERSISTANTE & PREUVES</span>
+          <strong>Détecter les allégations et qualifier les preuves</strong>
+          <p>Réutilise les segments extraits de cette version et permet le rapprochement avec le registre probatoire.</p>
         </div>
         {!currentVersion && canRun && (
           <button type="button" className="button button-primary persistent-analysis-action" disabled={isStarting} onClick={() => void start()}>
@@ -175,6 +182,27 @@ export default function PersistentAnalysisPanel({ version, canRun, supplierId = 
             <span><small>MANIFESTE D’ENTRÉE</small><strong title={detail.version.input_manifest_sha256}>{shortHash(detail.version.input_manifest_sha256)}</strong></span>
             <span><small>RÉSULTAT SHA-256</small><strong title={detail.version.result_sha256 || undefined}>{shortHash(detail.version.result_sha256)}</strong></span>
           </div>
+
+          <div className="my-3 flex flex-wrap justify-between items-center gap-2 p-3 bg-slate-900 border border-slate-800 rounded-lg">
+            <span className="text-xs text-slate-300 font-medium">Contrôles Probatoires &amp; Arbitrage :</span>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setIsMatrixOpen(true)}
+                className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-600 text-white rounded text-xs font-semibold flex items-center gap-1.5 shadow transition"
+              >
+                <span>📊</span> Matrice Allégation ↔ Preuve
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsReviewOpen(true)}
+                className="px-3 py-1.5 bg-indigo-700 hover:bg-indigo-600 text-white rounded text-xs font-semibold flex items-center gap-1.5 shadow transition"
+              >
+                <span>⚖️</span> Arbitrage &amp; Validations (Chantier 6.3)
+              </button>
+            </div>
+          </div>
+
           <div className="persistent-analysis-claims">
             {detail.claims.length === 0 ? (
               <p className="persistent-analysis-empty"><strong>Aucun motif du lexique n’a été détecté.</strong> Cette absence ne garantit pas l’absence d’allégation dans le document.</p>
@@ -199,7 +227,29 @@ export default function PersistentAnalysisPanel({ version, canRun, supplierId = 
           {isRetrying ? "Nouvelle version en file…" : "Créer une nouvelle version"}
         </button>
       )}
-      <p className="persistent-analysis-disclaimer">Détection déterministe uniquement : pas de verdict réglementaire, score juridique, rapprochement de preuve, recommandation, LLM ou RAG.</p>
+
+      {/* Evidence Matrix Modal */}
+      {isMatrixOpen && currentAnalysis && currentVersion && (
+        <EvidenceMatrixModal
+          analysisId={currentAnalysis.id}
+          versionNumber={currentVersion.version_number}
+          canManage={canRun}
+          onClose={() => setIsMatrixOpen(false)}
+        />
+      )}
+
+      {/* Human Review & Validations Modal */}
+      {isReviewOpen && currentAnalysis && currentVersion && (
+        <HumanReviewModal
+          analysisId={currentAnalysis.id}
+          versionNumber={currentVersion.version_number}
+          claims={detail?.claims || []}
+          isOpen={isReviewOpen}
+          onClose={() => setIsReviewOpen(false)}
+        />
+      )}
+
+      <p className="persistent-analysis-disclaimer">Détection déterministe et qualification probatoire : traçabilité des pièces sans avis d'autorité ni décision juridique automatique.</p>
     </section>
   );
 }

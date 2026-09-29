@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta, timezone
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 import jwt
@@ -82,6 +82,7 @@ def test_cors_preflight_allows_the_csrf_header_for_the_local_frontend():
 def test_authenticated_analysis_is_scoped_and_hash_chained_per_organization():
     from app.main import app
 
+    suffix = uuid4().hex[:8]
     with TestClient(app) as client:
         first_identity = authenticate_client(client, role_code="owner")
         first_response = client.post("/api/v1/engine/evaluate", json=ENGINE_PAYLOAD)
@@ -90,7 +91,7 @@ def test_authenticated_analysis_is_scoped_and_hash_chained_per_organization():
 
         create_second_org = client.post(
             "/api/v1/organizations",
-            json={"name": "Deuxième organisation de test"},
+            json={"name": f"Deuxième organisation de test {suffix}"},
         )
         assert create_second_org.status_code == 201, create_second_org.text
         second_organization_id = UUID(create_second_org.json()["organization"]["id"])
@@ -122,14 +123,18 @@ def test_authenticated_analysis_is_scoped_and_hash_chained_per_organization():
 def test_organization_onboarding_and_member_rbac_are_enforced():
     from app.main import app
 
+    suffix = uuid4().hex[:8]
     with TestClient(app) as client:
         authenticate_client_without_membership(client)
         assert client.get("/api/v1/organizations/current").status_code == 409
 
-        created = client.post("/api/v1/organizations", json={"name": "Atelier RSE", "slug": "atelier-rse"})
+        created = client.post(
+            "/api/v1/organizations",
+            json={"name": f"Atelier RSE {suffix}", "slug": f"atelier-rse-{suffix}"},
+        )
         assert created.status_code == 201, created.text
         assert created.json()["role"]["code"] == "owner"
-        assert client.get("/api/v1/organizations/current").json()["slug"] == "atelier-rse"
+        assert client.get("/api/v1/organizations/current").json()["slug"] == f"atelier-rse-{suffix}"
 
         invitation = client.post(
             "/api/v1/organizations/current/members/invitations",
