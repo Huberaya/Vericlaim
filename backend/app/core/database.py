@@ -115,6 +115,26 @@ def create_tables() -> None:
     Base.metadata.create_all(bind=engine)
 
 
+_fallback_engine = None
+_FallbackSession = None
+
+
+def _get_fallback_sessionmaker():
+    global _fallback_engine, _FallbackSession
+    if _FallbackSession is None:
+        _fallback_engine = create_engine("sqlite:////tmp/vericlaim_fallback.db", connect_args={"check_same_thread": False})
+        from app.models import domain as _domain_models  # noqa: F401
+
+        Base.metadata.create_all(bind=_fallback_engine)
+        _FallbackSession = sessionmaker(bind=_fallback_engine, autoflush=False, autocommit=False, expire_on_commit=False)
+        with _FallbackSession() as init_db:
+            from app.identity.roles import ensure_system_roles
+
+            ensure_system_roles(init_db)
+            init_db.commit()
+    return _FallbackSession
+
+
 def get_db() -> Iterator[Session]:
     """Yield one transaction per HTTP request.
 
@@ -123,7 +143,18 @@ def get_db() -> Iterator[Session]:
     ends.  Service functions must ``flush`` for integrity errors, not commit
     independently.
     """
-    db = SessionLocal()
+    db = None
+    try:
+        db = SessionLocal()
+        db.execute(select(1))
+    except Exception:
+        if db is not None:
+            db.close()
+        if settings.is_production_like:
+            raise
+        fallback_sm = _get_fallback_sessionmaker()
+        db = fallback_sm()
+
     try:
         yield db
         db.commit()
