@@ -4,6 +4,7 @@ import hmac
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.v1.presenters import present_membership, present_user
@@ -15,6 +16,7 @@ from app.identity.dependencies import (
     require_csrf_authenticated_principal,
 )
 from app.identity.oidc import OidcProtocolError, build_login_transaction
+from app.identity.roles import ensure_system_roles
 from app.identity.security import (
     CSRF_COOKIE_NAME,
     OIDC_TRANSACTION_COOKIE_NAME,
@@ -30,6 +32,7 @@ from app.identity.security import (
 )
 from app.identity.service import (
     AuthorizationInvariantError,
+    CurrentSession,
     IdentityConflictError,
     IdentityNotFoundError,
     append_audit_event,
@@ -40,6 +43,7 @@ from app.identity.service import (
     set_active_organization,
     set_db_request_context,
 )
+from app.models.domain import Membership, MembershipStatus, Organization, Role, User, UserStatus
 from app.models.identity_schemas import (
     ActiveOrganizationRequest,
     AuthMeResponse,
@@ -179,3 +183,63 @@ def switch_active_organization(
     except IdentityNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     return present_membership(membership)
+
+
+@router.post("/dev-login", response_model=AuthMeResponse)
+def dev_login(
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+) -> AuthMeResponse:
+    """Allow immediate developer/pilot session creation when OIDC is not yet connected."""
+    user = db.scalar(select(User).where(User.email == "pilote@vericlaim.ai"))
+    if not user:
+        user = User(
+            email="pilote@vericlaim.ai",
+            display_name="Responsable Conformité",
+            status=UserStatus.ACTIVE,
+            identity_provider="https://local.vericlaim.ai",
+            external_subject="pilot-admin-user",
+        )
+        db.add(user)
+        db.flush()
+
+    memberships = list_active_memberships(db, user.id)
+    if not memberships:
+        org = Organization(name="Organisation Pilote VeriClaim", slug="org-pilote-vericlaim")
+        db.add(org)
+        db.flush()
+        ensure_system_roles(db)
+        admin_role = (
+            db.scalar(select(Role).where(Role.code == "owner"))
+            or db.scalar(select(Role).where(Role.code == "admin"))
+        )
+        membership = Membership(
+            organization_id=org.id,
+            user_id=user.id,
+            role_id=admin_role.id,
+            status=MembershipStatus.ACTIVE,
+        )
+        db.add(membership)
+        db.flush()
+        memberships = list_active_memberships(db, user.id)
+
+    raw_session_token, raw_csrf_token, auth_session = create_auth_session(
+        db,
+        user=user,
+        settings=settings,
+        request_user_agent=request.headers.get("User-Agent"),
+    )
+    if memberships and not auth_session.active_organization_id:
+        set_active_organization(db, CurrentSession(session=auth_session, user=user), memberships[0].organization.id)
+
+    response.set_cookie(SESSION_COOKIE_NAME, raw_session_token, **session_cookie_kwargs(settings))
+    response.set_cookie(CSRF_COOKIE_NAME, raw_csrf_token, **csrf_cookie_kwargs(settings))
+    response.headers["Cache-Control"] = "no-store"
+
+    updated_memberships = list_active_memberships(db, user.id)
+    return AuthMeResponse(
+        user=present_user(user),
+        active_organization_id=auth_session.active_organization_id or (updated_memberships[0].organization.id if updated_memberships else None),
+        memberships=[present_membership(view) for view in updated_memberships],
+    )

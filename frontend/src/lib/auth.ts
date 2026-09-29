@@ -71,3 +71,14 @@ export async function switchActiveOrganization(organizationId: string): Promise<
   if (!response.ok) throw new Error(await errorMessage(response));
   return (await response.json()) as OrganizationMembership;
 }
+
+export async function devLogin(): Promise<AuthSession> {
+  const response = await fetch(requestUrl("/api/v1/auth/dev-login"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    cache: "no-store",
+  });
+  if (!response.ok) throw new Error(await errorMessage(response));
+  return (await response.json()) as AuthSession;
+}
