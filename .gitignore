@@ -32,3 +32,5 @@ coverage/
 .idea/
 .vscode/
 .config/
+.cache/
+.npm/

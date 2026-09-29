@@ -123,13 +123,12 @@ function parisDate(): string {
 }
 
 export function requestUrl(path: string): string {
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
   if (typeof window !== "undefined") {
-    const host = window.location.hostname.toLowerCase();
-    const isLocalHost = host === "localhost" || host === "127.0.0.1" || host === "::1";
-    // The Next rewrite proxies preview/non-local requests, avoiding browser calls to localhost.
-    if (!isLocalHost) return path;
+    return normalizedPath;
   }
-  return `${API_BASE_URL}${path}`;
+  const base = (process.env.BACKEND_URL || process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000").replace(/\/+$/, "");
+  return `${base}${normalizedPath}`;
 }
 
 function buildContext(context?: Partial<AuditContext>): AuditContext {
