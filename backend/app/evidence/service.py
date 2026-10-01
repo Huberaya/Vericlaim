@@ -21,8 +21,15 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.catalog.service import get_product, get_supplier
+from app.evidence.coverage import (
+    OBSERVED_STATE_TO_EVIDENCE_STATUS,
+    coverage_for_analysis_version,
+    examine_evidence,
+    observed_state,
+)
 from app.core.database import sha256_json
 from app.identity.service import append_audit_event
+from app.models.legal_types import ClaimType
 from app.models.domain import (
     Analysis,
     AnalysisVersion,
@@ -512,8 +519,67 @@ def link_claim_evidence(
     eval_date = validity_as_of or today_date()
     computed_status, auto_rationale = _compute_deterministic_rationale(claim, evidence, eval_date)
 
-    final_coverage = coverage_status or computed_status
+    # C17 — le rattachement applique **le même examen** que la lecture de couverture,
+    # et il cesse d'écrire une décision de machine dans la colonne des déclarations.
+    #
+    # Deux défauts mesurés :
+    #
+    # 1. Deux calculs coexistaient. Celui d'ici ne regardait que la date du jour, le type
+    #    de preuve et un périmètre en texte libre ; celui de `app.evidence.coverage` compare
+    #    le produit réel, le fournisseur, la famille d'allégation et la date choisie. Un
+    #    certificat d'un **autre produit** était donc enregistré « present », tandis que la
+    #    lecture de couverture le classait « out_of_scope ». Deux vérités pour une pièce.
+    #
+    # 2. Le statut calculé était écrit dans `coverage_status`, la même colonne où un
+    #    relecteur déclare sa décision. La lecture de couverture relisait ensuite cette
+    #    valeur comme une **déclaration humaine** (« declared_state ») et la retenait
+    #    comme la plus restrictive : le produit se contredisait lui-même, constatait
+    #    « covered » sur les faits et « partial » à cause de sa propre écriture. Le lien
+    #    n'écrit donc plus que ce qu'un humain déclare ; sans déclaration, il reste
+    #    `PENDING`, et le constat est rendu séparément (`observed_state`, motifs).
+    analysis = db.scalar(
+        select(Analysis)
+        .join(AnalysisVersion, AnalysisVersion.analysis_id == Analysis.id)
+        .where(
+            Analysis.organization_id == organization_id,
+            AnalysisVersion.organization_id == organization_id,
+            AnalysisVersion.id == claim.analysis_version_id,
+        )
+    )
+    observed_state_value: str | None = None
+    if analysis is not None:
+        try:
+            claim_family = ClaimType(claim.claim_type)
+        except ValueError:
+            claim_family = None
+        observed = examine_evidence(
+            evidence,
+            as_of=eval_date,
+            claim_type=claim_family,
+            analysis_product_id=analysis.product_id,
+            analysis_supplier_id=analysis.supplier_id,
+        )
+        observed_state_value = observed_state(observed)
+        blocking = [
+            finding.message for finding in observed.findings if finding.severity == "blocking"
+        ]
+        examination = " ".join(blocking) if blocking else auto_rationale
+        if coverage_status is None:
+            # Aucune déclaration : le motif dit le constat, et rappelle qu'il n'y a pas eu
+            # de décision humaine sur ce lien.
+            auto_rationale = (
+                f"Constat de la pièce à la date d'évaluation ({eval_date.isoformat()}) : "
+                f"« {observed_state_value} ». {examination} "
+                "Aucune décision humaine n'a été déclarée sur ce rattachement."
+            )
+
+    # Le lien ne porte qu'une déclaration humaine — **une seule règle d'écriture**, ici.
+    # Sans déclaration, `PENDING`, jamais le verdict calculé : la valeur calculée relue comme
+    # une déclaration humaine plafonnait le constat (« covered » sur les faits, « partial »
+    # à cause de l'écriture du produit lui-même). Le constat vit dans `observed_state`.
+    final_coverage = coverage_status if coverage_status is not None else EvidenceStatus.PENDING
     final_rationale = rationale or auto_rationale
+    declared = coverage_status is not None
 
     existing = db.scalar(
         select(EvidenceLink).where(
@@ -529,8 +595,11 @@ def link_claim_evidence(
         existing.validity_as_of = eval_date
         existing.confidence_score = confidence_score
         existing.rationale = final_rationale
-        existing.reviewed_by_user_id = actor_user_id
-        existing.reviewed_at = utcnow()
+        # Un rattachement sans déclaration n'est pas une relecture : ne pas l'horodater
+        # comme telle. `reviewed_at` reste la trace d'une décision humaine.
+        if declared:
+            existing.reviewed_by_user_id = actor_user_id
+            existing.reviewed_at = utcnow()
         db.flush()
         append_audit_event(
             db,
@@ -539,9 +608,15 @@ def link_claim_evidence(
             entity_type="evidence_link",
             entity_id=existing.id,
             action="claim.evidence_link_updated",
-            payload={"claim_id": str(claim_id), "evidence_id": str(evidence_id), "coverage_status": final_coverage.value},
+            payload={
+                "claim_id": str(claim_id),
+                "evidence_id": str(evidence_id),
+                "declared_coverage_status": final_coverage.value if declared else None,
+                "observed_state": observed_state_value,
+            },
             request_id=request_id,
         )
+        existing.observed_state_value = observed_state_value
         return existing
 
     link = EvidenceLink(
@@ -554,8 +629,8 @@ def link_claim_evidence(
         validity_as_of=eval_date,
         confidence_score=confidence_score,
         rationale=final_rationale,
-        reviewed_by_user_id=actor_user_id,
-        reviewed_at=utcnow(),
+        reviewed_by_user_id=actor_user_id if declared else None,
+        reviewed_at=utcnow() if declared else None,
     )
     db.add(link)
     db.flush()
@@ -571,10 +646,12 @@ def link_claim_evidence(
             "claim_id": str(claim_id),
             "evidence_id": str(evidence_id),
             "relation": relation.value,
-            "coverage_status": final_coverage.value,
+            "declared_coverage_status": final_coverage.value if declared else None,
+            "observed_state": observed_state_value,
         },
         request_id=request_id,
     )
+    link.observed_state_value = observed_state_value  # présentation seule, non persisté
     return link
 
 
@@ -658,6 +735,61 @@ def unlink_claim_evidence(
     )
 
 
+def attach_observed_states(
+    db: Session,
+    *,
+    organization_id: UUID,
+    links: list[EvidenceLink],
+) -> None:
+    """Renseigne sur chaque lien le constat C17 de sa pièce (affichage seul, écriture nulle).
+
+    Le lien porte la **déclaration** d'un humain ; ce constat dit ce que l'examen de la pièce
+    observe. Les deux sont rendus côte à côte pour qu'une absence de décision ne se lise pas
+    comme une preuve acceptée — le défaut corrigé en C17.
+    """
+
+    contexts: dict[UUID, tuple[ClaimType | None, UUID | None, UUID | None]] = {}
+    for link in links:
+        claim = db.scalar(
+            select(Claim).where(
+                Claim.organization_id == organization_id,
+                Claim.id == link.claim_id,
+            )
+        )
+        if claim is None or link.evidence is None:
+            continue
+        key = claim.analysis_version_id
+        if key not in contexts:
+            analysis = db.scalar(
+                select(Analysis)
+                .join(AnalysisVersion, AnalysisVersion.analysis_id == Analysis.id)
+                .where(
+                    Analysis.organization_id == organization_id,
+                    AnalysisVersion.organization_id == organization_id,
+                    AnalysisVersion.id == key,
+                )
+            )
+            try:
+                family = ClaimType(claim.claim_type)
+            except ValueError:
+                family = None
+            contexts[key] = (
+                family,
+                analysis.product_id if analysis else None,
+                analysis.supplier_id if analysis else None,
+            )
+        family, product_id, supplier_id = contexts[key]
+        link.observed_state_value = observed_state(
+            examine_evidence(
+                link.evidence,
+                as_of=link.validity_as_of or today_date(),
+                claim_type=family,
+                analysis_product_id=product_id,
+                analysis_supplier_id=supplier_id,
+            )
+        )
+
+
 def list_claim_evidence_links(
     db: Session,
     *,
@@ -683,8 +815,18 @@ def get_analysis_evidence_matrix(
     organization_id: UUID,
     analysis_id: UUID,
     version_number: int | None = None,
+    as_of: date | None = None,
 ) -> tuple[Analysis, AnalysisVersion, list[ClaimEvidenceEvaluation]]:
-    """Aggregate full Claim ↔ Evidence matrix for an Analysis Version."""
+    """Vue historique : la couverture d'une version, présentée par allégation.
+
+    C17 — cette fonction recalculait la couverture selon **sa propre règle** (un lien marqué
+    « présent » suffisait ; une seule pièce périmée périmait toute l'allégation), en parallèle
+    de `app.evidence.coverage`. Deux règles pour une même question finissent par diverger :
+    la matrice et la lecture de couverture pouvaient annoncer deux états différents pour la
+    même pièce. La matrice délègue donc au calcul unique et se contente de le présenter dans
+    son format d'origine (`EvidenceStatus`).
+    """
+
     _require_tenant_context(db, organization_id)
 
     analysis = db.scalar(
@@ -710,64 +852,41 @@ def get_analysis_evidence_matrix(
     if version is None:
         raise EvidenceNotFoundError("Version d’analyse introuvable.")
 
-    claims = list(
-        db.scalars(
-            select(Claim)
-            .where(
-                Claim.organization_id == organization_id,
-                Claim.analysis_version_id == version.id,
-            )
-            .order_by(Claim.created_at.asc())
-        ).all()
-    )
+    links_by_claim: dict[UUID, list[EvidenceLink]] = {}
+    for link in db.scalars(
+        select(EvidenceLink)
+        .where(
+            EvidenceLink.organization_id == organization_id,
+            EvidenceLink.claim_id.in_(
+                select(Claim.id).where(
+                    Claim.organization_id == organization_id,
+                    Claim.analysis_version_id == version.id,
+                )
+            ),
+        )
+        .order_by(EvidenceLink.created_at.asc())
+    ).all():
+        links_by_claim.setdefault(link.claim_id, []).append(link)
 
     evaluations: list[ClaimEvidenceEvaluation] = []
-    for claim in claims:
-        links = list_claim_evidence_links(db, organization_id=organization_id, claim_id=claim.id)
-        if not links:
-            evaluations.append(
-                ClaimEvidenceEvaluation(
-                    claim_id=claim.id,
-                    coverage_status=EvidenceStatus.MISSING,
-                    is_sufficient=False,
-                    explanation="Aucun justificatif probatoire n’a été rattaché à cette allégation.",
-                    links=[],
-                )
-            )
-            continue
-
-        has_verified_or_present = any(
-            link.coverage_status in {EvidenceStatus.PRESENT, EvidenceStatus.VERIFIED}
-            and link.relation == EvidenceRelation.SUPPORTS
-            for link in links
-        )
-        has_expired = any(link.coverage_status == EvidenceStatus.EXPIRED for link in links)
-        has_partial = any(link.coverage_status == EvidenceStatus.PARTIAL for link in links)
-
-        if has_verified_or_present and not has_expired:
-            cov = EvidenceStatus.PRESENT
-            is_suff = True
-            expl = f"{len(links)} justificatif(s) fourni(s) et valide(s) à l’appui de l’allégation."
-        elif has_expired:
-            cov = EvidenceStatus.EXPIRED
-            is_suff = False
-            expl = "Au moins un justificatif associé est expiré ou invalide à la date de l’audit."
-        elif has_partial:
-            cov = EvidenceStatus.PARTIAL
-            is_suff = False
-            expl = "Justificatif partiel : le périmètre ou le standard ne couvre pas entièrement l’allégation."
-        else:
-            cov = links[0].coverage_status
-            is_suff = False
-            expl = links[0].rationale or "Couverture probatoire incomplète nécessitant une revue humaine."
-
+    for coverage in coverage_for_analysis_version(
+        db,
+        organization_id=organization_id,
+        analysis=analysis,
+        version=version,
+        as_of=as_of or today_date(),
+        with_suggestions=False,
+    ):
+        blocking = [
+            finding.message for finding in coverage.findings if finding.severity == "blocking"
+        ]
         evaluations.append(
             ClaimEvidenceEvaluation(
-                claim_id=claim.id,
-                coverage_status=cov,
-                is_sufficient=is_suff,
-                explanation=expl,
-                links=links,
+                claim_id=coverage.claim.id,
+                coverage_status=OBSERVED_STATE_TO_EVIDENCE_STATUS[coverage.state],
+                is_sufficient=coverage.is_sufficient,
+                explanation=blocking[0] if blocking else coverage.explanation,
+                links=links_by_claim.get(coverage.claim.id, []),
             )
         )
 

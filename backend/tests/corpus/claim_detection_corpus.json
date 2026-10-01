@@ -1,0 +1,688 @@
+{
+  "version": "2026-09-30.1",
+  "description": "Corpus de référence de détection lexicale (chantier C9). Les 15 cas A-O reprennent les documents construits pendant l'audit pré-lancement (textes reconstitués depuis le tableau du rapport d'audit §11.2); les autres cas sont des formulations courantes du marché et des formulations légitimes servant à mesurer le taux de faux positifs.",
+  "positive_cases": [
+    {
+      "id": "A",
+      "source": "audit",
+      "text": "Emballage 100 % de matière recyclée certifiée, évaluation du cycle de vie selon ISO 14044.",
+      "expected": [
+        "recyclable",
+        "certification"
+      ],
+      "audit_before": "0 détection"
+    },
+    {
+      "id": "B",
+      "source": "audit",
+      "text": "Ce produit est neutre en carbone et respectueux de l'environnement.",
+      "expected": [
+        "carbon_neutrality",
+        "nature_friendly"
+      ]
+    },
+    {
+      "id": "C",
+      "source": "audit",
+      "text": "Flacon recyclable, certifié FSC pour une partie seulement de la gamme.",
+      "expected": [
+        "recyclable",
+        "certification"
+      ],
+      "audit_before": "certificat ignoré"
+    },
+    {
+      "id": "D",
+      "source": "audit",
+      "text": "Détergent certifié ECOLABEL, dont le certificat est expiré, et emballage recyclable.",
+      "expected": [
+        "recyclable",
+        "certification"
+      ],
+      "audit_before": "certificat ignoré"
+    },
+    {
+      "id": "E",
+      "source": "audit",
+      "text": "Shampoing neutre en carbone, le certificat fourni concerne en réalité un détergent.",
+      "expected": [
+        "carbon_neutrality",
+        "certification"
+      ],
+      "audit_before": "certificat ignoré"
+    },
+    {
+      "id": "F",
+      "source": "audit",
+      "text": "Nous faisons des efforts pour la planète.",
+      "expected": [
+        "nature_friendly"
+      ],
+      "audit_before": "0 détection (jugé défendable)"
+    },
+    {
+      "id": "G",
+      "source": "audit",
+      "text": "Emballage recyclable. Produit neutre en carbone. Matière biodégradable.",
+      "expected": [
+        "recyclable",
+        "carbon_neutrality",
+        "biodegradable"
+      ]
+    },
+    {
+      "id": "H",
+      "source": "audit",
+      "text": "PRODUIT BIODÉGRADABLE. EMBALLAGE RECYCLABLE. MATIÈRE RECYCLÉE À 100 %.",
+      "expected": [
+        "biodegradable",
+        "recyclable"
+      ]
+    },
+    {
+      "id": "I",
+      "source": "audit",
+      "text": "| Allégation | Emballage recyclable |\n| Carbone | Neutre en carbone depuis 2024 |",
+      "expected": [
+        "recyclable",
+        "carbon_neutrality"
+      ]
+    },
+    {
+      "id": "J",
+      "source": "audit",
+      "text": "Cet emballage est biodégradable. Attention : il n'est pas biodégradable sous 12 semaines.",
+      "expected": [
+        "biodegradable"
+      ],
+      "expect_negated": [
+        "biodegradable"
+      ],
+      "expect_affirmative": [
+        "biodegradable"
+      ],
+      "comment": "une occurrence affirmative et une occurrence niée dans le même texte"
+    },
+    {
+      "id": "K",
+      "source": "audit",
+      "text": "Il n'est pas biodégradable et ce produit ne contient pas de matière recyclée.",
+      "expected": [
+        "biodegradable",
+        "recyclable"
+      ],
+      "expect_negated": [
+        "biodegradable",
+        "recyclable"
+      ],
+      "expect_affirmative": [],
+      "comment": "cas entièrement négatif : la détection doit exister avec affirmative=false"
+    },
+    {
+      "id": "L",
+      "source": "audit",
+      "text": "30 % moins polluant que la moyenne du marché. Produit écologique. Communication verte.",
+      "expected": [
+        "comparative",
+        "generic_environmental"
+      ]
+    },
+    {
+      "id": "M",
+      "source": "audit",
+      "text": "Carbon neutral since 2024. Recyclable packaging. Sustainable practices.",
+      "expected": [
+        "carbon_neutrality",
+        "recyclable",
+        "generic_environmental"
+      ]
+    },
+    {
+      "id": "N",
+      "source": "audit",
+      "text": "Certifié ISO 14001 et neutre en carbone.",
+      "expected": [
+        "certification",
+        "carbon_neutrality"
+      ],
+      "audit_before": "certificat ignoré"
+    },
+    {
+      "id": "O",
+      "source": "audit",
+      "text": "100 % naturel, sans aucun impact.",
+      "expected": [
+        "generic_environmental"
+      ]
+    },
+    {
+      "id": "R01",
+      "source": "marche",
+      "text": "Ce flacon contient 100 % de matière recyclée.",
+      "expected": [
+        "recyclable"
+      ]
+    },
+    {
+      "id": "R02",
+      "source": "marche",
+      "text": "Fabriqué à partir de plastique recyclé.",
+      "expected": [
+        "recyclable"
+      ]
+    },
+    {
+      "id": "R03",
+      "source": "marche",
+      "text": "Contient 30 % de matière recyclée.",
+      "expected": [
+        "recyclable"
+      ]
+    },
+    {
+      "id": "R04",
+      "source": "marche",
+      "text": "Ce carton est entièrement recyclable.",
+      "expected": [
+        "recyclable"
+      ]
+    },
+    {
+      "id": "R05",
+      "source": "marche",
+      "text": "Emballage en carton recyclé, imprimé en France.",
+      "expected": [
+        "recyclable"
+      ]
+    },
+    {
+      "id": "R06",
+      "source": "marche",
+      "text": "Nos bouteilles contiennent 50 % de PET recyclé.",
+      "expected": [
+        "recyclable"
+      ]
+    },
+    {
+      "id": "R07",
+      "source": "marche",
+      "text": "Fabriqué avec des fibres recyclées et du papier recyclé.",
+      "expected": [
+        "recyclable"
+      ]
+    },
+    {
+      "id": "R08",
+      "source": "marche",
+      "text": "Recycled content: 70 %.",
+      "expected": [
+        "recyclable"
+      ]
+    },
+    {
+      "id": "R09",
+      "source": "marche",
+      "text": "Certifié FSC pour tous nos emballages papier.",
+      "expected": [
+        "certification"
+      ]
+    },
+    {
+      "id": "R10",
+      "source": "marche",
+      "text": "Emballages labellisés PEFC.",
+      "expected": [
+        "certification"
+      ]
+    },
+    {
+      "id": "R11",
+      "source": "marche",
+      "text": "Notre gamme porte l'Écolabel européen.",
+      "expected": [
+        "certification"
+      ]
+    },
+    {
+      "id": "R12",
+      "source": "marche",
+      "text": "Certifié ISO 14001 depuis 2019.",
+      "expected": [
+        "certification"
+      ]
+    },
+    {
+      "id": "R13",
+      "source": "marche",
+      "text": "Bilan carbone réalisé selon ISO 14064.",
+      "expected": [
+        "certification"
+      ]
+    },
+    {
+      "id": "R14",
+      "source": "marche",
+      "text": "Produit certifié biosourcé.",
+      "expected": [
+        "certification"
+      ]
+    },
+    {
+      "id": "R15",
+      "source": "marche",
+      "text": "Certification environnementale obtenue en 2025 (n° FR/012/345) délivrée par AFNOR Certification.",
+      "expected": [
+        "certification"
+      ]
+    },
+    {
+      "id": "R16",
+      "source": "marche",
+      "text": "Label NF Environnement sur notre gamme d'entretien.",
+      "expected": [
+        "certification"
+      ]
+    },
+    {
+      "id": "R17",
+      "source": "marche",
+      "text": "Certifié Cradle to Cradle niveau argent.",
+      "expected": [
+        "certification"
+      ]
+    },
+    {
+      "id": "R18",
+      "source": "marche",
+      "text": "Ce produit est neutre en carbone.",
+      "expected": [
+        "carbon_neutrality"
+      ]
+    },
+    {
+      "id": "R19",
+      "source": "marche",
+      "text": "Objectif zéro carbone atteint sur notre site de Nantes.",
+      "expected": [
+        "carbon_neutrality"
+      ]
+    },
+    {
+      "id": "R20",
+      "source": "marche",
+      "text": "Notre empreinte carbone est nulle sur ce périmètre.",
+      "expected": [
+        "carbon_neutrality"
+      ]
+    },
+    {
+      "id": "R21",
+      "source": "marche",
+      "text": "Livraison climatiquement neutre.",
+      "expected": [
+        "carbon_neutrality"
+      ]
+    },
+    {
+      "id": "R22",
+      "source": "marche",
+      "text": "Net zero pour l'ensemble de nos activités d'ici 2040.",
+      "expected": [
+        "carbon_neutrality"
+      ]
+    },
+    {
+      "id": "R23",
+      "source": "marche",
+      "text": "Certifié neutre en CO2.",
+      "expected": [
+        "carbon_neutrality",
+        "certification"
+      ]
+    },
+    {
+      "id": "R24",
+      "source": "marche",
+      "text": "30 % moins d'émissions que notre ancien format.",
+      "expected": [
+        "comparative"
+      ]
+    },
+    {
+      "id": "R25",
+      "source": "marche",
+      "text": "Deux fois moins polluant que la moyenne du marché.",
+      "expected": [
+        "comparative"
+      ]
+    },
+    {
+      "id": "R26",
+      "source": "marche",
+      "text": "20 % de réduction d'émissions comparé à 2020.",
+      "expected": [
+        "comparative",
+        "quantified_climate"
+      ]
+    },
+    {
+      "id": "R27",
+      "source": "marche",
+      "text": "Produit écologique et fabriqué en France.",
+      "expected": [
+        "generic_environmental"
+      ]
+    },
+    {
+      "id": "R28",
+      "source": "marche",
+      "text": "Notre gamme verte est disponible en trois formats.",
+      "expected": [
+        "generic_environmental"
+      ]
+    },
+    {
+      "id": "R29",
+      "source": "marche",
+      "text": "Une communication verte pour nos clients.",
+      "expected": [
+        "generic_environmental"
+      ]
+    },
+    {
+      "id": "R30",
+      "source": "marche",
+      "text": "100 % naturel.",
+      "expected": [
+        "generic_environmental"
+      ]
+    },
+    {
+      "id": "R31",
+      "source": "marche",
+      "text": "Nous développons une démarche d'économie circulaire.",
+      "expected": [
+        "generic_environmental"
+      ]
+    },
+    {
+      "id": "R32",
+      "source": "marche",
+      "text": "Sustainable packaging for our customers.",
+      "expected": [
+        "generic_environmental"
+      ]
+    },
+    {
+      "id": "R33",
+      "source": "marche",
+      "text": "A carbon friendly alternative.",
+      "expected": [
+        "generic_environmental"
+      ]
+    },
+    {
+      "id": "R34",
+      "source": "marche",
+      "text": "Respectueux de l'environnement et de votre budget.",
+      "expected": [
+        "nature_friendly"
+      ]
+    },
+    {
+      "id": "R35",
+      "source": "marche",
+      "text": "Un emballage ami de la nature.",
+      "expected": [
+        "nature_friendly"
+      ]
+    },
+    {
+      "id": "R36",
+      "source": "marche",
+      "text": "Bon pour la planète, bon pour vous.",
+      "expected": [
+        "nature_friendly"
+      ]
+    },
+    {
+      "id": "R37",
+      "source": "marche",
+      "text": "Nous agissons pour le climat.",
+      "expected": [
+        "nature_friendly"
+      ]
+    },
+    {
+      "id": "R38",
+      "source": "marche",
+      "text": "Cette formule protège l'environnement.",
+      "expected": [
+        "nature_friendly"
+      ]
+    },
+    {
+      "id": "R39",
+      "source": "marche",
+      "text": "Un produit à faible impact environnemental.",
+      "expected": [
+        "nature_friendly"
+      ]
+    },
+    {
+      "id": "R40",
+      "source": "marche",
+      "text": "Moins d'impact sur l'environnement à chaque lavage.",
+      "expected": [
+        "nature_friendly"
+      ]
+    },
+    {
+      "id": "R41",
+      "source": "marche",
+      "text": "Engagés pour la protection de la planète.",
+      "expected": [
+        "nature_friendly"
+      ]
+    },
+    {
+      "id": "R42",
+      "source": "marche",
+      "text": "Nous réduisons notre impact sur l'environnement.",
+      "expected": [
+        "nature_friendly"
+      ]
+    },
+    {
+      "id": "R43",
+      "source": "marche",
+      "text": "Cet emballage est biodégradable.",
+      "expected": [
+        "biodegradable"
+      ]
+    },
+    {
+      "id": "R44",
+      "source": "marche",
+      "text": "Bouteille 100 % biodégradable.",
+      "expected": [
+        "biodegradable"
+      ]
+    },
+    {
+      "id": "R45",
+      "source": "marche",
+      "text": "Un sac compostable et biodégradable.",
+      "expected": [
+        "biodegradable"
+      ]
+    }
+  ],
+  "negative_cases": [
+    {
+      "id": "FP01",
+      "text": "Le vert est la couleur de notre logo.",
+      "reason": "couleur, pas allégation environnementale",
+      "critical": true,
+      "critical_reason": "cas d'ambiguïté documenté : le motif ne doit jamais se déclencher ici, sous peine d'un faux positif manifeste sur du texte commercial courant"
+    },
+    {
+      "id": "FP02",
+      "text": "Arôme naturel de vanille.",
+      "reason": "descripteur alimentaire, pas allégation environnementale",
+      "critical": true,
+      "critical_reason": "cas d'ambiguïté documenté : le motif ne doit jamais se déclencher ici, sous peine d'un faux positif manifeste sur du texte commercial courant"
+    },
+    {
+      "id": "FP03",
+      "text": "Ce sac est très durable et résistera dix ans.",
+      "reason": "durabilité = longévité du produit",
+      "critical": true,
+      "critical_reason": "cas d'ambiguïté documenté : le motif ne doit jamais se déclencher ici, sous peine d'un faux positif manifeste sur du texte commercial courant"
+    },
+    {
+      "id": "FP04",
+      "text": "Produit certifié conforme à la norme NF EN 71 sur la sécurité des jouets.",
+      "reason": "marquage de conformité, pas certification environnementale",
+      "critical": true,
+      "critical_reason": "cas d'ambiguïté documenté : le motif ne doit jamais se déclencher ici, sous peine d'un faux positif manifeste sur du texte commercial courant"
+    },
+    {
+      "id": "FP05",
+      "text": "Notre siège est au 12 rue de l'Écologie, 44000 Nantes.",
+      "reason": "nom de voie"
+    },
+    {
+      "id": "FP06",
+      "text": "La garantie légale de conformité est de deux ans.",
+      "reason": "information contractuelle"
+    },
+    {
+      "id": "FP07",
+      "text": "Le service client répond du lundi au vendredi de 9 h à 18 h.",
+      "reason": "information de service"
+    },
+    {
+      "id": "FP08",
+      "text": "La livraison est assurée en 48 heures partout en France.",
+      "reason": "information logistique"
+    },
+    {
+      "id": "FP09",
+      "text": "Notre équipe compte 42 collaborateurs en France.",
+      "reason": "information sociale neutre"
+    },
+    {
+      "id": "FP10",
+      "text": "L'emballage mesure 12 cm de large et 20 cm de haut.",
+      "reason": "dimensions"
+    },
+    {
+      "id": "FP11",
+      "text": "Nous imprimons nos factures sur du papier.",
+      "reason": "aucune allégation environnementale formulée"
+    },
+    {
+      "id": "FP12",
+      "text": "La société Éco Logistique assure nos livraisons du mardi au samedi.",
+      "reason": "raison sociale",
+      "critical": true,
+      "critical_reason": "cas d'ambiguïté documenté : le motif ne doit jamais se déclencher ici, sous peine d'un faux positif manifeste sur du texte commercial courant"
+    },
+    {
+      "id": "FP13",
+      "text": "Ce produit est fabriqué en France et vendu en Europe.",
+      "reason": "origine géographique"
+    },
+    {
+      "id": "FP14",
+      "text": "Le remorquage laisse une empreinte de 30 % plus large sur le sol.",
+      "reason": "« empreinte » au sens propre, pas climatique",
+      "critical": true,
+      "critical_reason": "cas d'ambiguïté documenté : le motif ne doit jamais se déclencher ici, sous peine d'un faux positif manifeste sur du texte commercial courant"
+    },
+    {
+      "id": "FP15",
+      "text": "Le design durable de notre mobilier traverse les décennies.",
+      "reason": "durabilité au sens de longévité"
+    },
+    {
+      "id": "FP16",
+      "text": "Notre politique de confidentialité décrit l'usage des cookies.",
+      "reason": "information RGPD"
+    },
+    {
+      "id": "FP17",
+      "text": "Le transport est assuré par un prestataire certifié ISO 9001.",
+      "reason": "certification qualité, pas environnementale",
+      "critical": true,
+      "critical_reason": "cas d'ambiguïté documenté : le motif ne doit jamais se déclencher ici, sous peine d'un faux positif manifeste sur du texte commercial courant"
+    },
+    {
+      "id": "FP18",
+      "text": "Le label de notre marque a été déposé à l'INPI.",
+      "reason": "label de marque, pas label environnemental",
+      "critical": true,
+      "critical_reason": "cas d'ambiguïté documenté : le motif ne doit jamais se déclencher ici, sous peine d'un faux positif manifeste sur du texte commercial courant"
+    },
+    {
+      "id": "FP19",
+      "text": "La composition chimique est détaillée sur la fiche technique.",
+      "reason": "information technique"
+    },
+    {
+      "id": "FP20",
+      "text": "La salle est climatisée et l'air est renouvelé toutes les heures.",
+      "reason": "caractéristique technique du bâtiment"
+    },
+    {
+      "id": "FP21",
+      "text": "Cette perceuse est garantie à vie, pièces disponibles dix ans.",
+      "reason": "garantie commerciale"
+    },
+    {
+      "id": "FP22",
+      "text": "Le rapport financier 2025 est disponible sur notre site.",
+      "reason": "information financière"
+    },
+    {
+      "id": "FP23",
+      "text": "Nous avons remplacé l'ampoule du hall par une LED.",
+      "reason": "fait technique, aucune allégation"
+    },
+    {
+      "id": "FP24",
+      "text": "La bouteille est consignée dans trois régions seulement.",
+      "reason": "fait logistique, pas de mot-clé revendiqué"
+    },
+    {
+      "id": "FP25",
+      "text": "La nature du sol ne permet pas cette culture.",
+      "reason": "« nature » au sens de type de sol",
+      "critical": true,
+      "critical_reason": "cas d'ambiguïté documenté : le motif ne doit jamais se déclencher ici, sous peine d'un faux positif manifeste sur du texte commercial courant"
+    },
+    {
+      "id": "FP26",
+      "text": "Produit certifié conforme à la norme NF EN 71, livré dans un emballage carton.",
+      "reason": "marquage de conformité dans une phrase contenant un marqueur environnemental",
+      "critical": true,
+      "critical_reason": "sans la garde de conformité, le verbe « certifié » produirait une allégation de certification"
+    },
+    {
+      "id": "FP27",
+      "source": "audit C23 — tableau de fiche technique",
+      "text": "Contenu biosourcé : 12 %.",
+      "reason": "Un contenu biosourcé est une composition, pas une certification. Le mot décrivait un schéma de certification inexistant et créait une allégation de certification que le document n'énonce pas. Trouvé en lisant les tableaux de fiches techniques (C23), où la ligne « Contenu biosourcé | 12 | % » sortait en allégation « certification » dont le schéma était le mot lui-même."
+    }
+  ],
+  "measurement_baseline": {
+    "measured_on": "2026-09-30",
+    "lexicon_version": "lexicon-2026-09-30.1",
+    "detected": 60,
+    "positive_total": 60,
+    "false_positives": 0,
+    "negative_total": 26,
+    "note": "Le plan fixe un seuil d'acceptation de 90 % de détection. Le corpus atteint 100 % à sa création ; le test exige donc à la fois le seuil du plan et l'absence de régression par rapport à cette mesure. Un seuil basé sur le plan seul absorberait une régression de 6 points."
+  }
+}
