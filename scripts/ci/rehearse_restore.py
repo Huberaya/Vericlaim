@@ -42,6 +42,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import pathlib
 import shutil
 import subprocess
@@ -225,13 +226,28 @@ class Rehearsal:
         suivantes ne pourraient plus s'appliquer non plus.
         """
         if restored:
-            admin_role = urlsplit(self.admin_url).username or ""
             migration_role = urlsplit(self.source_url).username or ""
-            if admin_role and migration_role and admin_role != migration_role:
+            # Le nom de rôle entre dans une commande SQL construite ici : on n'accepte qu'un
+            # identifiant simple, jamais une chaîne quelconque venue d'une URL.
+            if migration_role and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", migration_role):
+                raise RuntimeError(f"nom de rôle de migration inattendu : {migration_role!r}")
+            if migration_role:
+                # `REASSIGN OWNED BY` est refusé ici : PostgreSQL protège les objets système du
+                # rôle qui a restauré (« cannot reassign ownership of objects owned by role
+                # postgres because they are required by the database system », mesuré). On ne
+                # déplace donc que les **objets applicatifs** du schéma public — tables et
+                # séquences —, ce qui est exactement ce qu'exige la suite de la procédure.
                 outcome = self.psql(
                     with_database(self.admin_url, database),
                     "-v", "ON_ERROR_STOP=1", "-c",
-                    f'REASSIGN OWNED BY "{admin_role}" TO "{migration_role}"',
+                    "DO $$ DECLARE objet record; BEGIN "
+                    "FOR objet IN SELECT tablename AS nom FROM pg_tables WHERE schemaname = 'public' LOOP "
+                    f"EXECUTE format('ALTER TABLE public.%I OWNER TO %I', objet.nom, '{migration_role}'); "
+                    "END LOOP; "
+                    "FOR objet IN SELECT sequence_name AS nom FROM information_schema.sequences "
+                    "WHERE sequence_schema = 'public' LOOP "
+                    f"EXECUTE format('ALTER SEQUENCE public.%I OWNER TO %I', objet.nom, '{migration_role}'); "
+                    "END LOOP; END $$;",
                 )
                 if outcome.returncode != 0:
                     raise RuntimeError(
