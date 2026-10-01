@@ -28,6 +28,7 @@ from app.api.v1.evidence import (
     router as evidence_router,
 )
 from app.api.v1.ops import router as ops_router
+from app.api.v1.internal_workers import router as internal_workers_router
 from app.api.v1.organizations import router as organizations_router
 from app.api.v1.pilot import router as pilot_router
 from app.api.v1.privacy import router as privacy_router
@@ -222,6 +223,7 @@ app.include_router(reports_public_router)
 app.include_router(audit_router)
 app.include_router(engine_router)
 app.include_router(ops_router)
+app.include_router(internal_workers_router)
 app.include_router(billing_router)
 
 # C13 — paiement simulé : la route n'est enregistrée que si le prestataire

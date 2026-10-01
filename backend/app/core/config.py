@@ -18,6 +18,12 @@ DEV_REPORT_SIGNING_KEY = "development-only-report-signing-key-not-a-guarantee"
 # arriver chez un client.
 DEV_BILLING_WEBHOOK_SECRET = "development-only-billing-webhook-secret"
 
+# Déploiement — un cycle de travail déclenché par le planificateur de la plateforme
+# ne peut pas durer plus longtemps que ce qu'une fonction sans serveur accepte. Le
+# budget est un plafond dur : au-delà, le cycle est coupé et le travail réclamé par
+# un bail redevient disponible, plutôt que de laisser croire à un succès.
+MAX_INTERNAL_WORKER_BUDGET_SECONDS = 240
+
 # Serverless platforms inject their own environment indicator. ``APP_ENV`` has a
 # permissive default ("development") which is never the right answer on a shared
 # host: it re-enables the credential-less pilot route, defaults to SQLite,
@@ -105,6 +111,15 @@ class Settings:
     document_clamav_host: str | None = None
     document_clamav_port: int = 3310
     document_clamav_timeout_seconds: int = 30
+    # --- Déploiement : workers portés par le planificateur de la plateforme ----
+    # Sur un hôte sans processus permanent, les trois workers ne peuvent plus tourner
+    # en boucle : le planificateur appelle une route qui exécute un cycle. Cette route
+    # est une **commande**, pas une opération utilisateur ; elle attend le secret que
+    # la plateforme injecte elle-même (`CRON_SECRET`, envoyé en `Authorization: Bearer`).
+    # Un secret absent ne bloque pas le démarrage — il rend la file inerte et la route
+    # répond 503. Refuser de démarrer pour cela empêcherait l'API de servir le reste.
+    internal_worker_secret: str | None = None
+    internal_worker_budget_seconds: int = 45
     auth_session_secret: str = DEV_SESSION_SECRET
     report_signing_key: str = DEV_REPORT_SIGNING_KEY
     #: Adresse à laquelle les demandes d'exercice des droits sont reçues. Vide par
@@ -456,6 +471,22 @@ def get_settings() -> Settings:
     document_clamav_port = _positive_int_from_env("DOCUMENT_CLAMAV_PORT", 3310, 1)
     document_clamav_timeout_seconds = _positive_int_from_env("DOCUMENT_CLAMAV_TIMEOUT_SECONDS", 30, 1)
 
+    # Déploiement — secret du déclencheur de travaux. Vercel lit `CRON_SECRET` lui-même
+    # et l'envoie en `Authorization: Bearer` ; le nom de la variable est donc imposé par
+    # la plateforme, pas choisi ici.
+    internal_worker_secret = _optional_env("CRON_SECRET")
+    if internal_worker_secret is not None and len(internal_worker_secret) < 32:
+        raise RuntimeError(
+            "CRON_SECRET must be at least 32 characters: this value authorises the "
+            "command that drains the work queues."
+        )
+    internal_worker_budget_seconds = _positive_int_from_env("INTERNAL_WORKER_BUDGET_SECONDS", 45, 5)
+    if internal_worker_budget_seconds > MAX_INTERNAL_WORKER_BUDGET_SECONDS:
+        raise RuntimeError(
+            "INTERNAL_WORKER_BUDGET_SECONDS must not exceed "
+            f"{MAX_INTERNAL_WORKER_BUDGET_SECONDS} seconds."
+        )
+
     data_rights_contact_email = (os.getenv("DATA_RIGHTS_CONTACT_EMAIL") or "").strip()
     support_contact_email = (os.getenv("SUPPORT_CONTACT_EMAIL") or "").strip()
     report_signing_key = _optional_env("REPORT_SIGNING_KEY")
@@ -697,6 +728,8 @@ def get_settings() -> Settings:
         document_clamav_host=document_clamav_host,
         document_clamav_port=document_clamav_port,
         document_clamav_timeout_seconds=document_clamav_timeout_seconds,
+        internal_worker_secret=internal_worker_secret,
+        internal_worker_budget_seconds=internal_worker_budget_seconds,
         auth_session_secret=auth_session_secret,
         report_signing_key=report_signing_key,
         auth_session_ttl_seconds=_positive_int_from_env("AUTH_SESSION_TTL_SECONDS", 8 * 60 * 60, 300),
