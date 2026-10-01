@@ -30,6 +30,12 @@ function Initials({ label }: { label: string }) {
   return <span className="auth-brand-symbol" aria-hidden="true">{initials}</span>;
 }
 
+// The credential-less pilot shortcut is a local development aid only. Next.js
+// inlines NODE_ENV at build time, so a production bundle drops the branch (and
+// the handler) entirely instead of hiding a working button behind CSS. The
+// backend independently refuses the route outside development/test.
+const PILOT_ACCESS_ENABLED = process.env.NODE_ENV !== "production";
+
 export default function AuthGate() {
   const [state, setState] = useState<State>({ phase: "loading" });
   const [actionError, setActionError] = useState<string | null>(null);
@@ -132,14 +138,16 @@ export default function AuthGate() {
           <p>{state.message}</p>
           {actionError && <p className="auth-inline-error" role="alert">{actionError}</p>}
           <div className="flex flex-col gap-2 w-full mt-4">
-            <button
-              type="button"
-              className="button button-primary"
-              disabled={isSubmitting}
-              onClick={handleDevLogin}
-            >
-              {isSubmitting ? "Connexion…" : "🚀 Ouvrir l’espace pilote"}
-            </button>
+            {PILOT_ACCESS_ENABLED && (
+              <button
+                type="button"
+                className="button button-primary"
+                disabled={isSubmitting}
+                onClick={handleDevLogin}
+              >
+                {isSubmitting ? "Connexion…" : "🚀 Ouvrir l’espace pilote"}
+              </button>
+            )}
             <button
               type="button"
               className="text-button text-xs text-slate-500 mt-2"
@@ -154,38 +162,59 @@ export default function AuthGate() {
   }
 
   if (state.phase === "anonymous") {
+    const ssoAvailable = state.status.oidc_configured;
     return (
       <main className="auth-page">
         <section className="auth-card">
           <Initials label="VeriClaim" />
-          <p className="auth-eyebrow">VERICLAIM AI · ACCÈS ENTREPRISE</p>
+          <p className="auth-eyebrow">VERICLAIM · ACCÈS ENTREPRISE</p>
           <h1>La preuve, dans un espace protégé.</h1>
-          <p>Connectez-vous via le SSO de votre organisation ou démarrez directement votre session pilote.</p>
+          <p>Connectez-vous avec le SSO de votre organisation pour accéder à vos dossiers.</p>
 
           {actionError && <p className="auth-inline-error" role="alert">{actionError}</p>}
 
           <div className="flex flex-col gap-2 w-full mt-3">
-            <button
-              type="button"
-              className="button button-primary auth-login-button w-full"
-              disabled={isSubmitting}
-              onClick={handleDevLogin}
-            >
-              {isSubmitting ? "Connexion…" : "🚀 Accéder à l’espace pilote"}
-            </button>
-
-            {state.status.oidc_configured && (
+            {ssoAvailable && (
               <button
                 type="button"
-                className="button button-secondary auth-login-button w-full"
+                className="button button-primary auth-login-button w-full"
                 onClick={beginSsoLogin}
               >
                 Se connecter avec le SSO <span aria-hidden="true">↗</span>
               </button>
             )}
+
+            {PILOT_ACCESS_ENABLED && (
+              <button
+                type="button"
+                className={ssoAvailable ? "button button-secondary auth-login-button w-full" : "button button-primary auth-login-button w-full"}
+                disabled={isSubmitting}
+                onClick={handleDevLogin}
+              >
+                {isSubmitting ? "Connexion…" : "🚀 Accéder à l’espace pilote"}
+              </button>
+            )}
+
+            {/* Since C14 a password account is a real way in: the screen must offer it
+                rather than telling the visitor to contact the editor. */}
+            <a
+              className={ssoAvailable ? "button button-secondary auth-login-button w-full" : "button button-primary auth-login-button w-full"}
+              href="/login"
+            >
+              Se connecter avec un mot de passe
+            </a>
+            <a className="auth-login-button w-full text-center text-xs font-semibold underline" href="/signup">
+              Créer un compte
+            </a>
+            {!ssoAvailable && (
+              <p className="text-[11px] leading-relaxed text-slate-500">
+                Le SSO de votre organisation n’est pas configuré sur cette instance. La connexion par
+                mot de passe fonctionne sans lui.
+              </p>
+            )}
           </div>
 
-          <small className="mt-4 block">VeriClaim AI est un outil de pré-audit et de gestion du risque, pas un avis juridique ni une certification.</small>
+          <small className="mt-4 block">VeriClaim est un outil de pré-audit et de gestion du risque, pas un avis juridique ni une certification.</small>
         </section>
       </main>
     );

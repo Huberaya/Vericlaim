@@ -240,6 +240,34 @@ export type PersistentAnalysisVersion = {
   created_at: string;
 };
 
+// C23 — lecture d'un tableau de fiche technique. Le moteur rend une lecture
+// déterministe (colonne critère / valeur / unité, offsets de cellule), jamais une
+// conclusion sur le chiffre lu.
+export type ClaimTableCell = {
+  row_index: number | null;
+  column_index: number | null;
+  role: string | null;
+  text: string | null;
+  start_offset: number | null;
+  end_offset: number | null;
+};
+
+export type ClaimTableEntry = {
+  criterion: string | null;
+  value: string | null;
+  numeric_value: string | null;
+  unit: string | null;
+  row_index: number | null;
+};
+
+export type ClaimTableCitation = {
+  page_number: number | null;
+  columns: string[];
+  has_header: boolean;
+  cell: ClaimTableCell;
+  row_entry: ClaimTableEntry | null;
+};
+
 export type PersistentClaimCitation = {
   document_segment_id: string | null;
   document_version_id: string | null;
@@ -249,6 +277,9 @@ export type PersistentClaimCitation = {
   segment_start_offset: number | null;
   segment_end_offset: number | null;
   source_sha256: string | null;
+  // Optionnel : une allégation détectée avant C23 n'en porte pas, et l'absence est
+  // affichée comme une absence — jamais complétée à l'écran.
+  table_citation?: ClaimTableCitation | null;
 };
 
 export type PersistentClaim = {
@@ -264,6 +295,13 @@ export type PersistentClaim = {
   end_offset: number | null;
   source: "deterministic" | "ai_candidate" | "human";
   confidence_score: number | null;
+  // C10: rubrique déterministe publiée avec ses facteurs. Optionnels car une
+  // ligne antérieure à C10 n'en porte pas — on ne l'invente jamais à l'affichage.
+  confidence_level?: "high" | "medium" | "low" | "human_review_required" | null;
+  confidence_factors?: Array<{ code: string; effect: number; detail: string }>;
+  confidence_basis?: string | null;
+  confidence_rubric_version?: string | null;
+  review_reasons?: string[];
   status: "detected" | "confirmed" | "dismissed" | "review_required";
   detector_version: string | null;
   attributes: Record<string, unknown>;
@@ -655,7 +693,10 @@ export type PersistentEvidenceLink = {
   claim_id: string;
   evidence_id: string;
   relation: PersistentEvidenceRelation;
+  // C17 — `coverage_status` est la **déclaration** d'un relecteur (`pending` = aucune).
+  // Le constat de la pièce (périmètre, validité, famille d'allégation) est `observed_state`.
   coverage_status: PersistentEvidenceStatus;
+  observed_state?: "missing" | "expired" | "out_of_scope" | "not_covering" | "partial" | "covered" | null;
   validity_as_of: string | null;
   confidence_score: number | null;
   rationale: string | null;
@@ -1046,28 +1087,40 @@ export type ApiKeySummary = {
 
 export type EnterpriseMetricsResponse = {
   uptime_seconds: number;
-  service_status: string;
+  /** derived from the readiness probes; `status_reasons` says why */
+  service_status: "healthy" | "degraded" | "unavailable" | string;
+  /** empty means nothing degraded was observed; never a status word without proof */
+  status_reasons: string[];
   database_status: string;
   storage_status: string;
   workers_status: string;
-  active_tenants_count: number;
+  /** null when the instance cannot measure it; the name appears in `not_measured` */
+  active_tenants_count: number | null;
   total_analyses_completed: number;
-  average_analysis_latency_ms: number;
+  average_analysis_latency_ms: number | null;
   total_api_requests: number;
   error_rate_percent: number;
   open_alerts_count: number;
-  memory_usage_mb: number;
-  cpu_utilization_percent: number;
+  memory_usage_mb: number | null;
+  cpu_utilization_percent: number | null;
+  /** audit events of the requesting organization */
+  tenant_audit_events: number;
+  /** fields with no honest value on this instance */
+  not_measured: string[];
+  metrics_note: string;
   timestamp: string;
 };
 
 export type EnterpriseAlert = {
   id: string;
   severity: "info" | "warning" | "critical";
-  category: "security" | "quota" | "sso" | "system";
+  category: "security" | "quota" | "sso" | "system" | "queue" | "integrity" | string;
   title: string;
   message: string;
   occurred_at: string;
+  /** always false today: this code base stores no acknowledgement, so claiming one
+   *  would be an invention. A human acknowledges; the field says whether that
+   *  happened, never that it should have. */
   is_acknowledged: boolean;
 };
 
@@ -1142,4 +1195,85 @@ export type AuditIntegrityCertificate = {
   certified_at: string;
   issuer: string;
   legal_disclaimer: string;
+};
+
+// ---------------------------------------------------------------------------
+// C13 — facturation : catalogue, abonnement, compteurs
+// ---------------------------------------------------------------------------
+
+export type PlanQuotas = {
+  documents_per_month: number;
+  ocr_pages_per_month: number;
+  seats: number;
+  retention_months: number;
+};
+
+export type PlanRead = {
+  code: string;
+  name: string;
+  tagline: string;
+  price_cents_per_month_excl_vat: number | null;
+  price_label: string;
+  quotas: PlanQuotas;
+  entitlements: string[];
+  limits_are_reference_values: boolean;
+};
+
+export type PlanCatalogue = {
+  catalogue_version: string;
+  pricing_status: string;
+  pricing_confirmed: boolean;
+  overage_policy: string;
+  provider: string;
+  collects_money: boolean;
+  selling_enabled: boolean;
+  plans: PlanRead[];
+  trial_plan_code: string;
+  trial_days: number;
+  notes: string[];
+};
+
+export type BillingSubscription = {
+  organization_id: string;
+  plan_code: string | null;
+  plan_name: string | null;
+  status: string;
+  granted: boolean;
+  reason: string;
+  provider: string | null;
+  trial_ends_at: string | null;
+  trial_derived_from_organization_creation: boolean;
+  current_period_start: string;
+  current_period_end: string;
+  cancel_at_period_end: boolean;
+  pending_plan_code: string | null;
+  pending_plan_effective_at: string | null;
+  seats_used: number;
+  seats_limit: number | null;
+  quotas: PlanQuotas | null;
+  overage_policy: string;
+  available_actions: string[];
+  upgrade_options: PlanRead[];
+  downgrade_options: PlanRead[];
+};
+
+export type BillingUsageLine = {
+  metric: string;
+  label: string;
+  used: number;
+  limit: number | null;
+  remaining: number | null;
+  exceeded: boolean;
+  counted: boolean;
+};
+
+export type BillingUsage = {
+  organization_id: string;
+  plan_code: string | null;
+  period_start: string;
+  period_end: string;
+  resets_at: string;
+  overage_policy: string;
+  lines: BillingUsageLine[];
+  note: string;
 };

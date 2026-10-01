@@ -6,6 +6,7 @@ import { HumanReviewModal } from "@/components/HumanReviewModal";
 import {
   createIdempotencyKey,
   createPersistentAnalysis,
+  downloadAnalysisReport,
   getPersistentAnalysisVersion,
   retryPersistentAnalysis,
 } from "@/lib/api";
@@ -58,6 +59,8 @@ function shortHash(value: string | null): string {
 
 export default function PersistentAnalysisPanel({ version, canRun, supplierId = null, productId = null }: Props) {
   const [queued, setQueued] = useState<PersistentAnalysisEnqueueResponse | null>(null);
+  const [exporting, setExporting] = useState<"pdf" | "dossier_zip" | null>(null);
+  const [exportMessage, setExportMessage] = useState<string | null>(null);
   const [detail, setDetail] = useState<PersistentAnalysisVersionDetail | null>(null);
   const [isStarting, setIsStarting] = useState(false);
   const [isRetrying, setIsRetrying] = useState(false);
@@ -143,6 +146,26 @@ export default function PersistentAnalysisPanel({ version, canRun, supplierId = 
     }
   }
 
+  async function exportReport(format: "pdf" | "dossier_zip") {
+    if (!currentAnalysis || !currentVersion || currentVersion.status !== "completed") return;
+    setExporting(format);
+    setExportMessage(null);
+    try {
+      // C22 : la génération est exécutée par un worker dédié ; cette fonction attend
+      // le travail puis télécharge l'artefact signé.
+      await downloadAnalysisReport(currentAnalysis.id, format);
+      setExportMessage(
+        format === "pdf"
+          ? "Rapport PDF signé téléchargé. La référence de vérification figure dans le document."
+          : "Dossier probatoire ZIP téléchargé.",
+      );
+    } catch (cause) {
+      setExportMessage(cause instanceof Error ? cause.message : "Export impossible.");
+    } finally {
+      setExporting(null);
+    }
+  }
+
   return (
     <section className="persistent-analysis" aria-label="Analyse persistante des allégations">
       <div className="persistent-analysis-heading">
@@ -214,12 +237,54 @@ export default function PersistentAnalysisPanel({ version, canRun, supplierId = 
                 </div>
                 <blockquote>« {claim.claim_text} »</blockquote>
                 <p>
-                  Page {claim.citation.page_number ?? "non précisée"} · segment {claim.citation.document_segment_id?.slice(0, 8) ?? "indisponible"} · offsets {claim.start_offset ?? "?"}–{claim.end_offset ?? "?"}
+                  Page {claim.citation.page_number ?? "non précisée"} · {claim.citation.segment_type === "table" ? "ligne de tableau" : "segment"} {claim.citation.document_segment_id?.slice(0, 8) ?? "indisponible"} · offsets {claim.start_offset ?? "?"}–{claim.end_offset ?? "?"}
                 </p>
+                {/* C23 — ce que le document déclare sur cette ligne : critère, valeur, unité.
+                    C'est une lecture du tableau, pas une conclusion sur le chiffre. */}
+                {claim.citation.table_citation && (
+                  <p className="persistent-claim-table">
+                    <span className="persistent-claim-table-label">Ligne lue</span>
+                    {claim.citation.table_citation.row_entry?.criterion ?? claim.citation.table_citation.cell.text ?? "critère non lu"}
+                    {claim.citation.table_citation.row_entry?.value
+                      ? ` : ${claim.citation.table_citation.row_entry.value}${claim.citation.table_citation.row_entry.unit ? ` ${claim.citation.table_citation.row_entry.unit}` : " (unité non lue)"}`
+                      : " : valeur non lue"}
+                    <span className="persistent-claim-table-cell">
+                      cellule « {claim.citation.table_citation.cell.text ?? "—"} » · colonne {claim.citation.table_citation.cell.role === "criterion" ? "critère" : claim.citation.table_citation.cell.role === "value" ? "valeur" : claim.citation.table_citation.cell.role === "unit" ? "unité" : "indéterminée"}
+                      {claim.citation.table_citation.columns.length > 0 ? ` · tableau lu en ${claim.citation.table_citation.columns.length} colonnes` : ""}
+                    </span>
+                  </p>
+                )}
               </article>
             ))}
           </div>
         </>
+      )}
+
+      {currentVersion?.status === "completed" && currentAnalysis && (
+        <div className="persistent-analysis-exports">
+          <button
+            type="button"
+            className="button button-secondary"
+            disabled={exporting !== null}
+            onClick={() => void exportReport("pdf")}
+          >
+            {exporting === "pdf" ? "Génération du rapport…" : "Rapport PDF signé"}
+          </button>
+          <button
+            type="button"
+            className="button button-secondary"
+            disabled={exporting !== null}
+            onClick={() => void exportReport("dossier_zip")}
+          >
+            {exporting === "dossier_zip" ? "Archivage du dossier…" : "Dossier probatoire ZIP"}
+          </button>
+        </div>
+      )}
+
+      {exportMessage && (
+        <p className="persistent-analysis-export-note" role="status">
+          {exportMessage}
+        </p>
       )}
 
       {currentVersion?.status === "failed" && canRun && (

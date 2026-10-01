@@ -1,12 +1,14 @@
 "use client";
 
 import { useState } from "react";
+import SupportLauncher from "@/components/SupportLauncher";
 import CatalogPanel from "@/components/CatalogPanel";
 import ClaimHighlighter from "@/components/ClaimHighlighter";
 import DocumentUploader from "@/components/DocumentUploader";
 import EvidenceRegistryPanel from "@/components/EvidenceRegistryPanel";
 import { EvidenceRequestsListPanel } from "@/components/EvidenceRequestsListPanel";
 import LegalScoreCard from "@/components/LegalScoreCard";
+import { UsageMeterPanel } from "@/components/UsageMeterPanel";
 import { PilotExecutiveSummaryPanel } from "@/components/PilotExecutiveSummaryPanel";
 import { EnterpriseAdminPanel } from "@/components/EnterpriseAdminPanel";
 import { AuditTrailExplorer } from "@/components/AuditTrailExplorer";
@@ -14,7 +16,7 @@ import ProofUploadModal from "@/components/ProofUploadModal";
 import { RegulatoryRulebookPanel } from "@/components/RegulatoryRulebookPanel";
 import RemediationModal from "@/components/RemediationModal";
 import SecureDocumentVault from "@/components/SecureDocumentVault";
-import { auditFile, auditText } from "@/lib/api";
+import { ApiError, auditFile, auditText } from "@/lib/api";
 import type {
   AuditContext,
   AuthSession,
@@ -107,6 +109,9 @@ export default function AuditDashboard({
   const [proofModalOpen, setProofModalOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Le code d'erreur part avec une demande de support (C15) : sans lui, le support lit
+  // une reformulation au lieu de retrouver la branche du produit qui a répondu.
+  const [errorCode, setErrorCode] = useState<string | null>(null);
   const [catalogRevision, setCatalogRevision] = useState(0);
 
   function buildContext(): AuditContext {
@@ -134,6 +139,7 @@ export default function AuditDashboard({
       setSourceText(result.extracted_source_text);
       setReport(result);
     } catch (cause) {
+      setErrorCode(cause instanceof ApiError ? cause.code : null);
       setError(cause instanceof Error ? cause.message : "L’API n’a pas pu analyser le texte.");
     } finally {
       setIsLoading(false);
@@ -153,6 +159,7 @@ export default function AuditDashboard({
       setSourceText(result.extracted_source_text);
       setReport(result);
     } catch (cause) {
+      setErrorCode(cause instanceof ApiError ? cause.code : null);
       setError(cause instanceof Error ? cause.message : "Le document n’a pas pu être extrait ou analysé.");
     } finally {
       setIsLoading(false);
@@ -169,10 +176,16 @@ export default function AuditDashboard({
 
   return (
     <div className="app-shell min-h-screen">
+      {/*
+        C15 — contact contextualisé : l'écran et le dernier code d'erreur partent avec la
+        demande. Le bouton est monté ici parce que ce composant connaît les deux : il
+        affiche l'écran et il reçoit l'erreur.
+      */}
+      <SupportLauncher screen="audit" lastErrorCode={errorCode} />
       <aside className="sidebar flex flex-col">
-        <a className="brand" href="#main-content" aria-label="VeriClaim AI, accueil">
+        <a className="brand" href="#main-content" aria-label="VeriClaim, accueil">
           <span className="brand-symbol">V</span>
-          <span className="brand-wordmark">VeriClaim<span> AI</span><small>REGULATORY INTELLIGENCE</small></span>
+          <span className="brand-wordmark">VeriClaim<small>REGULATORY INTELLIGENCE</small></span>
         </a>
         <div className="sidebar-section-label">ESPACE DE TRAVAIL</div>
         <nav className="sidebar-nav" aria-label="Navigation principale">
@@ -185,6 +198,7 @@ export default function AuditDashboard({
           <a className="sidebar-link" href="#regulatory-rulebook"><span className="nav-icon">⚖️</span> Référentiel réglementaire</a>
           <a className="sidebar-link" href="#enterprise-admin"><span className="nav-icon">🏢</span> Administration Entreprise</a>
           <a className="sidebar-link" href="#audit-ledger"><span className="nav-icon">🔒</span> Journal d&apos;Audit Scellé</a>
+          <a className="sidebar-link" href="#usage"><span className="nav-icon">◔</span> Consommation et offre</a>
           <a className="sidebar-link" href="#results-title"><span className="nav-icon">⌘</span> Rapport d’analyse<span className="nav-count">08</span></a>
         </nav>
         <div className="sidebar-rule-card">
@@ -270,8 +284,17 @@ export default function AuditDashboard({
               onAuditFile={runFileAudit}
               onOpenEvidence={() => setProofModalOpen(true)}
             />
-            <LegalScoreCard report={report} />
+            {/* C22 — aucun identifiant d'analyse n'est passé : cet écran affiche le
+                résultat du moteur d'évaluation, non persisté. Les boutons d'export
+                signé sont donc désactivés et disent pourquoi, au lieu d'échouer. */}
+            <LegalScoreCard report={report} analysisId={null} />
           </div>
+
+          {/* C13 — les compteurs d'usage sont montés ici, dans l'espace de travail : un
+              quota atteint doit se lire avant le refus d'import, pas après. */}
+          <section id="usage" aria-label="Consommation et offre" className="mb-8">
+            <UsageMeterPanel />
+          </section>
 
           <CatalogPanel
             key={`catalog-${activeMembership.organization.id}`}
@@ -388,7 +411,7 @@ export default function AuditDashboard({
           <footer className="page-disclaimer">
             <span className="disclaimer-icon" aria-hidden="true">i</span>
             <p><strong>Limite juridique.</strong> Le résultat dépend du texte fourni, des métadonnées déclarées, de la juridiction et de la date. Le statut français de transposition de la directive 2024/825 est configurable côté serveur et doit être confirmé avant toute conclusion opposable. Ce rapport n’est ni un avis juridique, ni une certification, ni un constat de la DGCCRF.</p>
-            <span className="footer-version">VERICLAIM AI · 0.1.0</span>
+            <span className="footer-version">VERICLAIM · 0.1.0</span>
           </footer>
         </div>
       </main>
