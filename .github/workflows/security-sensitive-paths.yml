@@ -1,0 +1,73 @@
+name: Security-sensitive change review
+
+# A single merge request once introduced a credential-less owner session in
+# every environment (see SECURITY.md §1). Nothing stopped it. This workflow
+# makes security-relevant paths require an explicit review acknowledgement
+# instead of relying on a reviewer noticing.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: security-sensitive-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  require-review-acknowledgement:
+    name: Sensitive paths touched
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check out reviewed revision
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Detect changes in security-sensitive paths
+        id: detect
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin "${BASE_REF}"
+          changed="$(git diff --name-only "origin/${BASE_REF}...HEAD" || true)"
+
+          sensitive="$(printf '%s\n' "${changed}" | grep -E \
+            '^(backend/app/identity/|backend/app/api/v1/auth\.py|backend/app/core/config\.py|backend/app/core/database\.py|backend/app/documents/(security|scanner|storage)\.py|backend/alembic/versions/|\.github/workflows/|SECURITY\.md$)' \
+            || true)"
+
+          if [ -n "${sensitive}" ]; then
+            printf 'Sensitive paths changed:\n%s\n' "${sensitive}"
+            printf 'touched=true\n' >> "${GITHUB_OUTPUT}"
+            {
+              echo '### Security-sensitive paths changed'
+              echo ''
+              echo '| File |'
+              echo '| --- |'
+              printf '%s\n' "${sensitive}" | sed 's/^/| `/; s/$/` |/'
+              echo ''
+              echo 'Review against the checklist in `SECURITY.md` §5, then add the'
+              echo '`security-reviewed` label to acknowledge.'
+            } >> "${GITHUB_STEP_SUMMARY}"
+          else
+            printf 'touched=false\n' >> "${GITHUB_OUTPUT}"
+            echo 'No security-sensitive path changed.' >> "${GITHUB_STEP_SUMMARY}"
+          fi
+
+      - name: Require the security-reviewed label
+        if: steps.detect.outputs.touched == 'true'
+        env:
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: |
+          set -euo pipefail
+          if printf '%s' "${LABELS}" | grep -q '"security-reviewed"'; then
+            echo "security-reviewed label present; acknowledgement recorded."
+            exit 0
+          fi
+          echo "::error::This pull request modifies security-sensitive paths. Review the checks in SECURITY.md section 5, then add the 'security-reviewed' label."
+          exit 1

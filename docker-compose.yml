@@ -104,6 +104,16 @@ services:
       ANALYSIS_DETECTION_RETRY_BASE_SECONDS: ${ANALYSIS_DETECTION_RETRY_BASE_SECONDS:-30}
       ANALYSIS_DETECTION_LEASE_SECONDS: ${ANALYSIS_DETECTION_LEASE_SECONDS:-300}
       ANALYSIS_DETECTION_POLL_SECONDS: ${ANALYSIS_DETECTION_POLL_SECONDS:-2}
+      # C22 — capacité de rendu des rapports. La file est bornée par organisation :
+      # au-delà, l'API refuse (429) au lieu d'empiler, et le nombre de workers peut
+      # être multiplié (docker compose up --scale report-worker=N) sans réglage.
+      REPORT_MAX_ATTEMPTS: ${REPORT_MAX_ATTEMPTS:-3}
+      REPORT_RETRY_BASE_SECONDS: ${REPORT_RETRY_BASE_SECONDS:-60}
+      REPORT_LEASE_SECONDS: ${REPORT_LEASE_SECONDS:-600}
+      REPORT_POLL_SECONDS: ${REPORT_POLL_SECONDS:-3}
+      REPORT_MAX_PENDING_PER_ORGANIZATION: ${REPORT_MAX_PENDING_PER_ORGANIZATION:-25}
+      REPORT_MAX_RUNNING_PER_ORGANIZATION: ${REPORT_MAX_RUNNING_PER_ORGANIZATION:-3}
+      REPORT_DOWNLOAD_MAX_BYTES: ${REPORT_DOWNLOAD_MAX_BYTES:-67108864}
       MAX_PDF_PAGES: ${MAX_PDF_PAGES:-25}
       DOCUMENT_STORAGE_BACKEND: s3
       # Internal operations stay on Docker's private network. The signing
@@ -140,11 +150,14 @@ services:
     ports:
       - "8000:8000"
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=2)"]
+      # /readyz, not /healthz: a container whose database, storage or antivirus is
+      # unreachable must be reported unhealthy, not merely alive (C18). The image
+      # carries no curl, hence urllib.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=4)"]
       interval: 10s
-      timeout: 3s
+      timeout: 5s
       retries: 8
-      start_period: 10s
+      start_period: 20s
     restart: unless-stopped
 
   document-worker:
@@ -168,6 +181,23 @@ services:
       context: ./backend
     environment: *backend_environment
     command: ["python", "-m", "app.workers.analysis_detection_worker"]
+    depends_on:
+      backend:
+        condition: service_healthy
+    user: "10001:10001"
+    restart: unless-stopped
+
+  report-worker:
+    # C22 — la génération des rapports PDF/ZIP n'a plus lieu dans la requête HTTP.
+    # Ce service est le seul endroit où un rapport est rendu : il réclame un travail
+    # avec un bail, le produit, le dépose dans le stockage objet, puis le marque prêt.
+    # Il est sans état : « docker compose up --scale report-worker=4 » multiplie la
+    # capacité de rendu sans coordination supplémentaire (la réclamation utilise
+    # FOR UPDATE SKIP LOCKED). Il tourne avec un UID non privilégié et sans port.
+    build:
+      context: ./backend
+    environment: *backend_environment
+    command: ["python", "-m", "app.workers.report_generation_worker"]
     depends_on:
       backend:
         condition: service_healthy

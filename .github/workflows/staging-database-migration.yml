@@ -57,6 +57,12 @@ jobs:
       - name: Apply reviewed Alembic migrations as vericlaim_migrator
         working-directory: backend
         env:
+          # APP_ENV=development is intentional here: this job only loads Alembic, which
+          # imports app settings to resolve DATABASE_URL. It never serves traffic and never
+          # calls create_tables(), so the production-like validation (OIDC, storage, ClamAV)
+          # would demand unrelated secrets. The guarantee that matters is the explicit
+          # AUTO_CREATE_SCHEMA=false below, which is asserted by
+          # backend/tests/test_database_migration_workflow_safety.py.
           APP_ENV: development
           AUTO_CREATE_SCHEMA: "false"
           DATABASE_URL: ${{ secrets.DATABASE_URL_MIGRATOR }}
@@ -77,6 +83,12 @@ jobs:
         id: revision
         working-directory: backend
         env:
+          # APP_ENV=development is intentional here: this job only loads Alembic, which
+          # imports app settings to resolve DATABASE_URL. It never serves traffic and never
+          # calls create_tables(), so the production-like validation (OIDC, storage, ClamAV)
+          # would demand unrelated secrets. The guarantee that matters is the explicit
+          # AUTO_CREATE_SCHEMA=false below, which is asserted by
+          # backend/tests/test_database_migration_workflow_safety.py.
           APP_ENV: development
           AUTO_CREATE_SCHEMA: "false"
           DATABASE_URL: ${{ secrets.DATABASE_URL_MIGRATOR }}

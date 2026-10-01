@@ -11,6 +11,25 @@ Ce runbook couvre la migration de la base Neon européenne `vericlaim`. Il est v
 | `neondb_owner` | création initiale de base, rôles, récupération exceptionnelle | API, worker, migration régulière, GitHub Actions |
 | `vericlaim_migrator` | Alembic et grants post-migration | API, worker, navigateur |
 | `vericlaim_app` | API et workers | DDL, Alembic, rôle administrateur PostgreSQL |
+| `vericlaim_backup` | **sauvegarde logique** (`pg_dump`) et lecture seule pour contrôle | API, worker, écriture, navigation |
+
+### Pourquoi un quatrième rôle, et pourquoi il porte `BYPASSRLS`
+
+Mesuré le 30/09/2026 sur PostgreSQL 17 avec le schéma réel : deux pièges se referment sur toute
+sauvegarde faite avec les rôles existants.
+
+1. **`pg_dump` avec `vericlaim_migrator` échoue.** Les politiques RLS sont `FORCE`, donc le
+   propriétaire y est soumis :
+   `pg_dump: error: query failed: ERROR: query would be affected by row-level security policy for table "analyses"`.
+2. **`pg_dump --enable-row-security` réussit et sauvegarde une base amputée.** La sauvegarde
+   passe, la restauration passe, et la base restaurée ne contient **aucun** document, version,
+   segment ni événement d'audit. Les tables sont là, les organisations aussi : un contrôle
+   superficiel conclut au succès.
+
+Conséquence opérationnelle : sauvegarder ce schéma exige un rôle porteur de `BYPASSRLS`. Ce
+privilège est réservé au rôle de sauvegarde — ni `vericlaim_app`, ni `vericlaim_migrator` ne le
+portent — et ce rôle ne sert qu'à lire. La commande exacte, les droits requis (tables **et**
+séquences) et l'exercice reproductible sont dans [`restore-runbook.md`](restore-runbook.md).
 
 ## Préconditions uniques
 
@@ -83,7 +102,9 @@ Le workflow ne possède que `contents: read`, n’écoute aucun événement `pus
 ## Résultats attendus à cette étape
 
 ```text
-Alembic revision : d3c8a6e1b409 (tant que main pointe sur l’état C6.1)
+Alembic revision : tête lue dans backend/alembic/versions/ (f63c9a1b7d20 au 30/09/2026)
+
+La révision n’est plus recopiée à la main dans ce document : `scripts/ci/check_migration_discipline.py` la lit dans la chaîne de migrations et **refuse** tout document qui cite une tête périmée. C’est le défaut qui laissait la CI rouge en permanence avant C24 : une valeur recopiée dans trois fichiers finit par être fausse dans deux.
 Runtime role     : vericlaim_app
 Runtime bypass   : false
 RLS              : activé + forcé sur les tables tenant-scoped
@@ -96,4 +117,4 @@ Audit            : UPDATE/DELETE refusés au rôle runtime
 - Ne pas utiliser `neondb_owner` pour contourner l’erreur.
 - Ne pas lancer `alembic downgrade` en production sans plan de restauration validé : les migrations peuvent contenir des opérations destructrices ou des données de référence.
 - En cas de migration partiellement appliquée, geler les déploiements applicatifs, documenter la révision réellement présente, puis restaurer/réparer via une procédure revue.
-- Avant toute donnée client, exécuter et consigner un exercice de restauration Neon/PITR sur un environnement isolé.
+- Avant toute donnée client, exécuter et consigner un exercice de restauration Neon/PITR sur un environnement isolé. L’exercice est outillé et tourne à chaque pull request sur PostgreSQL (`scripts/ci/rehearse_restore.py`) ; sur Neon, il reste à exécuter avec les identifiants réels et à consigner — c’est la seule partie de cette phrase qu’aucune automatisation ne peut faire à votre place.
