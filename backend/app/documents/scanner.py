@@ -7,12 +7,15 @@ protocol so no temporary shared file is needed.
 
 from __future__ import annotations
 
+import logging
 import socket
 import struct
 from dataclasses import dataclass
 from typing import Protocol
 
-from app.core.config import Settings
+logger = logging.getLogger("vericlaim.documents.scanner")
+
+from app.core.config import Settings  # noqa: E402 — kept next to the builders below
 
 
 class MalwareScanError(RuntimeError):
@@ -33,6 +36,10 @@ class MalwareScanResult:
 class MalwareScanner(Protocol):
     def scan(self, payload: bytes) -> MalwareScanResult: ...
 
+    def probe(self) -> tuple[bool, str]:
+        """Reachability probe used by /readyz. Never raises; returns a short code."""
+        ...
+
 
 class DisabledMalwareScanner:
     """Fail closed rather than parse an unscanned binary in normal environments."""
@@ -40,6 +47,9 @@ class DisabledMalwareScanner:
     def scan(self, payload: bytes) -> MalwareScanResult:
         del payload
         raise MalwareScannerUnavailableError("Le service antivirus documentaire n’est pas configuré.")
+
+    def probe(self) -> tuple[bool, str]:
+        return False, "scanner désactivé : aucun document ne peut être importé"
 
 
 class TestCleanMalwareScanner:
@@ -51,6 +61,12 @@ class TestCleanMalwareScanner:
         if b"EICAR-STANDARD-ANTIVIRUS-TEST-FILE" in payload:
             return MalwareScanResult(is_clean=False, engine="test-eicar")
         return MalwareScanResult(is_clean=True, engine="test-only")
+
+    def probe(self) -> tuple[bool, str]:
+        # Readiness must not report a fake scanner as a real antivirus. The status is
+        # `ok` because the configured scanner is reachable — `capabilities` and the
+        # engine name say test-only, and this scanner cannot be built outside tests.
+        return True, "scanner de test (aucun antivirus réel)"
 
 
 class ClamAvMalwareScanner:
@@ -83,6 +99,30 @@ class ClamAvMalwareScanner:
         if response.endswith(" OK"):
             return MalwareScanResult(is_clean=True, engine="clamav")
         raise MalwareScanError("Le service antivirus a retourné une réponse invalide.")
+
+    def probe(self) -> tuple[bool, str]:
+        """Send the documented clamd PING and expect PONG.
+
+        `PING` (command `zPING\0`) is the cheapest documented liveness check: it
+        proves the daemon answers *and* that its signature database is loadable,
+        which is what a document pipeline actually depends on.
+        """
+        try:
+            with socket.create_connection(
+                (self._host, self._port), timeout=min(self._timeout_seconds, 3)
+            ) as connection:
+                connection.settimeout(min(self._timeout_seconds, 3))
+                connection.sendall(b"zPING\0")
+                response = self._read_response(connection)
+        except (OSError, MalwareScanError) as exc:
+            logger.warning(
+                "Antivirus readiness probe failed",
+                extra={"event": "scanner_probe_failed", "error": type(exc).__name__},
+            )
+            return False, f"ping: {type(exc).__name__}"
+        if response.upper() == "PONG":
+            return True, "ping: pong"
+        return False, "ping: réponse inattendue"
 
     @staticmethod
     def _read_response(connection: socket.socket) -> str:

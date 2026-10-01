@@ -28,6 +28,8 @@ from app.engine.document_extractor import (
     ExtractionResult,
 )
 from app.identity.service import append_audit_event
+from app.billing.enforcement import assert_quota_available, settle_usage
+from app.billing.plans import Metric
 from app.models.domain import (
     Document,
     DocumentExtractionJob,
@@ -166,6 +168,7 @@ def enqueue_document_extraction(
     organization_id: UUID,
     actor_user_id: UUID | None,
     request_id: str | None,
+    expected_pages: int | None = None,
 ) -> DocumentExtractionJob:
     """Create the one durable job for a newly promoted immutable version.
 
@@ -180,6 +183,19 @@ def enqueue_document_extraction(
     )
     if existing is not None:
         return existing
+    # C13 — quota de pages OCR. Le contrôle a lieu **avant** de mettre le texte en
+    # file : refuser après l'OCR serait refuser un coût déjà engagé. Un job déjà
+    # existant sort plus haut et ne consomme donc rien de plus.
+    #
+    # C21 : ce contrôle portait sur **une** page, quel que soit le document. Un scan de
+    # 300 pages était donc accepté alors qu'il ne restait qu'une page de quota, et la
+    # consommation réelle n'était constatée qu'après l'OCR — c'est-à-dire après que le
+    # coût a été payé. Le nombre de pages est maintenant connu au moment de la promotion
+    # (comptage sans rendu) : le refus arrive avant le travail, avec le chiffre exact.
+    pages_to_reserve = max(int(expected_pages or 1), 1)
+    assert_quota_available(
+        db, organization_id=organization_id, metric=Metric.OCR_PAGES, quantity=pages_to_reserve
+    )
     job = DocumentExtractionJob(
         id=uuid4(),
         organization_id=organization_id,
@@ -477,8 +493,17 @@ def _derived_text_key(*, organization_id: UUID, document_id: UUID, version_id: U
     )
 
 
+_SEGMENT_TYPES: dict[str, SegmentType] = {
+    "image_ocr": SegmentType.IMAGE_OCR,
+    # C23 — un tableau est un segment à part entière, avec sa lecture structurée. Avant
+    # ce chantier, `SegmentType.TABLE` existait dans le modèle et n'était jamais produit.
+    "table": SegmentType.TABLE,
+    "paragraph": SegmentType.PARAGRAPH,
+}
+
+
 def _segment_type(value: str) -> SegmentType:
-    return SegmentType.IMAGE_OCR if value == "image_ocr" else SegmentType.PARAGRAPH
+    return _SEGMENT_TYPES.get(value, SegmentType.PARAGRAPH)
 
 
 def process_claimed_document_extraction(
@@ -649,13 +674,30 @@ def _publish_extraction_result(
                     text=segment.text,
                     start_offset=segment.start_offset,
                     end_offset=segment.end_offset,
-                    bounding_box_json=None,
+                    # C23 — `bounding_box_json` porte la lecture structurée d'un tableau
+                    # (critère / valeur / unité, offsets de cellule). La colonne existait,
+                    # elle n'était jamais remplie : c'est ce qui obligeait à citer le bloc.
+                    bounding_box_json=getattr(segment, "table", None),
                     # Segment offsets address the canonical transcript, while
                     # this hash anchors each citation to the original binary.
                     source_sha256=version.sha256,
                 )
             )
         version.page_count = result.page_count
+        # C13 — la consommation réelle est enregistrée ici, quand le nombre de pages
+        # est connu, et une seule fois par version (`ocr:<version>`). Le travail a eu
+        # lieu : le journal doit le porter même s'il dépasse le quota — c'est la
+        # tentative suivante qui est refusée, jamais la comptabilisation.
+        settle_usage(
+            db,
+            organization_id=claim.organization_id,
+            metric=Metric.OCR_PAGES,
+            quantity=result.page_count,
+            source_type="document_extraction",
+            source_id=str(version.id),
+            idempotency_key=f"ocr:{version.id}",
+            actor_user_id=None,
+        )
         version.extraction_engine_version = EXTRACTION_ENGINE_VERSION
         version.extracted_text_storage_key = output_key
         version.extracted_text_sha256 = extracted_text_sha256
