@@ -142,7 +142,15 @@ def test_healthz_does_not_claim_more_than_the_process(client):
 
 
 def test_readyz_is_ready_locally_and_names_the_disabled_capabilities(client):
-    """A correct local instance is ready, and says what it cannot do."""
+    """A correct local instance is ready, and says what it cannot do.
+
+    Les capacités suivent la **configuration**, pas le poste : en développement le
+    scanner est désactivé, sous ``APP_ENV=test`` il est remplacé par un scanner de test.
+    La version précédente affirmait ``malware_scanning: False`` en dur, donc ne passait
+    que là où le scanner est désactivé : l'intégration continue, qui pose ``APP_ENV=test``,
+    échouait sur cette seule ligne pendant que la suite passait sur un poste de
+    développement. On fixe la relation, pas l'environnement.
+    """
     response = client.get("/readyz")
     assert response.status_code == 200, response.text
     body = response.json()
@@ -150,7 +158,7 @@ def test_readyz_is_ready_locally_and_names_the_disabled_capabilities(client):
     assert body["capabilities"] == {
         "database": True,
         "document_storage": False,
-        "malware_scanning": False,
+        "malware_scanning": settings.document_scanner_mode != "disabled",
     }
     storage = next(check for check in body["checks"] if check["name"] == "document_storage")
     assert storage["status"] == "disabled"
