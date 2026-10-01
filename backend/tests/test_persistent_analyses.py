@@ -162,7 +162,7 @@ def _claim_and_process(engine, seed: Seed):
         db.commit()
     with Session(engine, expire_on_commit=False) as db:
         set_db_request_context(db, user_id=seed.user_id, organization_id=seed.organization_id)
-        completion = process_claimed_analysis_detection(db, claim=claim)
+        completion = process_claimed_analysis_detection(db, settings=settings, claim=claim)
         db.commit()
         return completion
 
@@ -180,14 +180,23 @@ def test_persistent_detection_uses_segments_preserves_citations_and_marks_ocr_fo
     assert completion.job.status == AnalysisDetectionJobStatus.COMPLETED
     assert completion.claim_count == 2
     assert completion.review_required_claim_count == 1
+    # Pipeline v2: the engine now returns a real conclusion for this version.
+    # ``overall_risk_level`` stays NULL because the rule book defines no such
+    # taxonomy; inventing one would be a fabricated legal signal.
     assert completion.version.overall_risk_level is None
-    assert completion.version.risk_score is None
-    assert completion.version.rulebook_version == "not-applicable-deterministic-claims-v1"
+    assert completion.version.risk_score is not None
+    assert completion.version.overall_compliance is not None
+    assert completion.version.rulebook_version.startswith("2026-09-30+")
+    assert completion.version.engine_version == "vericlaim-analysis-engine-v2"
     assert completion.version.result_sha256 is not None
-    assert completion.version.result_json["scope"] == "citeable_claim_detection_only"
+    assert completion.version.result_json["scope"] == "claim_detection_and_regulatory_verdicts"
     assert completion.version.result_json["input_manifest_sha256"] == completion.version.input_manifest_sha256
-    assert "evaluations" not in completion.version.result_json
-    assert "risk_score" not in completion.version.result_json
+    assert completion.version.result_json["engine_version"] == "vericlaim-analysis-engine-v2"
+    assert completion.version.result_json["rulebook_version"] == completion.version.rulebook_version
+    assert completion.version.result_json["verdict_count"] == len(
+        completion.version.result_json["verdicts"]
+    )
+    assert completion.version.result_json["evaluation_context"]["as_of_date"]
 
     with Session(engine) as db:
         claims = list_version_claims(db, organization_id=seed.organization_id, analysis_version_id=version_id)
@@ -196,8 +205,20 @@ def test_persistent_detection_uses_segments_preserves_citations_and_marks_ocr_fo
         ocr = next(claim for claim in claims if claim.document_segment_id == seed.ocr_segment_id)
         assert native.status == ClaimStatus.DETECTED
         assert ocr.status == ClaimStatus.REVIEW_REQUIRED
-        assert native.confidence_score is None
-        assert ocr.confidence_score is None
+        # C10: every detection carries a deterministic rubric score published
+        # with the factors that produced it (never a bare number).
+        native_confidence = native.attributes_json["detection_confidence"]
+        ocr_confidence = ocr.attributes_json["detection_confidence"]
+        assert native.confidence_score is not None
+        assert 0.0 <= native.confidence_score <= 1.0
+        assert ocr.confidence_score is not None
+        assert ocr.confidence_score <= 0.35
+        assert native_confidence["rubric_version"] == "confidence-rubric-v1"
+        assert native_confidence["level"] in {"high", "medium", "low"}
+        assert native_confidence["factors"]
+        assert "probabilité" in native_confidence["basis"]
+        assert ocr_confidence["level"] == "human_review_required"
+        assert "segment_ocr" in ocr_confidence["review_reasons"]
         for claim in claims:
             provenance = claim.attributes_json
             assert provenance["segment_id"] == str(claim.document_segment_id)
@@ -340,7 +361,7 @@ def test_worker_refuses_a_segment_snapshot_that_no_longer_matches_the_hashed_man
     with Session(engine) as db:
         set_db_request_context(db, user_id=seed.user_id, organization_id=seed.organization_id)
         with pytest.raises(AnalysisDetectionTerminalError) as raised:
-            process_claimed_analysis_detection(db, claim=claim)
+            process_claimed_analysis_detection(db, settings=settings, claim=claim)
         assert raised.value.code == "input_segment_manifest_mismatch"
 
 
@@ -414,7 +435,7 @@ def test_analysis_api_queues_is_idempotent_and_exposes_persisted_snapshot():
         assert created.status_code == 202, created.text
         payload = created.json()
         assert payload["version"]["status"] == "queued"
-        assert payload["version"]["rulebook_version"] == "not-applicable-deterministic-claims-v1"
+        assert payload["version"]["rulebook_version"].startswith("2026-09-30+")
         assert payload["detection_job"]["status"] == "queued"
         assert "avis juridique" in payload["disclaimer"]
         replay = client.post(
@@ -442,7 +463,7 @@ def test_analysis_api_queues_is_idempotent_and_exposes_persisted_snapshot():
             db.commit()
         with SessionLocal() as db:
             set_db_request_context(db, user_id=identity.user_id, organization_id=identity.organization_id)
-            process_claimed_analysis_detection(db, claim=worker_claim)
+            process_claimed_analysis_detection(db, settings=settings, claim=worker_claim)
             db.commit()
 
         snapshot = client.get(f"/api/v1/analyses/{payload['analysis']['id']}/versions/1")
@@ -451,7 +472,13 @@ def test_analysis_api_queues_is_idempotent_and_exposes_persisted_snapshot():
         assert snapshot_body["version"]["status"] == "completed"
         assert len(snapshot_body["claims"]) == 1
         claim = snapshot_body["claims"][0]
-        assert claim["confidence_score"] is None
+        # C10: the API exposes the score, its level, its factors and the basis
+        # that says out loud what the number is not.
+        assert claim["confidence_score"] is not None
+        assert claim["confidence_level"] in {"high", "medium", "low", "human_review_required"}
+        assert claim["confidence_factors"]
+        assert claim["confidence_rubric_version"] == "confidence-rubric-v1"
+        assert "probabilité" in claim["confidence_basis"]
         assert claim["citation"]["page_number"] == 1
         claim_detail = client.get(f"/api/v1/claims/{claim['id']}")
         assert claim_detail.status_code == 200

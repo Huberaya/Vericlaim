@@ -4,7 +4,7 @@ import csv
 import io
 import json
 import zipfile
-from datetime import datetime, timezone
+
 from typing import Optional
 
 from app.models.schemas import EvaluationResponse
@@ -50,16 +50,36 @@ def build_evidence_csv(report: EvaluationResponse) -> str:
     return output.getvalue()
 
 
-def build_readme_dossier(organization_name: str, product_sku: str) -> str:
-    """Rédige la notice de pré-audit accompagnant le dossier probatoire."""
+def build_readme_dossier(
+    organization_name: str,
+    product_sku: str,
+    report: EvaluationResponse,
+    signature_reference: str | None = None,
+    signature_value: str | None = None,
+    signature_key_id: str | None = None,
+) -> str:
+    """Rédige la notice de pré-audit accompagnant le dossier probatoire.
+
+    Every identifier printed here is read from the analysis that was persisted.
+    The notice previously announced "Rule Engine v1.0.0" and the download date,
+    neither of which described the analysis the archive actually contained.
+    """
+    trail = report.audit_trail
     return f"""================================================================================
 VERICLAIM AI — DOSSIER DE PRÉ-AUDIT RÉGLEMENTAIRE & REGISTRE PROBATOIRE
 ================================================================================
 
 Organisation : {organization_name}
 Référence SKU : {product_sku}
-Date de scellement : {datetime.now(timezone.utc).strftime("%d/%m/%Y à %H:%M UTC")}
-Moteur réglementaire : VeriClaim Rule Engine v1.0.0
+Date d'analyse : {trail.evaluated_at_utc.strftime("%d/%m/%Y à %H:%M UTC")}
+Référence temporelle du verdict : {trail.as_of_date.isoformat()}
+Moteur réglementaire : {trail.engine_version}
+Empreinte du Rule Book : {trail.rulebook_version}
+Empreinte SHA-256 du résultat : {trail.report_sha256 or "NON DISPONIBLE"}
+Scellement de la piste d'audit : {trail.record_hash or "NON DISPONIBLE"}
+Référence de vérification : {signature_reference or "NON DISPONIBLE"}
+Signature HMAC-SHA-256 : {signature_value or "NON DISPONIBLE"}
+Identifiant de clé : {signature_key_id or "NON DISPONIBLE"}
 
 --------------------------------------------------------------------------------
 CONTENU DE L'ARCHIVE :
@@ -93,8 +113,17 @@ def create_regulatory_dossier_zip(
     organization_name: str = "Organisation Déclarée",
     product_identifier: Optional[str] = None,
     surface: str = "packaging",
+    signature_reference: str | None = None,
+    signature_value: str | None = None,
+    signature_key_id: str | None = None,
+    deprecated_reasons: Optional[list[str]] = None,
 ) -> bytes:
-    """Génère l'archive ZIP scellée contenant l'ensemble du pack probatoire."""
+    """Génère l'archive ZIP scellée contenant l'ensemble du pack probatoire.
+
+    The signature travels with the archive: the PDF inside carries it, and so does
+    the README, so a reader who only opens the text notice still gets the handle
+    needed to verify the pack.
+    """
     sku = product_identifier or "SKU-EXPORT"
 
     # 1. Génération du PDF
@@ -103,6 +132,10 @@ def create_regulatory_dossier_zip(
         organization_name=organization_name,
         product_identifier=sku,
         surface=surface,
+        signature_reference=signature_reference,
+        signature_value=signature_value,
+        signature_key_id=signature_key_id,
+        deprecated_reasons=deprecated_reasons,
     )
     pdf_bytes = pdf_gen.generate()
 
@@ -115,7 +148,9 @@ def create_regulatory_dossier_zip(
     csv_bytes = csv_text.encode("utf-8-sig")  # BOM pour Excel
 
     # 4. Notice README
-    readme_text = build_readme_dossier(organization_name, sku)
+    readme_text = build_readme_dossier(
+        organization_name, sku, report, signature_reference, signature_value, signature_key_id
+    )
     readme_bytes = readme_text.encode("utf-8")
 
     # 5. Assemblage du ZIP
