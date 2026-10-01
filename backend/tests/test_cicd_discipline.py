@@ -46,9 +46,9 @@ def _migration_discipline_step() -> str:
     document = yaml.safe_load(_workflow_text())
     for job in document["jobs"].values():
         for step in job.get("steps", []):
-            if step.get("name") == "Check migration discipline":
+            if step.get("name") == "Contrôler la discipline de migration":
                 return step["run"]
-    raise AssertionError("l'étape « Check migration discipline » n'existe plus dans la CI")
+    raise AssertionError("l'étape « Contrôler la discipline de migration » n'existe plus dans la CI")
 
 
 def _run_guard(*arguments: str) -> subprocess.CompletedProcess[str]:

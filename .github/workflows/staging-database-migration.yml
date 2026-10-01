@@ -1,10 +1,10 @@
-name: Staging database migration
+name: Migration de base — staging
 
 on:
   workflow_dispatch:
     inputs:
       confirmation:
-        description: "Choose APPLY to run the reviewed Alembic chain against staging."
+        description: "Choisir APPLY pour exécuter la chaîne Alembic relue sur staging."
         required: true
         type: choice
         default: "DO_NOT_APPLY"
@@ -22,7 +22,7 @@ concurrency:
 jobs:
   migrate:
     if: github.ref == 'refs/heads/main' && inputs.confirmation == 'APPLY'
-    name: Manual staging database migration
+    name: Migration de base staging, manuelle
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     environment: staging
@@ -44,25 +44,25 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
 
-      - name: Confirm the migration credential is present
+      - name: Vérifier que l'identifiant de migration est présent
         env:
           DATABASE_URL_MIGRATOR: ${{ secrets.DATABASE_URL_MIGRATOR }}
         run: |
           set -euo pipefail
           test -n "${DATABASE_URL_MIGRATOR:-}" || {
-            echo "DATABASE_URL_MIGRATOR is not configured in the GitHub staging environment." >&2
+            echo "DATABASE_URL_MIGRATOR n'est pas configuré dans l'environnement GitHub staging." >&2
             exit 1
           }
 
-      - name: Apply reviewed Alembic migrations as vericlaim_migrator
+      - name: Appliquer les migrations Alembic relues en vericlaim_migrator
         working-directory: backend
         env:
-          # APP_ENV=development is intentional here: this job only loads Alembic, which
-          # imports app settings to resolve DATABASE_URL. It never serves traffic and never
-          # calls create_tables(), so the production-like validation (OIDC, storage, ClamAV)
-          # would demand unrelated secrets. The guarantee that matters is the explicit
-          # AUTO_CREATE_SCHEMA=false below, which is asserted by
-          # backend/tests/test_database_migration_workflow_safety.py.
+          # APP_ENV=development est volontaire ici : ce travail ne charge qu'Alembic, qui
+          # importe les réglages de l'application pour résoudre DATABASE_URL. Il ne sert
+          # jamais de trafic et n'appelle jamais create_tables(), donc la validation de type
+          # production (OIDC, stockage, ClamAV) exigerait des secrets sans rapport. La
+          # garantie qui compte est le AUTO_CREATE_SCHEMA=false explicite ci-dessous,
+          # vérifié par backend/tests/test_database_migration_workflow_safety.py.
           APP_ENV: development
           AUTO_CREATE_SCHEMA: "false"
           DATABASE_URL: ${{ secrets.DATABASE_URL_MIGRATOR }}
@@ -83,12 +83,12 @@ jobs:
         id: revision
         working-directory: backend
         env:
-          # APP_ENV=development is intentional here: this job only loads Alembic, which
-          # imports app settings to resolve DATABASE_URL. It never serves traffic and never
-          # calls create_tables(), so the production-like validation (OIDC, storage, ClamAV)
-          # would demand unrelated secrets. The guarantee that matters is the explicit
-          # AUTO_CREATE_SCHEMA=false below, which is asserted by
-          # backend/tests/test_database_migration_workflow_safety.py.
+          # APP_ENV=development est volontaire ici : ce travail ne charge qu'Alembic, qui
+          # importe les réglages de l'application pour résoudre DATABASE_URL. Il ne sert
+          # jamais de trafic et n'appelle jamais create_tables(), donc la validation de type
+          # production (OIDC, stockage, ClamAV) exigerait des secrets sans rapport. La
+          # garantie qui compte est le AUTO_CREATE_SCHEMA=false explicite ci-dessous,
+          # vérifié par backend/tests/test_database_migration_workflow_safety.py.
           APP_ENV: development
           AUTO_CREATE_SCHEMA: "false"
           DATABASE_URL: ${{ secrets.DATABASE_URL_MIGRATOR }}
@@ -105,7 +105,7 @@ jobs:
         run: |
           set -euo pipefail
           test -n "${DATABASE_URL_APP:-}" || {
-            echo "DATABASE_URL_APP is not configured in the GitHub staging environment." >&2
+            echo "DATABASE_URL_APP n'est pas configuré dans l'environnement GitHub staging." >&2
             exit 1
           }
           python infra/neon/verify_runtime.py --expected-revision "$EXPECTED_REVISION"

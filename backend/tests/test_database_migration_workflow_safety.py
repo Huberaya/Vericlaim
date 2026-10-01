@@ -29,7 +29,7 @@ def test_staging_database_migration_is_manual_main_only_and_isolated() -> None:
 
     _assert_manual_main_only_workflow(text, "staging")
     assert "group: vericlaim-staging-database-migration" in text
-    assert "GitHub staging environment" in text
+    assert "n'est pas configuré dans l'environnement GitHub staging" in text
 
 
 def test_production_database_migration_remains_manual_and_protected() -> None:
@@ -37,7 +37,7 @@ def test_production_database_migration_remains_manual_and_protected() -> None:
 
     _assert_manual_main_only_workflow(text, "production")
     assert "group: vericlaim-production-database-migration" in text
-    assert "GitHub production environment" in text
+    assert "n'est pas configuré dans l'environnement GitHub production" in text
 
 
 def test_runbook_requires_staging_validation_before_production() -> None:
@@ -45,9 +45,9 @@ def test_runbook_requires_staging_validation_before_production() -> None:
         encoding="utf-8"
     )
 
-    assert "Continuous integration" in text
+    assert "Intégration continue" in text
     assert "## Validation staging obligatoire" in text
-    assert "Staging database migration" in text
+    assert "Migration de base — staging" in text
     assert "## Déclenchement de migration production" in text
     assert text.index("## Validation staging obligatoire") < text.index("## Déclenchement de migration production")
 

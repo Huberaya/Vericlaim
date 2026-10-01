@@ -38,7 +38,7 @@ séquences) et l'exercice reproductible sont dans [`restore-runbook.md`](restore
 - les rôles `vericlaim_migrator` et `vericlaim_app` sont non-superuser et `NOBYPASSRLS` ;
 - le rôle propriétaire ne figure dans aucun secret GitHub ou Vercel ;
 - la branche `main` est protégée ;
-- la CI GitHub `Continuous integration` a réussi sur la pull request avant son merge ;
+- la CI GitHub `Intégration continue` a réussi sur la pull request avant son merge ;
 - l’environnement GitHub `production` exige une validation humaine ;
 - les environnements GitHub `staging` et `production` ont chacun leurs propres secrets :
 
@@ -66,7 +66,7 @@ Après chaque activation, stocker les deux URLs uniquement dans l’environnemen
 1. Créer une branche Neon `staging` isolée depuis la baseline `production`, avec un compute lecture-écriture dédié.
 2. Activer sur cette branche des credentials `vericlaim_migrator` et `vericlaim_app` distincts de ceux de production.
 3. Configurer les deux URLs uniquement dans l’environnement GitHub `staging`.
-4. Ouvrir **GitHub → Actions → Staging database migration**.
+4. Ouvrir **GitHub → Actions → Migration de base — staging**.
 5. Choisir la branche `main`, puis `APPLY` dans le champ de confirmation.
 6. Vérifier le succès de toutes les étapes :
 
@@ -84,7 +84,7 @@ Après chaque activation, stocker les deux URLs uniquement dans l’environnemen
 Uniquement après validation humaine explicite de staging :
 
 1. Vérifier que la pull request contenant les migrations a été revue et fusionnée dans `main`.
-2. Ouvrir **GitHub → Actions → Production database migration**.
+2. Ouvrir **GitHub → Actions → Migration de base — production**.
 3. Choisir la branche `main`.
 4. Choisir `APPLY` dans le champ de confirmation.
 5. Valider l’exécution de l’environnement `production` lorsque GitHub la demande.
