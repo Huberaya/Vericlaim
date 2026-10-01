@@ -1,1 +1,1 @@
-"""VeriClaim AI backend."""
+"""VeriClaim backend."""

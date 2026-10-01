@@ -116,6 +116,52 @@ class ProofValidator:
     def _normalise_standard(value: str | None) -> str:
         return re.sub(r"[^a-z0-9]", "", (value or "").lower())
 
+    # ------------------------------------------------------------------
+    # C17 — validité déclarée des preuves, opposée à la date de l'audit
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _declared_validity(item, context: AuditContext) -> str:
+        """Ce que les dates **déclarées** de la preuve disent de la date de l'audit.
+
+        Le produit ne dispose d'aucun registre exploité par défaut : ces dates ne sont pas
+        corroborées. Elles restent opposables au déclarant, et une preuve dont la validité
+        déclarée exclut la date de l'audit ne peut pas fonder une conclusion favorable —
+        c'est le cas D de l'audit (« certifié ECOLABEL expiré »), qui passait inaperçu
+        parce que seules les dates du registre serveur étaient regardées.
+        """
+
+        issued_on = getattr(item, "issued_on", None)
+        expires_on = getattr(item, "expires_on", None)
+        if expires_on is not None and context.as_of_date > expires_on:
+            return "expired"
+        if issued_on is not None and context.as_of_date < issued_on:
+            return "not_yet_valid"
+        return "usable"
+
+    def _filter_declared_validity(self, items, context: AuditContext):
+        """Sépare les preuves utilisables des preuves écartées, en gardant les motifs."""
+
+        usable, rejected = [], []
+        for item in items:
+            state = self._declared_validity(item, context)
+            if state == "usable":
+                usable.append(item)
+            else:
+                rejected.append((self._evidence_id(item), state, getattr(item, "expires_on", None), getattr(item, "issued_on", None)))
+        return usable, rejected
+
+    @staticmethod
+    def _rejection_detail(rejected) -> str:
+        parts = []
+        for evidence_id, state, expires_on, issued_on in rejected:
+            if state == "expired":
+                parts.append(f"{evidence_id} (validité déclarée terminée le {expires_on.isoformat()})")
+            else:
+                parts.append(f"{evidence_id} (validité déclarée à partir du {issued_on.isoformat()})")
+        return "; ".join(parts)
+
+
     def validate_lca(
         self,
         dossier: EvidenceDossier,
@@ -147,6 +193,21 @@ class ProofValidator:
                 required_fields=required,
                 missing_fields=required,
                 detail="Aucun rapport d'ACV n'est déclaré dans le dossier.",
+            )
+
+        items, rejected = self._filter_declared_validity(items, context)
+        if not items:
+            return EvidenceCheck(
+                check_name="ACV_ISO_14044",
+                status=EvidenceStatus.INVALID,
+                required_fields=required,
+                missing_fields=["preuve valide à la date de l'audit"],
+                detail=(
+                    "Les rapports d'ACV déclarés ne sont pas valides à la date de l'audit "
+                    f"({context.as_of_date.isoformat()}) selon leurs propres dates : "
+                    f"{self._rejection_detail(rejected)}. Ces dates sont déclarées, non "
+                    "corroborées par une source indépendante."
+                ),
             )
 
         best_missing: list[str] | None = None
@@ -224,6 +285,22 @@ class ProofValidator:
                 detail="Aucun certificat Ecolabel ou schéma Type I n'est déclaré.",
             )
 
+        usable_items, out_of_validity = self._filter_declared_validity(items, context)
+        if not usable_items:
+            return EvidenceCheck(
+                check_name="CERTIFICAT_ECOLABEL",
+                status=EvidenceStatus.INVALID,
+                required_fields=required,
+                missing_fields=["preuve valide à la date de l'audit"],
+                detail=(
+                    "Les certificats déclarés ne sont pas valides à la date de l'audit "
+                    f"({context.as_of_date.isoformat()}) selon leurs propres dates : "
+                    f"{self._rejection_detail(out_of_validity)}. La validité déclarée est "
+                    "opposable au déclarant même sans registre indépendant."
+                ),
+                independently_verified=False,
+            )
+        items = usable_items
         rejected: list[str] = []
         for item in items:
             record = self.certificate_registry.find(item.license_number)
@@ -291,7 +368,7 @@ class ProofValidator:
             independently_verified=False,
         )
 
-    def validate_recycling_route(self, dossier: EvidenceDossier) -> EvidenceCheck:
+    def validate_recycling_route(self, dossier: EvidenceDossier, context: AuditContext) -> EvidenceCheck:
         items = [item for item in dossier.items if isinstance(item, RecyclingRouteEvidence)]
         required = [
             "territoire(s) de vente / de collecte identifié(s)",
@@ -307,6 +384,20 @@ class ProofValidator:
                 required_fields=required,
                 missing_fields=required,
                 detail="Aucune preuve de filière de collecte, tri et traitement n'est déclarée.",
+            )
+
+        items, rejected = self._filter_declared_validity(items, context)
+        if not items:
+            return EvidenceCheck(
+                check_name="FILIERE_RECYCLAGE",
+                status=EvidenceStatus.INVALID,
+                required_fields=required,
+                missing_fields=["preuve valide à la date de l'audit"],
+                detail=(
+                    "Les preuves de filière déclarées ne sont pas valides à la date de l'audit "
+                    f"({context.as_of_date.isoformat()}) : {self._rejection_detail(rejected)}."
+                ),
+                independently_verified=False,
             )
 
         best_missing: list[str] | None = None
@@ -348,21 +439,47 @@ class ProofValidator:
     def validate_french_carbon_neutrality(
         self,
         dossier: EvidenceDossier,
+        context: AuditContext,
         *,
         offsetting_asserted: bool,
     ) -> list[EvidenceCheck]:
         inventories = [item for item in dossier.items if isinstance(item, GHGInventoryEvidence)]
         plans = [item for item in dossier.items if isinstance(item, GHGReductionPlanEvidence)]
         offsets = [item for item in dossier.items if isinstance(item, CarbonOffsetEvidence)]
+        # C17 : une pièce dont la validité déclarée exclut la date de l'audit ne peut pas
+        # fonder un bilan, un plan ou une compensation. Elle est écartée explicitement.
+        #
+        # Distinction tenue : « aucune pièce fournie » (NOT_PROVIDED) et « pièce fournie
+        # mais hors validité » (INVALID) ne sont pas la même chose. Les confondre ferait
+        # disparaître le cas D de l'audit — un certificat expiré — derrière l'annonce
+        # « aucun justificatif déclaré », c'est-à-dire derrière un reproche au client qui
+        # n'a pas oublié de fournir sa pièce.
+        inventories, expired_inventories = self._filter_declared_validity(inventories, context)
+        plans, expired_plans = self._filter_declared_validity(plans, context)
+        offsets, expired_offsets = self._filter_declared_validity(offsets, context)
 
         if not inventories:
-            inventory_check = EvidenceCheck(
-                check_name="BILAN_GES_PRODUIT",
-                status=EvidenceStatus.NOT_PROVIDED,
-                required_fields=["émissions directes", "émissions indirectes", "périmètre produit", "publication accessible au public"],
-                missing_fields=["émissions directes", "émissions indirectes", "périmètre produit", "publication accessible au public"],
-                detail="Aucun bilan GES du produit ou service n'est déclaré.",
-            )
+            if expired_inventories:
+                inventory_check = EvidenceCheck(
+                    check_name="BILAN_GES_PRODUIT",
+                    status=EvidenceStatus.INVALID,
+                    required_fields=["émissions directes", "émissions indirectes", "périmètre produit", "publication accessible au public"],
+                    missing_fields=["bilan valide à la date de l'audit"],
+                    evidence_ids=[evidence_id for evidence_id, *_ in expired_inventories],
+                    detail=(
+                        "Un bilan GES est déclaré mais n'est pas valide à la date de l'audit "
+                        f"({context.as_of_date.isoformat()}) selon ses propres dates : "
+                        f"{self._rejection_detail(expired_inventories)}. Dates déclarées, non corroborées."
+                    ),
+                )
+            else:
+                inventory_check = EvidenceCheck(
+                    check_name="BILAN_GES_PRODUIT",
+                    status=EvidenceStatus.NOT_PROVIDED,
+                    required_fields=["émissions directes", "émissions indirectes", "périmètre produit", "publication accessible au public"],
+                    missing_fields=["émissions directes", "émissions indirectes", "périmètre produit", "publication accessible au public"],
+                    detail="Aucun bilan GES du produit ou service n'est déclaré.",
+                )
         else:
             inventory = inventories[0]
             missing = []
@@ -384,13 +501,27 @@ class ProofValidator:
             )
 
         if not plans:
-            plan_check = EvidenceCheck(
-                check_name="TRAJECTOIRE_EVIER_REDUIRE_COMPENSER",
-                status=EvidenceStatus.NOT_PROVIDED,
-                required_fields=["évitement prioritaire", "réduction avant compensation", "objectifs annuels quantifiés"],
-                missing_fields=["évitement prioritaire", "réduction avant compensation", "objectifs annuels quantifiés"],
-                detail="Aucune trajectoire d'évitement/réduction/compensation n'est déclarée.",
-            )
+            if expired_plans:
+                plan_check = EvidenceCheck(
+                    check_name="TRAJECTOIRE_EVIER_REDUIRE_COMPENSER",
+                    status=EvidenceStatus.INVALID,
+                    required_fields=["évitement prioritaire", "réduction avant compensation", "objectifs annuels quantifiés"],
+                    missing_fields=["trajectoire valide à la date de l'audit"],
+                    evidence_ids=[evidence_id for evidence_id, *_ in expired_plans],
+                    detail=(
+                        "Une trajectoire est déclarée mais n'est pas valide à la date de l'audit "
+                        f"({context.as_of_date.isoformat()}) selon ses propres dates : "
+                        f"{self._rejection_detail(expired_plans)}. Dates déclarées, non corroborées."
+                    ),
+                )
+            else:
+                plan_check = EvidenceCheck(
+                    check_name="TRAJECTOIRE_EVIER_REDUIRE_COMPENSER",
+                    status=EvidenceStatus.NOT_PROVIDED,
+                    required_fields=["évitement prioritaire", "réduction avant compensation", "objectifs annuels quantifiés"],
+                    missing_fields=["évitement prioritaire", "réduction avant compensation", "objectifs annuels quantifiés"],
+                    detail="Aucune trajectoire d'évitement/réduction/compensation n'est déclarée.",
+                )
         else:
             plan = plans[0]
             missing = []
@@ -412,13 +543,28 @@ class ProofValidator:
             )
 
         if offsetting_asserted and not offsets:
-            offset_check = EvidenceCheck(
-                check_name="COMPENSATION_RESIDUELLE",
-                status=EvidenceStatus.NOT_PROVIDED,
-                required_fields=["standard réglementaire", "preuve de retrait", "quantité", "émissions résiduelles couvertes"],
-                missing_fields=["standard réglementaire", "preuve de retrait", "quantité", "émissions résiduelles couvertes"],
-                detail="La communication évoque une compensation mais aucun justificatif de crédits n'est déclaré.",
-            )
+            if expired_offsets:
+                offset_check = EvidenceCheck(
+                    check_name="COMPENSATION_RESIDUELLE",
+                    status=EvidenceStatus.INVALID,
+                    required_fields=["standard réglementaire", "preuve de retrait", "quantité", "émissions résiduelles couvertes"],
+                    missing_fields=["crédits valides à la date de l'audit"],
+                    evidence_ids=[evidence_id for evidence_id, *_ in expired_offsets],
+                    detail=(
+                        "Des crédits de compensation sont déclarés mais ne sont pas valides à la date "
+                        f"de l'audit ({context.as_of_date.isoformat()}) selon leurs propres dates : "
+                        f"{self._rejection_detail(expired_offsets)}. Une compensation périmée ne "
+                        "couvre pas les émissions résiduelles d'aujourd'hui."
+                    ),
+                )
+            else:
+                offset_check = EvidenceCheck(
+                    check_name="COMPENSATION_RESIDUELLE",
+                    status=EvidenceStatus.NOT_PROVIDED,
+                    required_fields=["standard réglementaire", "preuve de retrait", "quantité", "émissions résiduelles couvertes"],
+                    missing_fields=["standard réglementaire", "preuve de retrait", "quantité", "émissions résiduelles couvertes"],
+                    detail="La communication évoque une compensation mais aucun justificatif de crédits n'est déclaré.",
+                )
         elif offsetting_asserted:
             offset = offsets[0]
             missing = []

@@ -10,73 +10,21 @@ from __future__ import annotations
 import re
 from decimal import Decimal, InvalidOperation
 
+from app.engine import lexicon
 from app.models.legal_types import ClaimType, DetectedClaim
 
 
-# The lexicon is intentionally explicit and versionable. A lexical hit is a
-# candidate assertion, not a final legal qualification.
+# The lexicon lives in :mod:`app.engine.lexicon` (C9): it is versioned and measured
+# by ``tests/corpus/claim_detection_corpus.json``, separately from this walker.
 CLAIM_PATTERNS: tuple[tuple[ClaimType, re.Pattern[str]], ...] = (
-    (
-        ClaimType.BIODEGRADABLE,
-        re.compile(r"\b(?:bio)?d[eé]gradable(?:s)?\b", re.IGNORECASE),
-    ),
-    (
-        ClaimType.NATURE_FRIENDLY,
-        re.compile(
-            r"\b(?:respectueux|respectueuse|respectueux|respectueuses)\s+de\s+l['’]environnement\b"
-            r"|\b(?:ami|amie)s?\s+de\s+la\s+nature\b"
-            r"|\b(?:bon|bonne|favorable)\s+(?:pour|à)\s+(?:l['’]environnement|la\s+plan[eè]te|la\s+nature)\b"
-            r"|\benvironmentally[- ]friendly\b"
-            r"|\bnature[- ]friendly\b"
-            r"|\bgentle\s+on\s+the\s+environment\b",
-            re.IGNORECASE,
-        ),
-    ),
-    (
-        ClaimType.CARBON_NEUTRALITY,
-        re.compile(
-            r"\bneutre\s+en\s+carbone\b"
-            r"|\bneutralit[eé]\s+carbone\b"
-            r"|\bz[eé]ro[- ]carbone\b"
-            r"|\bempreinte\s+carbone\s+(?:nulle|z[eé]ro)\b"
-            r"|\bclimatiquement\s+neutre\b"
-            r"|\bneutre\s+pour\s+le\s+climat\b"
-            r"|\bimpact\s+climatique\s+(?:neutre|r[eé]duit|positif|n[eé]gatif)\b"
-            r"|\b(?:carbon|climate)[- ](?:neutral|net[- ]zero|positive|negative|compensated)\b"
-            r"|\bnet[- ]zero\b"
-            r"|\bCO\s?2[- ]neutral\b"
-            r"|\bcarbon\s+neutral\b"
-            r"|\b(?:z[eé]ro|aucun)\s+impact\s+(?:carbone|climatique)\b",
-            re.IGNORECASE,
-        ),
-    ),
-    (
-        ClaimType.COMPARATIVE,
-        re.compile(
-            r"\b\d+(?:[.,]\d+)?\s*(?:fois|x|times)\s+moins\s+(?:polluant|polluante|polluting|carbon[- ]intensive)\b"
-            r"|\b(?:\d+(?:[.,]\d+)?\s?%|\d+(?:[.,]\d+)?\s+fois)\s+(?:moins|de\s+r[eé]duction)\b.{0,70}\b(?:que|vs\.?|versus|compar[eé](?:e|s|es)?\s+[àa])\b"
-            r"|\b(?:moins|plus)\s+(?:polluant(?:e|s|es)?|d['’]?[eé]missions|de\s+CO\s?2|carbon[- ]intensive)\b.{0,70}\b(?:que|vs\.?|versus|compared\s+(?:to|with)|than)\b"
-            r"|\b(?:twice|\d+\s?x)\s+less\s+(?:polluting|pollutant|carbon[- ]intensive)\b"
-            r"|\b(?:lower|less|reduced)\b.{0,60}\b(?:CO\s?2|carbon|emissions|environmental\s+impact)\b.{0,40}\b(?:than|vs\.?|versus)\b",
-            re.IGNORECASE,
-        ),
-    ),
-    (
-        ClaimType.RECYCLABLE,
-        re.compile(r"\b(?:recyclable|recyclables|recyclability)\b", re.IGNORECASE),
-    ),
-    (
-        ClaimType.GENERIC_ENVIRONMENTAL,
-        re.compile(
-            r"\b(?:[eé]cologique(?:s)?|[eé]co[- ]?(?:con[cç]u(?:e|s|es)?|responsable|friendly)|[eé]co)\b"
-            r"|\bvert(?:e|s|es)?\b"
-            r"|\bnaturel(?:le|s|les)?\b"
-            r"|\bgreen\b|\bnatural\b|\beco[- ]friendly\b|\beco\b"
-            r"|\bsustainable\b|\bclimate[- ]friendly\b|\bcarbon[- ]friendly\b"
-            r"|\bconscious\b|\bresponsible\b|\bnature['’]s\s+friend\b",
-            re.IGNORECASE,
-        ),
-    ),
+    (ClaimType.BIODEGRADABLE, lexicon.BIODEGRADABLE),
+    (ClaimType.NATURE_FRIENDLY, lexicon.NATURE_FRIENDLY),
+    (ClaimType.CARBON_NEUTRALITY, lexicon.CARBON_NEUTRALITY),
+    (ClaimType.COMPARATIVE, lexicon.COMPARATIVE),
+    (ClaimType.RECYCLABLE, lexicon.RECYCLABLE),
+    # Before C9 this family did not exist, so a certificate was never a fact.
+    (ClaimType.CERTIFICATION, lexicon.CERTIFICATION_SCHEME),
+    (ClaimType.GENERIC_ENVIRONMENTAL, lexicon.GENERIC_ENVIRONMENTAL),
 )
 
 OFFSET_SIGNAL = re.compile(
@@ -85,12 +33,20 @@ OFFSET_SIGNAL = re.compile(
 )
 
 ENVIRONMENTAL_METRIC = re.compile(
-    r"\b(?:CO\s?2|carbone|[eé]missions?|empreinte|climat(?:ique)?|greenhouse\s+gas|GHG|carbon\s+footprint)\b",
+    # "empreinte" alone is ambiguous: a tyre leaves an "empreinte" too. It only
+    # counts as a climate metric when qualified (measured on corpus case FP14).
+    r"\b(?:CO\s?2|carbone|[eé]missions?|empreinte\s+(?:carbone|climatique|environnementale|CO\s?2)"
+    r"|climat(?:ique)?|greenhouse\s+gas|GHG|carbon\s+footprint)\b",
     re.IGNORECASE,
 )
 NUMBER = re.compile(r"(?<!\w)([-−]?\d+(?:[.,]\d+)?)\s*(%|kg|g|t|tonnes?|kg\s?CO\s?2|g\s?CO\s?2)?", re.IGNORECASE)
 OFFSET_NEGATION = re.compile(
-    r"(?:\b(?:ne\s+\w+(?:\s+\w+){0,3}\s+pas|n['’]est\s+pas|pas|non|sans)\s*|\b(?:not|never|without|no\s+longer)\s*|\bnon[- ])$",
+    r"(?:\b(?:ne\s+\w+(?:\s+\w+){0,3}\s+pas|n['’]est\s+pas|pas|non|sans)\s*"
+    # French negation is usually followed by a determiner: "ne contient pas DE
+    # matière recyclée". Without this, the cue was found but rejected, and a
+    # negated claim was reported as an affirmative one (measured on case K).
+    r"(?:(?:de|d['’]|du|des|la|le|les|l['’]|un|une|aucun|aucune|plus|jamais)\s+)*"
+    r"|\b(?:not|never|without|no\s+longer)\s*|\bnon[- ])$",
     re.IGNORECASE,
 )
 SPECIFIC_DETAIL = re.compile(
@@ -164,6 +120,45 @@ def _claim_is_asserted(sentence: str, trigger_start: int) -> tuple[bool, str | N
     return (negation is None, negation)
 
 
+def _certification_match(sentence: str) -> re.Match[str] | None:
+    """Detect a certification claim, or nothing.
+
+    A scheme name (FSC, ECOLABEL, ISO 14001…) is enough on its own. The bare verb
+    is not: "certifié conforme" is a conformity mark and "certifié ISO 9001" is a
+    quality certificate, neither of which is an environmental claim. The verb only
+    counts when the same sentence carries an environmental marker, which is a
+    lexical reading, not a semantic one — the limits are published with the corpus.
+    """
+    scheme = lexicon.CERTIFICATION_SCHEME.search(sentence)
+    if scheme is not None:
+        return scheme
+    verb = lexicon.CERTIFICATION_VERB.search(sentence)
+    if verb is None:
+        return None
+    if lexicon.CONFORMITY_MARK.search(sentence) or not lexicon.ENVIRONMENTAL_MARKER.search(sentence):
+        return None
+    return verb
+
+
+def _certification_facts(sentence: str) -> dict[str, str | None]:
+    """Verbatim scheme, reference and body — never inferred, never completed."""
+    scheme = lexicon.CERTIFICATION_SCHEME.search(sentence)
+    number = lexicon.CERTIFICATE_NUMBER.search(sentence)
+    body = lexicon.CERTIFICATE_BODY.search(sentence)
+    body_text = None
+    if body is not None:
+        # Alternatives carry their own group; take the first one that matched
+        # rather than assuming a fixed position, which silently dropped bodies.
+        body_text = next((group.strip().rstrip(" .;:,-") for group in body.groups() if group), None)
+    return {
+        "certification_scheme": scheme.group(0) if scheme else None,
+        "certification_reference": (
+            next((group for group in number.groups() if group), None) if number else None
+        ),
+        "certification_body": body_text,
+    }
+
+
 class FactExtractor:
     """Pure deterministic claim detector; the same text yields the same facts."""
 
@@ -177,7 +172,10 @@ class FactExtractor:
             sentence = text[sentence_start:sentence_end]
             found_for_sentence: set[ClaimType] = set()
             for claim_type, pattern in CLAIM_PATTERNS:
-                match = pattern.search(sentence)
+                if claim_type == ClaimType.CERTIFICATION:
+                    match = _certification_match(sentence)
+                else:
+                    match = pattern.search(sentence)
                 if match is None or claim_type in found_for_sentence:
                     continue
                 found_for_sentence.add(claim_type)
@@ -212,6 +210,11 @@ class FactExtractor:
             sentence = text[sentence_start:sentence_end]
             affirmative, negation = _claim_is_asserted(sentence, local_start)
             number_value, number_unit = _number_in_sentence(sentence)
+            certification = (
+                _certification_facts(sentence)
+                if claim_type == ClaimType.CERTIFICATION
+                else {}
+            )
             trigger = match.group(0)
             trigger_start = sentence_start + local_start
             trigger_end = sentence_start + local_end
@@ -231,6 +234,9 @@ class FactExtractor:
                     has_specific_qualifier=bool(SPECIFIC_DETAIL.search(sentence)),
                     numeric_value=number_value if claim_type == ClaimType.QUANTIFIED_CLIMATE else None,
                     numeric_unit=number_unit if claim_type == ClaimType.QUANTIFIED_CLIMATE else None,
+                    certification_scheme=certification.get("certification_scheme"),
+                    certification_reference=certification.get("certification_reference"),
+                    certification_body=certification.get("certification_body"),
                 )
             )
         return claims

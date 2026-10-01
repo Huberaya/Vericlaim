@@ -49,7 +49,10 @@ import type {
   RuleReviewSubmissionRequest,
   CatalogImportItem,
   CatalogImportResult,
+  BillingSubscription,
+  BillingUsage,
   PilotOverviewResponse,
+  PlanCatalogue,
   PreAuditReportResponse,
   RetentionPolicyResponse,
   ApiKeyCreateRequest,
@@ -160,19 +163,51 @@ function buildDossier(hasLcaAttached: boolean, options: AuditOptions): EvidenceD
   };
 }
 
+/**
+ * Une erreur d'API qui garde son **code**.
+ *
+ * C15 a besoin du code (`report_not_ready`, `quota_exceeded`…) pour l'envoyer avec une
+ * demande de support : c'est ce qui permet au support de retrouver la branche exacte du
+ * produit au lieu de lire une reformulation. Aplatir la réponse en chaîne, comme avant,
+ * perdait cette information au moment précis où elle sert.
+ */
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code: string | null,
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
 async function readJson<T>(response: Response): Promise<T> {
   if (!response.ok) {
     let detail = `Erreur API (${response.status})`;
+    let code: string | null = null;
     try {
       const body: unknown = await response.json();
       if (typeof body === "object" && body !== null && "detail" in body) {
         const apiDetail = (body as { detail?: unknown }).detail;
-        detail = typeof apiDetail === "string" ? apiDetail : JSON.stringify(apiDetail);
+        if (typeof apiDetail === "string") {
+          detail = apiDetail;
+        } else {
+          detail = JSON.stringify(apiDetail);
+          if (
+            typeof apiDetail === "object" &&
+            apiDetail !== null &&
+            "code" in apiDetail &&
+            typeof (apiDetail as { code?: unknown }).code === "string"
+          ) {
+            code = (apiDetail as { code: string }).code;
+          }
+        }
       }
     } catch {
       // Preserve the HTTP status message when the backend does not return JSON.
     }
-    throw new Error(detail);
+    throw new ApiError(detail, response.status, code);
   }
   return (await response.json()) as T;
 }
@@ -807,6 +842,44 @@ export async function getPilotOverview(): Promise<PilotOverviewResponse> {
   return readJson<PilotOverviewResponse>(response);
 }
 
+// ---------------------------------------------------------------------------
+// C13 — facturation : catalogue public, abonnement et compteurs d'usage
+// ---------------------------------------------------------------------------
+
+/**
+ * Les offres **telles que le produit les applique** (`app/billing/plans.py`).
+ *
+ * Route publique : la page `/pricing` la lit sans session.
+ */
+export async function getPlanCatalogue(): Promise<PlanCatalogue> {
+  const response = await fetch(requestUrl("/api/v1/billing/plans"), { cache: "no-store" });
+  return readJson<PlanCatalogue>(response);
+}
+
+/** L'offre appliquée à l'organisation active, ses échéances et ses actions possibles. */
+export async function getBillingSubscription(): Promise<BillingSubscription> {
+  const response = await fetch(requestUrl("/api/v1/billing/subscription"), {
+    credentials: "include",
+    cache: "no-store",
+  });
+  return readJson<BillingSubscription>(response);
+}
+
+/**
+ * La consommation de la période en cours, ligne par ligne.
+ *
+ * C'est la **somme du journal d'usage**, pas un compteur parallèle : un compteur
+ * séparé peut dériver de ce qui a été réellement consommé, et l'écart ne se voit
+ * qu'au moment où un client conteste.
+ */
+export async function getBillingUsage(): Promise<BillingUsage> {
+  const response = await fetch(requestUrl("/api/v1/billing/usage"), {
+    credentials: "include",
+    cache: "no-store",
+  });
+  return readJson<BillingUsage>(response);
+}
+
 export async function getPreAuditReport(): Promise<PreAuditReportResponse> {
   const response = await fetch(requestUrl("/api/v1/pilot/pre-audit-report"), {
     credentials: "include",
@@ -921,68 +994,152 @@ export async function listLegalHolds(): Promise<LegalHoldResponse[]> {
 
 // ---------------------------------------------------------------------------
 // Chantier 10 — Regulatory PDF Reporting & Opposable Dossier
+//
+// C22 : la génération n'a plus lieu dans la requête HTTP. Le client demande le
+// rapport (202), interroge le travail jusqu'à ce qu'il soit terminé, puis
+// télécharge l'artefact produit. L'ancienne version de ces fonctions envoyait
+// `evaluation_response` — un verdict fourni par le navigateur — que l'API refuse
+// depuis C6.2 : le bouton ne pouvait donc pas fonctionner.
 // ---------------------------------------------------------------------------
 
-export async function downloadPdfReport(
-  report: RegulatoryAuditResponse,
-  options?: PdfExportOptions,
-): Promise<void> {
-  const response = await fetch(requestUrl("/api/v1/reports/pdf"), {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...csrfHeaders() },
-    body: JSON.stringify({
-      evaluation_response: report,
-      document_title: options?.document_title || "Rapport d'Audit Pré-Réglementaire Allégations",
-      product_identifier: options?.product_identifier || "SKU-PROD-001",
-      surface: options?.surface || "packaging",
-      include_evidence_matrix: options?.include_evidence_matrix ?? true,
-      include_remediation_clauses: options?.include_remediation_clauses ?? true,
-    }),
-    credentials: "include",
-  });
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(errorText || `Échec de génération du PDF (${response.status})`);
+export type ReportFormat = "pdf" | "dossier_zip";
+
+export type ReportQueued = {
+  report_id: string | null;
+  job_id: string;
+  report_format: string;
+  job_url: string;
+  download_url: string;
+  queue: {
+    pending: number;
+    running: number;
+    pending_limit: number;
+    running_limit: number;
+    saturated: boolean;
+  };
+  note: string;
+};
+
+export type ReportJobState = {
+  job_id: string;
+  report_id: string | null;
+  job_status: "queued" | "running" | "completed" | "failed" | "cancelled";
+  report_status: string | null;
+  attempt_count: number;
+  max_attempts: number;
+  error_code: string | null;
+  verification_reference: string | null;
+  sha256: string | null;
+  size_bytes: number | null;
+  download_available: boolean;
+  download_url: string | null;
+};
+
+const REPORT_POLL_INTERVAL_MS = 1500;
+const REPORT_POLL_ATTEMPTS = 40;
+
+function apiErrorMessage(body: unknown, fallback: string): string {
+  if (body && typeof body === "object" && "detail" in body) {
+    const detail = (body as { detail: unknown }).detail;
+    if (typeof detail === "string") return detail;
+    if (detail && typeof detail === "object" && "message" in detail) {
+      const message = (detail as { message?: unknown }).message;
+      if (typeof message === "string") return message;
+    }
   }
-  const blob = await response.blob();
-  const url = window.URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `rapport-pre-audit-${new Date().toISOString().slice(0, 10)}.pdf`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  window.URL.revokeObjectURL(url);
+  return fallback;
 }
 
-export async function downloadDossierPack(
-  report: RegulatoryAuditResponse,
+async function readError(response: Response, fallback: string): Promise<string> {
+  try {
+    return apiErrorMessage(await response.json(), fallback);
+  } catch {
+    return fallback;
+  }
+}
+
+export async function requestAnalysisReport(
+  analysisId: string,
+  format: ReportFormat,
+  options?: PdfExportOptions,
+): Promise<ReportQueued> {
+  const response = await fetch(
+    requestUrl(format === "pdf" ? "/api/v1/reports/pdf" : "/api/v1/reports/dossier"),
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...csrfHeaders() },
+      body: JSON.stringify({
+        analysis_id: analysisId,
+        document_title: options?.document_title,
+        product_identifier: options?.product_identifier,
+        surface: options?.surface,
+        include_evidence_matrix: options?.include_evidence_matrix ?? true,
+        include_remediation_clauses: options?.include_remediation_clauses ?? true,
+      }),
+      credentials: "include",
+      cache: "no-store",
+    },
+  );
+  if (!response.ok) {
+    throw new Error(await readError(response, `Demande de rapport refusée (${response.status})`));
+  }
+  return readJson<ReportQueued>(response);
+}
+
+export async function readReportJob(jobUrl: string): Promise<ReportJobState> {
+  const response = await fetch(requestUrl(jobUrl), { credentials: "include", cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(await readError(response, `État du travail illisible (${response.status})`));
+  }
+  return readJson<ReportJobState>(response);
+}
+
+function sleep(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+export async function downloadAnalysisReport(
+  analysisId: string,
+  format: ReportFormat,
   options?: PdfExportOptions,
 ): Promise<void> {
-  const response = await fetch(requestUrl("/api/v1/reports/dossier"), {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...csrfHeaders() },
-    body: JSON.stringify({
-      evaluation_response: report,
-      document_title: options?.document_title || "Dossier Probatoire Réglementaire",
-      product_identifier: options?.product_identifier || "SKU-PROD-001",
-      surface: options?.surface || "packaging",
-    }),
-    credentials: "include",
-  });
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(errorText || `Échec de génération du dossier ZIP (${response.status})`);
+  const queued = await requestAnalysisReport(analysisId, format, options);
+  for (let attempt = 0; attempt < REPORT_POLL_ATTEMPTS; attempt += 1) {
+    const state = await readReportJob(queued.job_url);
+    if (state.job_status === "completed" && state.download_available && state.download_url) {
+      const file = await fetch(requestUrl(state.download_url), {
+        credentials: "include",
+        cache: "no-store",
+      });
+      if (!file.ok) {
+        throw new Error(await readError(file, `Téléchargement impossible (${file.status})`));
+      }
+      const blob = await file.blob();
+      const url = window.URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      const extension = format === "pdf" ? "pdf" : "zip";
+      const base = format === "pdf" ? "rapport-pre-audit" : "dossier-probatoire";
+      anchor.download = `${base}-${new Date().toISOString().slice(0, 10)}.${extension}`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      document.body.removeChild(anchor);
+      window.URL.revokeObjectURL(url);
+      return;
+    }
+    if (state.job_status === "failed" || state.job_status === "cancelled") {
+      throw new Error(
+        state.error_code
+          ? `Génération du rapport échouée après ${state.attempt_count} tentative(s) (${state.error_code}).`
+          : "Génération du rapport échouée.",
+      );
+    }
+    await sleep(REPORT_POLL_INTERVAL_MS);
   }
-  const blob = await response.blob();
-  const url = window.URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `dossier-probatoire-${new Date().toISOString().slice(0, 10)}.zip`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  window.URL.revokeObjectURL(url);
+  throw new Error(
+    "Le rapport n'est pas prêt après une minute d'attente. Il continue d'être généré : " +
+      "rouvrez la page pour le télécharger.",
+  );
 }
 
 // ---------------------------------------------------------------------------

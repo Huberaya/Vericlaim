@@ -3,7 +3,7 @@
 **Statut :** livré techniquement.
 **Choix validé :** SSO OIDC générique et accès au moteur réservé aux membres authentifiés d’une organisation active.
 
-> VeriClaim AI ne stocke ni mot de passe utilisateur, ni token d’accès/refresh token du fournisseur d’identité. Il établit une session opaque locale après validation cryptographique d’un ID token OIDC.
+> VeriClaim ne stocke ni mot de passe utilisateur, ni token d’accès/refresh token du fournisseur d’identité. Il établit une session opaque locale après validation cryptographique d’un ID token OIDC.
 
 ## 1. Décisions d’architecture
 
@@ -85,7 +85,8 @@ SQLite ne fournit pas RLS : il est utilisé uniquement en développement/test ex
 | `GET` | `/api/v1/auth/status` | Savoir si le SSO est configuré, sans révéler de secret. |
 | `GET` | `/api/v1/auth/login` | Démarrer la redirection OIDC. |
 | `GET` | `/api/v1/auth/callback` | Callback enregistré chez le fournisseur OIDC. |
-| `GET` | `/healthz` | Supervision technique. |
+| `GET` | `/healthz` | Vivacité : le processus répond. Ne touche à aucune dépendance (un processus sain doit être retiré du trafic, pas redémarré, quand sa base est injoignable). |
+| `GET` | `/readyz` | Disponibilité : `SELECT 1`, révision Alembic, `HEAD` des buckets, ping de l'antivirus. **503** dès qu'une dépendance requise échoue ; publie `capabilities`. |
 
 ### Session / organisation
 

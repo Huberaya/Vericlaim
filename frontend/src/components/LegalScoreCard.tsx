@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { downloadDossierPack, downloadPdfReport } from "@/lib/api";
+import { downloadAnalysisReport } from "@/lib/api";
 import type { ApiDecimal, RegulatoryAuditResponse } from "@/lib/types";
 
 const COMPLIANCE_LABEL: Record<RegulatoryAuditResponse["overall_compliance"], string> = {
@@ -35,9 +35,17 @@ function riskTone(score: number): "low" | "medium" | "high" {
 
 type Props = {
   report: RegulatoryAuditResponse | null;
+  /**
+   * C22 — l'export signé exige une **analyse persistée** : le rapport est rendu
+   * depuis les verdicts stockés, jamais depuis un verdict fourni par le navigateur.
+   * Cette page affiche le résultat du moteur d'évaluation, qui n'est pas persisté :
+   * sans identifiant d'analyse, aucun rapport signé ne peut exister, et le dire vaut
+   * mieux qu'un bouton qui échoue.
+   */
+  analysisId?: string | null;
 };
 
-export default function LegalScoreCard({ report }: Props) {
+export default function LegalScoreCard({ report, analysisId = null }: Props) {
   const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [isExportingZip, setIsExportingZip] = useState(false);
 
@@ -154,17 +162,23 @@ export default function LegalScoreCard({ report }: Props) {
       <div className="mt-4 pt-3 border-t border-slate-200 dark:border-slate-800 flex flex-wrap gap-2">
         <button
           type="button"
-          disabled={isExportingPdf}
+          disabled={isExportingPdf || !analysisId}
           onClick={async () => {
+            if (!analysisId) return;
             setIsExportingPdf(true);
             try {
-              await downloadPdfReport(report);
+              await downloadAnalysisReport(analysisId, "pdf");
             } catch (err: unknown) {
               alert(err instanceof Error ? err.message : "Erreur de téléchargement PDF");
             } finally {
               setIsExportingPdf(false);
             }
           }}
+          title={
+            analysisId
+              ? "Génère le rapport signé depuis l'analyse persistée, puis le télécharge."
+              : "Aucune analyse persistée sur cet écran : le rapport signé est rendu depuis les verdicts stockés."
+          }
           className="flex-1 inline-flex items-center justify-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-2 text-xs font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-50 transition"
         >
           <span>📄</span> {isExportingPdf ? "Génération PDF..." : "Exporter Rapport PDF"}
@@ -172,17 +186,23 @@ export default function LegalScoreCard({ report }: Props) {
 
         <button
           type="button"
-          disabled={isExportingZip}
+          disabled={isExportingZip || !analysisId}
           onClick={async () => {
+            if (!analysisId) return;
             setIsExportingZip(true);
             try {
-              await downloadDossierPack(report);
+              await downloadAnalysisReport(analysisId, "dossier_zip");
             } catch (err: unknown) {
               alert(err instanceof Error ? err.message : "Erreur d'export du dossier ZIP");
             } finally {
               setIsExportingZip(false);
             }
           }}
+          title={
+            analysisId
+              ? "Génère le dossier probatoire signé depuis l'analyse persistée."
+              : "Aucune analyse persistée sur cet écran : le dossier est rendu depuis les verdicts stockés."
+          }
           className="flex-1 inline-flex items-center justify-center gap-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-700 dark:text-slate-200 shadow-sm hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-50 transition"
         >
           <span>📦</span> {isExportingZip ? "Archivage..." : "Pack Probatoire ZIP"}

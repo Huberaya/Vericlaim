@@ -401,10 +401,18 @@ a { color: inherit; }
 .persistent-claim-tags .persistent-claim-review { background: #fff1d5; color: #936d24; }
 .persistent-claim blockquote { margin: 6px 0 4px; color: #405342; font-size: 9px; line-height: 1.45; white-space: normal; }
 .persistent-claim p, .persistent-analysis-empty { overflow: visible; margin: 0; color: #849084; font: 7px ui-monospace, monospace; line-height: 1.5; text-overflow: clip; white-space: normal; }
+.persistent-claim .persistent-claim-table { margin-top: 4px; padding: 5px 6px; border-left: 2px solid #cfe0c6; background: #f6faf3; color: #4f6a52; }
+.persistent-claim .persistent-claim-table-label { display: inline-block; margin-right: 5px; padding: 2px 4px; border-radius: 3px; background: #e4f0dc; color: #55794a; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
+.persistent-claim .persistent-claim-table-cell { display: block; margin-top: 3px; color: #849084; }
 .persistent-analysis-empty { padding: 8px; border: 1px dashed #d6e1d2; border-radius: 7px; background: #fafcf9; }
 .persistent-analysis-empty strong { color: #5a6e5b; }
 .persistent-analysis-retry { min-height: 28px; margin-top: 9px; padding: 0 9px; font-size: 8px; }
 .persistent-analysis-disclaimer { padding-top: 7px; border-top: 1px solid #edf1eb; }
+/* C22 — export des rapports : la génération passe par un worker dédié, l'attente
+   doit donc être visible plutôt que de figer le bouton sans explication. */
+.persistent-analysis-exports { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 9px; }
+.persistent-analysis-exports .button { min-height: 28px; padding: 0 9px; font-size: 8px; }
+.persistent-analysis-export-note { margin: 6px 0 0; color: #5a6e5b; font: 7px ui-monospace, monospace; white-space: normal; }
 
 
 /* C6.1 tenant procurement catalog */

@@ -53,24 +53,49 @@ def test_api_key_lifecycle_and_tenant_isolation():
 
 
 def test_enterprise_metrics_and_alerts():
+    """C16 replaced this test's expectations. It used to assert the fiction.
+
+    The previous version checked `service_status == "healthy"`,
+    `average_analysis_latency_ms > 0` and that an alert titled "SSO" was present —
+    three values that were literals in the source, returned to every tenant, and an
+    alert list that could not go red. What is asserted now is what the code measures,
+    including the fields it declares unmeasurable.
+    """
     with TestClient(app) as client:
         authenticate_client(client, role_code="analyst")
 
-        # Metrics
         res = client.get("/api/v1/enterprise/metrics")
         assert res.status_code == 200, res.text
         data = res.json()
-        assert data["service_status"] == "healthy"
-        assert data["database_status"] == "connected"
-        assert data["uptime_seconds"] > 0
-        assert data["memory_usage_mb"] > 0
 
-        # Alerts
+        # Derived from the readiness probes, with its reasons published.
+        assert data["database_status"] == "connected"
+        assert data["storage_status"] in {"disabled", "operational", "unreachable"}
+        assert data["service_status"] in {"healthy", "degraded", "unavailable"}
+        if data["service_status"] != "healthy":
+            assert data["status_reasons"], "un statut dégradé sans raison publiée serait une affirmation"
+
+        # Honest absence, not invention.
+        assert data["active_tenants_count"] is None
+        assert "active_tenants_count" in data["not_measured"]
+        assert isinstance(data["tenant_audit_events"], int)
+        assert data["uptime_seconds"] > 0
+        # These three are measured in-process, so they are numbers, not nulls.
+        assert data["memory_usage_mb"] is not None and data["memory_usage_mb"] > 0
+        assert data["cpu_utilization_percent"] is not None
+        assert data["error_rate_percent"] >= 0
+        assert "processus" in data["metrics_note"]
+
+        # Alerts are computed, never literal, and nothing is auto-acknowledged.
         alert_res = client.get("/api/v1/enterprise/alerts")
         assert alert_res.status_code == 200, alert_res.text
         alerts = alert_res.json()
-        assert len(alerts) >= 2
-        assert any("SSO" in a["title"] for a in alerts)
+        assert alerts, "l'organisation témoin n'a même pas d'alerte de rétention non déclarée"
+        assert all(alert["is_acknowledged"] is False for alert in alerts)
+        titles = " | ".join(alert["title"] for alert in alerts)
+        assert "SSO OIDC / SAML Actif" not in titles, "l'alerte fictive est revenue"
+        assert any("rétention" in alert["title"].lower() for alert in alerts)
+        assert data["open_alerts_count"] == len(alerts)
 
 
 def test_scim_user_provisioning():

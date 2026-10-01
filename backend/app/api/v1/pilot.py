@@ -6,6 +6,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
+from app.billing.http import require_active_subscription
 from app.core.database import get_db
 from app.identity.dependencies import (
     TenantPrincipal,
@@ -18,8 +19,10 @@ from app.models.pilot_schemas import (
     PilotOverviewResponse,
     PreAuditReportResponse,
     RetentionPolicyResponse,
+    RetentionPolicyUpdateRequest,
 )
 from app.pilot.service import (
+    declare_retention_policy,
     generate_pre_audit_report,
     get_pilot_dossier_export,
     get_pilot_overview,
@@ -29,10 +32,15 @@ from app.pilot.service import (
 
 router = APIRouter(prefix="/api/v1/pilot", tags=["b2b-pilot-pack"])
 
+# C13 — garde d'abonnement : cette route produit un artefact payant ou une
+# dépense réelle (OCR, e-mail tiers, rapport signé). Voir app/billing/http.py.
+SUBSCRIPTION_GATE = Depends(require_active_subscription())
+
 DATABASE_DEPENDENCY = Depends(get_db)
 AUDIT_READ_DEPENDENCY = Depends(require_permission("audit:read"))
 CATALOG_MANAGE_DEPENDENCY = Depends(require_permission("catalog:manage", csrf_protected=True))
 ORG_READ_DEPENDENCY = Depends(require_permission("organization:read"))
+ORG_MANAGE_DEPENDENCY = Depends(require_permission("organization:manage", csrf_protected=True))
 
 
 @router.get("/overview", response_model=PilotOverviewResponse)
@@ -53,7 +61,7 @@ def get_pre_audit_synthesis(
     return generate_pre_audit_report(db, organization_id=principal.organization_id)
 
 
-@router.post("/import-catalog", response_model=CatalogImportResult, status_code=status.HTTP_201_CREATED)
+@router.post("/import-catalog", response_model=CatalogImportResult, status_code=status.HTTP_201_CREATED, dependencies=[SUBSCRIPTION_GATE])
 def import_catalog_batch(
     body: CatalogImportRequest,
     request: Request,
@@ -84,5 +92,33 @@ def get_compliance_retention_policy(
     principal: TenantPrincipal = ORG_READ_DEPENDENCY,
     db: Session = DATABASE_DEPENDENCY,
 ) -> RetentionPolicyResponse:
-    """Returns the GDPR compliance, encryption, and data retention policy for the organization."""
+    """Retention, encryption and DPO contact **as declared by the organization**.
+
+    Nothing is defaulted: an undeclared field is null, and the response lists the
+    undeclared fields. This endpoint previously answered with the same fabricated
+    values for every tenant (a DPO address, an encryption standard, a hosting
+    region, 5/10 year durations and a review date) presented as a compliance
+    artefact. Those values are gone.
+    """
     return get_retention_policy(db, organization_id=principal.organization_id)
+
+
+@router.put("/retention-policy", response_model=RetentionPolicyResponse)
+def declare_compliance_retention_policy(
+    payload: RetentionPolicyUpdateRequest,
+    request: Request,
+    principal: TenantPrincipal = ORG_MANAGE_DEPENDENCY,
+    db: Session = DATABASE_DEPENDENCY,
+) -> RetentionPolicyResponse:
+    """Record the organization's own retention declaration.
+
+    Requires ``organization:manage``: writing a retention commitment is an
+    organizational act, not a read. The declaration is stored with its author and
+    timestamp so a third party can see who committed to what, and when.
+    """
+    return declare_retention_policy(
+        db,
+        organization_id=principal.organization_id,
+        actor_user_id=principal.user_id,
+        payload=payload,
+    )

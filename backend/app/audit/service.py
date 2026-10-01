@@ -14,6 +14,7 @@ from app.models.audit_schemas import (
     AuditEventResponse,
     AuditIntegrityCertificateResponse,
 )
+from app.core.database import build_audit_event_material, sha256_json
 from app.models.domain import AuditEvent, Organization
 
 
@@ -37,86 +38,9 @@ def compute_payload_sha256(payload: Dict[str, Any]) -> str:
     return hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
 
 
-def compute_event_hash(
-    organization_id: UUID,
-    entity_type: str,
-    entity_id: Optional[UUID],
-    action: str,
-    occurred_at_iso: str,
-    payload_sha256: str,
-    previous_event_hash: Optional[str],
-) -> str:
-    """Calcule le hash cryptographique de scellement d'un événement d'audit."""
-    raw_signature = ":".join([
-        str(organization_id),
-        entity_type,
-        str(entity_id or ""),
-        action,
-        occurred_at_iso,
-        payload_sha256,
-        previous_event_hash or "GENESIS",
-    ])
-    return hashlib.sha256(raw_signature.encode("utf-8")).hexdigest()
-
-
-def record_audit_event(
-    db: Session,
-    organization_id: UUID,
-    entity_type: str,
-    action: str,
-    payload: Dict[str, Any],
-    actor_user_id: Optional[UUID] = None,
-    entity_id: Optional[UUID] = None,
-    request_id: Optional[str] = None,
-    occurred_at: Optional[datetime] = None,
-) -> AuditEvent:
-    """Enregistre un événement métier de manière append-only et hash-chaînée par organisation."""
-    event_time = occurred_at or datetime.now(timezone.utc)
-    occurred_at_iso = normalize_iso_datetime(event_time)
-
-    # 1. Hachage du payload canonique
-    payload_sha256 = compute_payload_sha256(payload)
-
-    # 2. Récupération du dernier événement de la chaîne pour cette organisation
-    latest_event = db.scalar(
-        select(AuditEvent)
-        .where(AuditEvent.organization_id == organization_id)
-        .order_by(AuditEvent.occurred_at.desc(), AuditEvent.id.desc())
-        .limit(1)
-    )
-
-    previous_event_hash = latest_event.event_hash if latest_event else None
-
-    # 3. Calcul de l'empreinte cryptographique de scellement
-    event_hash = compute_event_hash(
-        organization_id=organization_id,
-        entity_type=entity_type,
-        entity_id=entity_id,
-        action=action,
-        occurred_at_iso=occurred_at_iso,
-        payload_sha256=payload_sha256,
-        previous_event_hash=previous_event_hash,
-    )
-
-    audit_entry = AuditEvent(
-        id=uuid4(),
-        organization_id=organization_id,
-        actor_user_id=actor_user_id,
-        entity_type=entity_type,
-        entity_id=entity_id,
-        action=action,
-        occurred_at=event_time,
-        request_id=request_id,
-        payload_json=payload,
-        payload_sha256=payload_sha256,
-        previous_event_hash=previous_event_hash,
-        event_hash=event_hash,
-    )
-
-    db.add(audit_entry)
-    db.commit()
-    db.refresh(audit_entry)
-    return audit_entry
+def compute_stored_event_hash(event: AuditEvent) -> str:
+    """Recompute the sealed hash of a persisted event using the writer's material."""
+    return sha256_json(build_audit_event_material(event))
 
 
 def list_audit_events(
@@ -196,16 +120,7 @@ def verify_audit_chain(
             )
 
         # 3. Vérification de l'empreinte de signature de l'événement
-        occurred_iso = normalize_iso_datetime(ev.occurred_at)
-        expected_event_hash = compute_event_hash(
-            organization_id=organization_id,
-            entity_type=ev.entity_type,
-            entity_id=ev.entity_id,
-            action=ev.action,
-            occurred_at_iso=occurred_iso,
-            payload_sha256=ev.payload_sha256,
-            previous_event_hash=ev.previous_event_hash,
-        )
+        expected_event_hash = compute_stored_event_hash(ev)
         if ev.event_hash != expected_event_hash:
             return AuditChainVerificationResponse(
                 is_valid=False,

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
@@ -28,6 +28,9 @@ from app.documents.storage import (
     PresignedUpload,
 )
 from app.identity.service import append_audit_event
+from app.billing.enforcement import assert_quota_available
+from app.billing.plans import Metric
+from app.billing.usage import period_key_for, record_usage
 from app.models.domain import (
     Document,
     DocumentStatus,
@@ -139,6 +142,13 @@ def create_document(
     tags: list[str],
     request_id: str | None,
 ) -> Document:
+    # C13 — quota des documents. Le contrôle précède toute écriture : un import
+    # refusé ne laisse ni ligne, ni fichier, ni consommation. Le journal d'usage
+    # est écrit dans la même transaction que le document, donc un échec ultérieur
+    # annule aussi la consommation : le compteur ne facture pas ce qui n'existe pas.
+    quota = assert_quota_available(
+        db, organization_id=organization_id, metric=Metric.DOCUMENTS, quantity=1
+    )
     _assert_references_belong_to_organization(
         db,
         organization_id=organization_id,
@@ -167,6 +177,17 @@ def create_document(
         action="document.created",
         payload={"document_type": document_type.value, "tag_count": len(tags)},
         request_id=request_id,
+    )
+    record_usage(
+        db,
+        organization_id=organization_id,
+        metric=Metric.DOCUMENTS,
+        quantity=1,
+        source_type="document",
+        source_id=str(document.id),
+        period_key=period_key_for((quota.period_start, quota.period_end)),
+        actor_user_id=actor_user_id,
+        idempotency_key=f"document:{document.id}",
     )
     return document
 
@@ -496,6 +517,24 @@ def complete_document_upload(
             settings=settings,
         )
 
+    # C21 — le quota de pages est vérifié **avant toute étape destructrice**.
+    #
+    # Défaut mesuré : le contrôle avait lieu après la promotion du binaire propre, donc
+    # après la suppression de l'objet en quarantaine. La transaction SQL était annulée,
+    # mais la suppression, elle, ne l'était pas (le stockage objet et SQL ne partagent pas
+    # de transaction) : l'import devenait inutilisable, la tentative suivante répondait
+    # `object_missing` et le document était marqué « failed » — un refus de quota
+    # détruisait le fichier du client et lui annonçait un échec qui n'en était pas un.
+    #
+    # Le nombre de pages est connu ici, sans OCR ni rendu : le refus arrive donc avant le
+    # travail, avant le coût, et sans rien casser.
+    assert_quota_available(
+        db,
+        organization_id=organization_id,
+        metric=Metric.OCR_PAGES,
+        quantity=max(inspected.page_count or 1, 1),
+    )
+
     upload.status = DocumentUploadStatus.SCANNING
     upload.scan_started_at = utcnow()
     db.flush()
@@ -575,6 +614,11 @@ def complete_document_upload(
         storage_key=clean_key,
         sha256=inspected.sha256,
         size_bytes=inspected.size_bytes,
+        # C21 : le nombre de pages est connu à la promotion (comptage sans rendu). Il est
+        # porté par la version dès sa création pour que l'API puisse dire, **avant** tout
+        # travail, combien de pages de quota cet import engagera. L'extraction le
+        # réécrira avec la valeur du document réellement lu.
+        page_count=inspected.page_count,
         extraction_status=ExtractionStatus.PENDING,
     )
     db.add(version)
@@ -584,6 +628,14 @@ def complete_document_upload(
     if document.status in {DocumentStatus.QUARANTINED, DocumentStatus.FAILED}:
         document.status = DocumentStatus.UPLOADED
     try:
+        # La version doit exister **avant** que le téléversement la référence :
+        # PostgreSQL applique la clé étrangère
+        # ``document_uploads.finalized_document_version_id``, et SQLAlchemy, qui ne
+        # connaît aucune relation entre ces deux lignes, ordonnait la mise à jour du
+        # téléversement en premier. Résultat mesuré sur PostgreSQL : 500 à la première
+        # finalisation de téléversement, alors que la suite (SQLite, contraintes non
+        # appliquées par défaut) restait verte.
+        db.flush([version])
         db.flush()
         removed = _best_effort_delete(
             storage,
@@ -617,6 +669,7 @@ def complete_document_upload(
             organization_id=organization_id,
             actor_user_id=actor_user_id,
             request_id=request_id,
+            expected_pages=inspected.page_count,
         )
         db.flush()
     except Exception:
@@ -675,6 +728,65 @@ def create_document_download(
         request_id=request_id,
     )
     return version, url, expires_at
+
+
+@dataclass
+class DocumentPage:
+    items: list[Document]
+    next_sort_key: str | None
+    next_id: UUID | None
+
+
+def list_documents(
+    db: Session,
+    *,
+    organization_id: UUID,
+    limit: int,
+    after_sort_key: str | None = None,
+    after_id: UUID | None = None,
+    query: str | None = None,
+    document_type: DocumentType | None = None,
+    supplier_id: UUID | None = None,
+    product_id: UUID | None = None,
+) -> DocumentPage:
+    """Cursor-paginated listing of the tenant's documents (see the C18 evidence).
+
+    `GET /api/v1/documents` used to answer 405: the collection had no list route, so
+    the only way to reach a document was to already know its identifier — an
+    integration could create documents and then be unable to enumerate them.
+
+    Ordered by (lower(title), id) so a page boundary is stable while rows are
+    inserted concurrently; the same cursor format as the catalogue endpoints.
+    """
+    statement = select(Document).where(
+        Document.organization_id == organization_id,
+        Document.deleted_at.is_(None),
+    )
+    if document_type is not None:
+        statement = statement.where(Document.document_type == document_type)
+    if supplier_id is not None:
+        statement = statement.where(Document.supplier_id == supplier_id)
+    if product_id is not None:
+        statement = statement.where(Document.product_id == product_id)
+
+    sort_key = func.lower(Document.title)
+    if after_sort_key is not None and after_id is not None:
+        statement = statement.where(
+            or_(
+                sort_key > after_sort_key,
+                and_(sort_key == after_sort_key, Document.id > after_id),
+            )
+        )
+
+    rows = list(
+        db.scalars(statement.order_by(sort_key.asc(), Document.id.asc()).limit(limit + 1)).all()
+    )
+    has_more = len(rows) > limit
+    items = rows[:limit]
+    if has_more and items:
+        last = items[-1]
+        return DocumentPage(items=items, next_sort_key=last.title.lower(), next_id=last.id)
+    return DocumentPage(items=items, next_sort_key=None, next_id=None)
 
 
 def document_detail(db: Session, *, organization_id: UUID, document_id: UUID) -> tuple[Document, list[DocumentVersion], list[DocumentUpload]]:

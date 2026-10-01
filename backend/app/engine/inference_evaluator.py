@@ -21,7 +21,12 @@ from app.models.legal_types import (
 from app.models.schemas import AuditContext
 
 
-EU_RULE_IDS = {"RULE_EU_GENERIC_CLAIM", "RULE_EU_CARBON_NEUTRAL_COMPENSATION"}
+EU_RULE_IDS = {
+    "RULE_EU_GENERIC_CLAIM",
+    "RULE_EU_CARBON_NEUTRAL_COMPENSATION",
+    # C9: annexe I points 2 bis / 4 bis de la directive (UE) 2024/825.
+    "RULE_EVIDENCE_SUSTAINABILITY_LABEL",
+}
 
 
 class InferenceEvaluator:
@@ -185,6 +190,29 @@ class InferenceEvaluator:
                     caveat = "Le certificat est déclaré mais n'est pas corroboré par un registre serveur ou son périmètre n'est pas confirmé; bloquer la publication jusqu'à revue."
                     add_step("SAFE_HARBOR_UNVERIFIED", check.detail, "Un numéro communiqué par le demandeur ne suffit pas à établir le Safe Harbor.")
 
+        elif rule.rule_id == "RULE_EVIDENCE_SUSTAINABILITY_LABEL":
+            # A certification claim is a documented claim: the question is whether
+            # the dossier corroborates the scheme, the scope and the validity. The
+            # engine reuses the certificate registry check; it cannot decide whether
+            # the scheme itself is recognised (Annex I 2 bis), so an unverified
+            # certificate blocks publication instead of producing a violation.
+            check = self.proof_validator.validate_ecolabel(dossier, claim.claim_type, context)
+            checks.append(check)
+            add_step("CERTIFICATION_PROOF_CHECK", check.detail, "Un label n'est opposable que si le schéma, le numéro, la validité et le périmètre sont établis.")
+            if check.status == EvidenceStatus.VERIFIED:
+                safe_harbor = True
+                safe_harbor_reason = check.detail
+                verdict = Verdict.COMPLIANT
+                add_step("CERTIFICATION_CORROBORATED", "Le registre serveur corrobore un certificat pertinent pour ce périmètre.", "Safe Harbor établi pour cette règle uniquement.")
+            elif check.status == EvidenceStatus.NOT_PROVIDED:
+                verdict = Verdict.CONDITIONAL_REJECT
+                missing = list(check.missing_fields)
+                add_step("CERTIFICATION_PROOF_MISSING", "Aucun certificat n'est rattaché au dossier pour cette allégation.", "Blocage préventif interne: l'absence de pièce dans l'outil ne démontre pas l'absence de certificat.")
+            else:
+                verdict = Verdict.REVIEW_REQUIRED
+                missing = list(check.missing_fields)
+                caveat = "Le certificat est déclaré mais non corroboré, ou son périmètre ne correspond pas au produit; revue requise avant diffusion."
+
         elif rule.rule_id == "RULE_EU_CARBON_NEUTRAL_COMPENSATION":
             offset_items = [item for item in dossier.items if isinstance(item, CarbonOffsetEvidence)]
             offsetting_basis = claim.has_offsetting_signal or bool(offset_items)
@@ -198,9 +226,9 @@ class InferenceEvaluator:
                 add_step("OFFSET_BASIS_CHECK", "Indice de compensation / crédit carbone rattaché à une claim d'impact produit.", "La compensation hors chaîne de valeur ne constitue pas un Safe Harbor pour une allégation produit neutre, réduite ou positive.")
 
         elif rule.rule_id == "RULE_FR_CARBON_NEUTRAL_DISCLOSURE":
-            checks.extend(self.proof_validator.validate_french_carbon_neutrality(dossier, offsetting_asserted=True))
+            checks.extend(self.proof_validator.validate_french_carbon_neutrality(dossier, context, offsetting_asserted=True))
             missing = sorted({field for check in checks for field in check.missing_fields})
-            incomplete = any(check.status in {EvidenceStatus.NOT_PROVIDED, EvidenceStatus.INCOMPLETE} for check in checks)
+            incomplete = any(check.status in {EvidenceStatus.NOT_PROVIDED, EvidenceStatus.INCOMPLETE, EvidenceStatus.INVALID} for check in checks)
             if incomplete:
                 verdict = Verdict.CONDITIONAL_REJECT
                 add_step("PUBLIC_DISCLOSURE_CHECK", "Le dossier français de neutralité ne présente pas tous les éléments de bilan, trajectoire et compensation requis.", "La claim ne passe pas le contrôle probatoire préalable; suspendre jusqu'à production/revue des pièces.")
@@ -213,7 +241,7 @@ class InferenceEvaluator:
             check = self.proof_validator.validate_lca(dossier, context, comparative=True)
             checks.append(check)
             missing = list(check.missing_fields)
-            if check.status in {EvidenceStatus.NOT_PROVIDED, EvidenceStatus.INCOMPLETE}:
+            if check.status in {EvidenceStatus.NOT_PROVIDED, EvidenceStatus.INCOMPLETE, EvidenceStatus.INVALID}:
                 verdict = Verdict.CONDITIONAL_REJECT
                 add_step("COMPARABILITY_CHECK", check.detail, "Blocage de publication selon le seuil interne; la proposition Green Claims citée n'est pas une règle adoptée.")
             else:
@@ -222,10 +250,10 @@ class InferenceEvaluator:
                 add_step("COMPARABILITY_CHECK", check.detail, "Métadonnées de comparaison présentes; validation technique et juridique humaine requise.")
 
         elif rule.rule_id == "RULE_ISO_RECYCLABLE_PERCENTAGE":
-            check = self.proof_validator.validate_recycling_route(dossier)
+            check = self.proof_validator.validate_recycling_route(dossier, context)
             checks.append(check)
             missing = list(check.missing_fields)
-            if check.status in {EvidenceStatus.NOT_PROVIDED, EvidenceStatus.INCOMPLETE}:
+            if check.status in {EvidenceStatus.NOT_PROVIDED, EvidenceStatus.INCOMPLETE, EvidenceStatus.INVALID}:
                 verdict = Verdict.CONDITIONAL_REJECT
                 add_step("ROUTE_CHECK", check.detail, "Blocage selon le seuil de preuve interne; ce contrôle ISO volontaire ne suffit pas à établir une infraction légale.")
             else:
@@ -237,7 +265,7 @@ class InferenceEvaluator:
             check = self.proof_validator.validate_lca(dossier, context, comparative=False)
             checks.append(check)
             missing = list(check.missing_fields)
-            if check.status in {EvidenceStatus.NOT_PROVIDED, EvidenceStatus.INCOMPLETE}:
+            if check.status in {EvidenceStatus.NOT_PROVIDED, EvidenceStatus.INCOMPLETE, EvidenceStatus.INVALID}:
                 verdict = Verdict.CONDITIONAL_REJECT
                 add_step("QUANTIFIED_PROOF_CHECK", check.detail, "Blocage préventif interne; l'absence d'ISO 14044 ne démontre pas à elle seule une infraction.")
             else:

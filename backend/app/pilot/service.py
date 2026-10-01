@@ -30,6 +30,7 @@ from app.models.domain import (
     ValidationDecision,
 )
 from app.models.pilot_schemas import (
+    DEFAULT_RETENTION_LIMITATIONS,
     CatalogImportItem,
     CatalogImportResult,
     PilotOverviewKPIs,
@@ -37,6 +38,7 @@ from app.models.pilot_schemas import (
     PreAuditFinding,
     PreAuditReportResponse,
     RetentionPolicyResponse,
+    RetentionPolicyUpdateRequest,
     SupplierRiskSummary,
 )
 
@@ -423,15 +425,114 @@ def get_pilot_dossier_export(db: Session, *, organization_id: UUID) -> dict[str,
     return export_payload
 
 
+# The export formats the code can actually produce. This one is a fact about the
+# platform, not a declaration by the customer, so it is not nullable.
+IMPLEMENTED_EXPORT_FORMATS = ["JSON", "CSV", "AUDIT_ZIP"]
+
+RETENTION_POLICY_STATUS_UNDECLARED = (
+    "aucune politique déclarée — modèle non contractuel, à contractualiser"
+)
+RETENTION_POLICY_STATUS_DECLARED = "déclarée par l'organisation — à vérifier avec le DPO"
+
+
+def _retention_policy_row(db: Session, *, organization_id: UUID):
+    from app.models.domain import OrganizationRetentionPolicy
+
+    return db.scalar(
+        select(OrganizationRetentionPolicy).where(
+            OrganizationRetentionPolicy.organization_id == organization_id
+        )
+    )
+
+
 def get_retention_policy(db: Session, *, organization_id: UUID) -> RetentionPolicyResponse:
+    """Report what the organization actually declared, and nothing more.
+
+    This endpoint used to answer the same literals to every tenant. They are
+    removed: an undeclared field is ``null``, and the response names the missing
+    fields. It also states what happens to those values: C20 added a purge that
+    applies them (`POST /api/v1/privacy/purge`, `app.privacy.purge_job`), so the
+    response distinguishes "applicable" from "scheduled" instead of claiming that
+    nothing is ever deleted.
+    """
+    row = _retention_policy_row(db, organization_id=organization_id)
+    fields = {
+        "documents_retention_years": None,
+        "audit_trail_retention_years": None,
+        "evidence_archive_retention_years": None,
+        "gdpr_contact_email": None,
+        "encryption_standard": None,
+        "storage_region": None,
+        "last_policy_review": None,
+    }
+    if row is not None:
+        fields = {
+            "documents_retention_years": row.documents_retention_years,
+            "audit_trail_retention_years": row.audit_trail_retention_years,
+            "evidence_archive_retention_years": row.evidence_archive_retention_years,
+            "gdpr_contact_email": row.gdpr_contact_email,
+            "encryption_standard": row.encryption_standard,
+            "storage_region": row.storage_region,
+            "last_policy_review": row.last_policy_review,
+        }
+
     return RetentionPolicyResponse(
         organization_id=organization_id,
-        documents_retention_years=5,
-        audit_trail_retention_years=10,
-        evidence_archive_retention_years=5,
-        gdpr_contact_email="dpo@vericlaim.ai",
-        encryption_standard="AES-256 / TLS 1.3",
-        storage_region="EU (Paris / Frankfurt)",
-        export_formats_supported=["JSON", "CSV", "AUDIT_ZIP"],
-        last_policy_review="2026-09-24",
+        configured=row is not None,
+        status=(
+            RETENTION_POLICY_STATUS_DECLARED
+            if row is not None
+            else RETENTION_POLICY_STATUS_UNDECLARED
+        ),
+        undeclared_fields=[name for name, value in fields.items() if value is None],
+        export_formats_supported=list((row.export_formats_supported if row else None) or IMPLEMENTED_EXPORT_FORMATS),
+        declared_by_user_id=row.configured_by_user_id if row else None,
+        declared_at=row.configured_at if row else None,
+        # Two different statements, kept apart on purpose: nothing deletes *on a
+        # schedule* (no scheduler is shipped), while deletion *is* available — C20
+        # added `POST /api/v1/privacy/purge` and `app.privacy.purge_job`. An earlier
+        # revision said "la plateforme n'efface rien", which stopped being true the
+        # day the purge was written.
+        automatic_deletion_implemented=False,
+        deletion_available=True,
+        deletion_job="python -m app.privacy.purge_job",
+        enforcement_endpoint="/api/v1/privacy/retention",
+        limitations=list(DEFAULT_RETENTION_LIMITATIONS),
+        disclaimer=(
+            "Modèle non contractuel. Les valeurs affichées sont celles déclarées par "
+            "l'organisation ; aucune durée, aucune région et aucun contact DPO ne sont "
+            "fournis par défaut par la plateforme."
+        ),
+        **fields,
     )
+
+
+def declare_retention_policy(
+    db: Session,
+    *,
+    organization_id: UUID,
+    actor_user_id: UUID,
+    payload: RetentionPolicyUpdateRequest,
+) -> RetentionPolicyResponse:
+    """Record an organization's declaration, or extend the existing one.
+
+    Omitted fields are left untouched rather than reset, because a partial update
+    that silently erased a previously declared duration would be a data loss the
+    caller never asked for.
+    """
+    from app.models.domain import OrganizationRetentionPolicy
+
+    row = _retention_policy_row(db, organization_id=organization_id)
+    provided = payload.model_dump(exclude_unset=True)
+    if row is None:
+        row = OrganizationRetentionPolicy(
+            id=uuid4(), organization_id=organization_id, **provided
+        )
+        db.add(row)
+    else:
+        for name, value in provided.items():
+            setattr(row, name, value)
+    row.configured_by_user_id = actor_user_id
+    row.configured_at = datetime.now(timezone.utc)
+    db.commit()
+    return get_retention_policy(db, organization_id=organization_id)

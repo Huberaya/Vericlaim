@@ -18,7 +18,18 @@ from app.identity.oidc import OidcClient, OidcIdentity, OidcLoginTransaction, Oi
 from app.identity.roles import ensure_system_roles
 from app.identity.service import provision_oidc_user
 from app.identity.security import CSRF_HEADER_NAME, AuthenticationStateError, read_login_transaction, sign_login_transaction
-from app.models.domain import AuditEvent, AuthSession, Membership, MembershipStatus, Organization, Role, User, UserStatus
+from app.models.domain import (
+    AuditEvent,
+    AuthSession,
+    EmailMessage,
+    EmailMessageStatus,
+    Membership,
+    MembershipStatus,
+    Organization,
+    Role,
+    User,
+    UserStatus,
+)
 from tests.auth_support import authenticate_client, authenticate_client_without_membership
 
 
@@ -142,7 +153,19 @@ def test_organization_onboarding_and_member_rbac_are_enforced():
         )
         assert invitation.status_code == 201, invitation.text
         assert invitation.json()["status"] == "invited"
-        assert invitation.json()["delivery_status"] == "not_sent"
+        # C14 replaced the old expectation here. The invitation used to return
+        # "not_sent" with a note claiming e-mail was out of scope, and no message was
+        # ever queued: the test was asserting the defect. The invitation now records a
+        # real message, and the status reported to the inviter is the transport's own
+        # answer — "not_configured" without an SMTP relay (a test instance has none).
+        assert invitation.json()["delivery_status"] == EmailMessageStatus.NOT_CONFIGURED.value
+        # The note must state the truth: recorded, not delivered.
+        assert "pas été remis" in invitation.json()["delivery_note"]
+        with SessionLocal() as db:
+            queued = db.scalar(
+                select(EmailMessage).where(EmailMessage.recipient_email == "future.analyst@example.com")
+            )
+        assert queued is not None and queued.purpose == "invitation"
 
         members = client.get("/api/v1/organizations/current/members")
         assert members.status_code == 200

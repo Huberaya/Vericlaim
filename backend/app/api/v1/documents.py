@@ -7,9 +7,15 @@ metadata, scans malware and promotes the object to the clean bucket.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+import base64
+import json
+from typing import Annotated
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy.orm import Session
 
+from app.billing.http import require_active_subscription
 from app.core.config import settings
 from app.core.database import get_db
 from app.documents.extraction import (
@@ -27,6 +33,7 @@ from app.documents.service import (
     create_document,
     create_document_download,
     document_detail,
+    list_documents,
     request_document_upload,
 )
 from app.documents.storage import ObjectStorageError, ObjectStorageUnavailableError
@@ -41,6 +48,7 @@ from app.models.document_schemas import (
     DocumentDownloadResponse,
     DocumentExtractionJobResponse,
     DocumentExtractionRetryResponse,
+    DocumentListResponse,
     DocumentResponse,
     DocumentSegmentResponse,
     DocumentUploadCompletionResponse,
@@ -53,18 +61,44 @@ from app.models.document_schemas import (
 from app.models.domain import (
     Document,
     DocumentExtractionJob,
+    DocumentType,
     DocumentSegment,
     DocumentUpload,
     DocumentVersion,
 )
 
 router = APIRouter(prefix="/api/v1/documents", tags=["documents"])
+
+# C13 — garde d'abonnement : cette route produit un artefact payant ou une
+# dépense réelle (OCR, e-mail tiers, rapport signé). Voir app/billing/http.py.
+SUBSCRIPTION_GATE = Depends(require_active_subscription())
 upload_router = APIRouter(prefix="/api/v1/document-uploads", tags=["documents"])
 version_router = APIRouter(prefix="/api/v1/document-versions", tags=["documents"])
 
 # FastAPI dependency objects are intentionally built once rather than invoked in
 # endpoint default values. This keeps the dependency graph explicit and avoids
 # recreating permission closures for every route declaration.
+def _encode_cursor(sort_key: str | None, resource_id: UUID | None) -> str | None:
+    if sort_key is None or resource_id is None:
+        return None
+    raw = json.dumps({"sort": sort_key, "id": str(resource_id)}, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _decode_cursor(cursor: str | None) -> tuple[str | None, UUID | None]:
+    if cursor is None:
+        return None, None
+    try:
+        padded = cursor + "=" * (-len(cursor) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")))
+        return str(payload["sort"]), UUID(str(payload["id"]))
+    except Exception as exc:  # noqa: BLE001 — any malformed cursor is a client error
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Curseur de pagination invalide.",
+        ) from exc
+
+
 DATABASE_DEPENDENCY = Depends(get_db)
 DOCUMENTS_MANAGE_DEPENDENCY = Depends(require_permission("documents:manage", csrf_protected=True))
 DOCUMENTS_READ_DEPENDENCY = Depends(require_permission("documents:read"))
@@ -171,7 +205,7 @@ def _raise_document_error(exc: Exception) -> None:
     raise exc
 
 
-@router.post("", response_model=DocumentResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=DocumentResponse, status_code=status.HTTP_201_CREATED, dependencies=[SUBSCRIPTION_GATE])
 def create_document_endpoint(
     body: DocumentCreateRequest,
     request: Request,
@@ -195,6 +229,41 @@ def create_document_endpoint(
     return _present_document(document)
 
 
+@router.get("", response_model=DocumentListResponse)
+def list_documents_endpoint(
+    limit: Annotated[int, Query(ge=1, le=100)] = 25,
+    cursor: Annotated[str | None, Query(max_length=512)] = None,
+    q: Annotated[str | None, Query(max_length=200)] = None,
+    document_type: Annotated[DocumentType | None, Query()] = None,
+    supplier_id: Annotated[UUID | None, Query()] = None,
+    product_id: Annotated[UUID | None, Query()] = None,
+    principal: TenantPrincipal = DOCUMENTS_READ_DEPENDENCY,
+    db: Session = DATABASE_DEPENDENCY,
+) -> DocumentListResponse:
+    """List the documents of the active organization (C18).
+
+    Declared before `/{document_id}` on purpose: a literal path must not be captured
+    by the parameterised one. Without an authenticated session this route answers
+    401 — it is never publicly readable, and every row is filtered by the tenant.
+    """
+    after_sort_key, after_id = _decode_cursor(cursor)
+    page = list_documents(
+        db,
+        organization_id=principal.organization_id,
+        limit=limit,
+        after_sort_key=after_sort_key,
+        after_id=after_id,
+        query=q,
+        document_type=document_type,
+        supplier_id=supplier_id,
+        product_id=product_id,
+    )
+    return DocumentListResponse(
+        items=[_present_document(document) for document in page.items],
+        next_cursor=_encode_cursor(page.next_sort_key, page.next_id),
+    )
+
+
 @router.get("/{document_id}", response_model=DocumentDetailResponse)
 def get_document_endpoint(
     document_id: str,
@@ -214,7 +283,7 @@ def get_document_endpoint(
     return _detail_response(document, versions, uploads)
 
 
-@router.post("/{document_id}/versions", response_model=DocumentUploadInstructionResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/{document_id}/versions", response_model=DocumentUploadInstructionResponse, status_code=status.HTTP_201_CREATED, dependencies=[SUBSCRIPTION_GATE])
 def request_document_version_upload(
     document_id: str,
     body: DocumentVersionUploadRequest,
@@ -262,6 +331,7 @@ def request_document_version_upload(
         422: {"model": DocumentUploadCompletionResponse, "description": "Fichier rejeté par les contrôles."},
         503: {"model": DocumentUploadCompletionResponse, "description": "Scanner ou stockage indisponible; aucune promotion."},
     },
+    dependencies=[SUBSCRIPTION_GATE],
 )
 def complete_document_upload_endpoint(
     upload_id: str,
@@ -328,7 +398,7 @@ def get_document_version_segments(
     )
 
 
-@version_router.post("/{version_id}/extraction/retry", response_model=DocumentExtractionRetryResponse)
+@version_router.post("/{version_id}/extraction/retry", response_model=DocumentExtractionRetryResponse, dependencies=[SUBSCRIPTION_GATE])
 def retry_document_version_extraction(
     version_id: str,
     request: Request,

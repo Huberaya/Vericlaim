@@ -119,8 +119,88 @@ class OrganizationMemberResponse(BaseModel):
 
 
 class InvitationResponse(OrganizationMemberResponse):
-    delivery_status: str = "not_sent"
+    # Filled from the real delivery result (C14). Never hardcode "sent": an
+    # instance with EMAIL_BACKEND=outbox records the message and delivers nothing.
+    delivery_status: str = "inconnu"
     delivery_note: str = (
-        "Invitation enregistrée. L’envoi d’e-mail est volontairement hors périmètre ; "
-        "la personne sera activée lors de sa première connexion SSO avec cette adresse vérifiée."
+        "Statut de remise non calculé. EMAIL_BACKEND=smtp remet réellement le message ; "
+        "EMAIL_BACKEND=outbox l’enregistre dans email_messages sans l’envoyer."
     )
+
+
+# --------------------------------------------------------------------------- #
+# C14 — self-service identity
+# --------------------------------------------------------------------------- #
+
+
+class SignupRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    email: EmailStr
+    password: str = Field(min_length=1, max_length=256)
+    organization_name: str = Field(min_length=2, max_length=255)
+    display_name: str | None = Field(default=None, max_length=255)
+
+    @field_validator("organization_name")
+    @classmethod
+    def strip_organization_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if len(normalized) < 2:
+            raise ValueError("Le nom de l'organisation doit contenir au moins 2 caractères.")
+        return normalized
+
+
+class PasswordLoginRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    email: EmailStr
+    password: str = Field(min_length=1, max_length=256)
+
+
+class PasswordResetRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    email: EmailStr
+
+
+class TokenRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    token: str = Field(min_length=16, max_length=512)
+
+
+class PasswordResetConfirmRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    token: str = Field(min_length=16, max_length=512)
+    new_password: str = Field(min_length=1, max_length=256)
+
+
+class PasswordChangeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    current_password: str = Field(min_length=1, max_length=256)
+    new_password: str = Field(min_length=1, max_length=256)
+
+
+class InvitationAcceptRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    token: str = Field(min_length=16, max_length=512)
+    password: str = Field(min_length=1, max_length=256)
+    display_name: str | None = Field(default=None, max_length=255)
+
+
+class SelfServiceMessageResponse(BaseModel):
+    """Deliberately generic: the answer must not reveal whether an account exists."""
+
+    status: str
+    message: str
+    email_recorded: bool = True
+
+
+class SessionIssuedResponse(BaseModel):
+    user_id: str
+    email: str
+    display_name: str | None = None
+    active_organization_id: str | None = None

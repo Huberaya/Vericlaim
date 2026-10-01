@@ -72,7 +72,17 @@ export async function switchActiveOrganization(organizationId: string): Promise<
   return (await response.json()) as OrganizationMembership;
 }
 
+/**
+ * Local development shortcut. The backend omits this route outside
+ * development/test and refuses it even if registered, so it must never be the
+ * only way into the application: callers gate it on NODE_ENV at build time.
+ */
 export async function devLogin(): Promise<AuthSession> {
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(
+      "L’accès pilote sans authentification est désactivé. Utilisez la connexion SSO de votre organisation."
+    );
+  }
   const response = await fetch(requestUrl("/api/v1/auth/dev-login"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },

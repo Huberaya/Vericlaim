@@ -73,16 +73,52 @@ class AnalysisVersionResponse(BaseModel):
     version_number: int
     status: AnalysisStatus
     engine_version: str
-    # This is intentionally an explicit not-applicable marker in C5: no
-    # regulatory rules are evaluated by the persistent claim-detection flow.
+    # Real Rule Book fingerprint for pipeline v2 versions. Versions produced
+    # before v2 keep the explicit not-applicable marker.
     rulebook_version: str
     input_manifest_sha256: str
     result_sha256: str | None
+    # NULL means no regulatory conclusion exists for this version. It is never a
+    # synonym for "compliant".
+    overall_compliance: str | None
+    risk_score: int | None
     input_manifest: dict[str, Any] | None
     result: dict[str, Any]
     started_at: datetime | None
     completed_at: datetime | None
     created_at: datetime
+
+
+class ClaimTableCellResponse(BaseModel):
+    """C23 — la cellule lue, quand l'allégation tombe dans un tableau.
+
+    Ce n'est pas une conclusion : c'est la position et le rôle de la case où le
+    déclencheur a été trouvé, la ligne lue (critère / valeur / unité) et l'entrée
+    normalisée correspondante. Rien n'y est complété par déduction.
+    """
+
+    row_index: int | None = None
+    column_index: int | None
+    role: str | None
+    text: str | None
+    start_offset: int | None
+    end_offset: int | None
+
+
+class ClaimTableEntryResponse(BaseModel):
+    criterion: str | None
+    value: str | None
+    numeric_value: str | None
+    unit: str | None
+    row_index: int | None
+
+
+class ClaimTableCitationResponse(BaseModel):
+    page_number: int | None
+    columns: list[str]
+    has_header: bool
+    cell: ClaimTableCellResponse
+    row_entry: ClaimTableEntryResponse | None
 
 
 class ClaimCitationResponse(BaseModel):
@@ -94,6 +130,8 @@ class ClaimCitationResponse(BaseModel):
     segment_start_offset: int | None
     segment_end_offset: int | None
     source_sha256: str | None
+    # C23 — présent seulement quand la citation tombe dans un tableau lu.
+    table_citation: ClaimTableCitationResponse | None = None
 
 
 class ClaimResponse(BaseModel):
@@ -108,9 +146,15 @@ class ClaimResponse(BaseModel):
     start_offset: int | None
     end_offset: int | None
     source: ClaimSource
-    # Always null for C5 lexical detection; it is returned explicitly so a
-    # consumer cannot mistake a detector hit for a statistical confidence.
+    # Deterministic rubric score (confidence-rubric-v1), never a statistical
+    # confidence. Published with the factors that produced it, so a consumer
+    # cannot mistake a detector hit for a probability.
     confidence_score: float | None
+    confidence_level: str | None = None
+    confidence_factors: list[dict[str, Any]] = []
+    confidence_basis: str | None = None
+    confidence_rubric_version: str | None = None
+    review_reasons: list[str] = []
     status: ClaimStatus
     detector_version: str | None
     attributes: dict[str, Any]

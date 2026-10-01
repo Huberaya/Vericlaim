@@ -1,6 +1,6 @@
-# Guide Utilisateur — Pack Pilote VeriClaim AI (B2B SaaS)
+# Guide Utilisateur — Pack Pilote VeriClaim (B2B SaaS)
 
-Bienvenue dans le programme pilote de **VeriClaim AI**, la plateforme d'intelligence réglementaire et de pré-audit des allégations environnementales.
+Bienvenue dans le programme pilote de **VeriClaim**, la plateforme d'intelligence réglementaire et de pré-audit des allégations environnementales.
 
 Ce guide accompagne les directions **Achats, RSE, Juridique et Marketing** tout au long du cycle d'évaluation de la conformité (Loi AGEC, Directive EmpCo 2024/825, Normes ISO 14021/14044).
 

@@ -1,16 +1,52 @@
+"""C6 acceptance: a report must describe the persisted analysis, not a new one.
+
+The previous implementation reconstructed a source text and re-ran the rule
+engine on it. On an analysis where the engine had detected three claims and one
+prohibition, the resulting PDF stated "CONFORME AU PÉRIMÈTRE AUDITÉ · Allégations :
+0 | Violations : 0" with a genuine SHA-256 of the fabricated text. These tests
+exist so that failure mode cannot come back.
+
+They are fidelity tests: every value asserted in the PDF is read back from the
+database and compared, so a report that diverges from its analysis fails.
+"""
 from __future__ import annotations
 
 import io
+import re
 import zipfile
-from uuid import uuid4
+from uuid import UUID, uuid4
+
 import fitz
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import Session
+from sqlalchemy.pool import StaticPool
 
-from app.core.database import SessionLocal, create_tables
+from app.analyses.service import (
+    claim_next_analysis_detection_job,
+    process_claimed_analysis_detection,
+)
+from app.core.config import settings
+from app.core.database import Base, SessionLocal, create_tables
+from app.identity.service import set_db_request_context
 from app.main import app
-from app.models.domain import Analysis, AnalysisVersion
+from tests.report_support import issue_report, report_storage, request_report
+from app.models.domain import (
+    AnalysisVerdict,
+    Document,
+    DocumentSegment,
+    DocumentVersion,
+    ExtractionStatus,
+    SegmentType,
+)
 from tests.auth_support import authenticate_client
+
+DOCUMENT_TEXT = (
+    "Cet emballage est biodégradable. "
+    "Notre produit est neutre en carbone. "
+    "Le flacon est recyclable."
+)
 
 
 @pytest.fixture(autouse=True)
@@ -18,167 +54,387 @@ def setup_database():
     create_tables()
 
 
-def test_pdf_generation_from_evaluation_response():
-    with TestClient(app) as client:
+def _hash(character: str) -> str:
+    return character * 64
+
+
+def _seed_analysable_document(organization_id: UUID) -> UUID:
+    """One extracted document whose text reaches three different rules."""
+    suffix = uuid4().hex[:10]
+    with SessionLocal() as db:
+        document = Document(
+            organization_id=organization_id,
+            document_key=f"C6-DOC-{suffix}",
+            title="Déclaration fournisseur",
+        )
+        db.add(document)
+        db.flush()
+        version = DocumentVersion(
+            organization_id=organization_id,
+            document_id=document.id,
+            version_number=1,
+            source_filename=f"{suffix}.txt",
+            content_type="text/plain",
+            storage_key=f"organizations/{organization_id}/{suffix}.txt",
+            sha256=_hash("a"),
+            size_bytes=len(DOCUMENT_TEXT),
+            source_language="fr",
+            extraction_status=ExtractionStatus.COMPLETED,
+            extraction_engine_version="vericlaim-document-extractor-v1",
+            extracted_text_sha256=_hash("b"),
+        )
+        db.add(version)
+        db.flush()
+        db.add(
+            DocumentSegment(
+                organization_id=organization_id,
+                document_version_id=version.id,
+                sequence_number=0,
+                page_number=1,
+                segment_type=SegmentType.PARAGRAPH,
+                text=DOCUMENT_TEXT,
+                start_offset=0,
+                end_offset=len(DOCUMENT_TEXT),
+                source_sha256=version.sha256,
+            )
+        )
+        db.commit()
+        return version.id
+
+
+def _run_worker_once(organization_id: UUID, user_id: UUID) -> None:
+    with SessionLocal() as db:
+        set_db_request_context(db, user_id=user_id, organization_id=organization_id)
+        claim = claim_next_analysis_detection_job(
+            db,
+            settings=settings,
+            organization_id=organization_id,
+            worker_id="pytest-c6-worker",
+        )
+        assert claim is not None, "aucun job à traiter"
+        process_claimed_analysis_detection(db, settings=settings, claim=claim)
+        db.commit()
+
+
+def _persisted_analysis(client: TestClient, identity) -> tuple[str, UUID]:
+    """Create a real analysis through the API and process it, as production does."""
+    version_id = _seed_analysable_document(identity.organization_id)
+    created = client.post(
+        "/api/v1/analyses",
+        json={"document_version_ids": [str(version_id)]},
+        headers={"Idempotency-Key": f"c6-{uuid4().hex[:12]}"},
+    )
+    assert created.status_code == 202, created.text
+    analysis_id = created.json()["analysis"]["id"]
+    _run_worker_once(identity.organization_id, identity.user_id)
+    return analysis_id, version_id
+
+
+# Right edge of the printable area. ``insert_text`` does not wrap and PyMuPDF
+# clips at the page edge, but ``get_text`` still returns the clipped characters.
+# A fidelity test must therefore reason about what a reader can actually see:
+# words whose bounding box extends past this limit are dropped.
+VISIBLE_RIGHT_EDGE = 555.32
+
+
+def _pdf_text(content: bytes) -> str:
+    """Extract only the text a human reader can see on the rendered page."""
+    lines: list[str] = []
+    with fitz.open(stream=content, filetype="pdf") as document:
+        for page in document:
+            grouped: dict[tuple[int, int], list[tuple[int, str]]] = {}
+            for x0, _y0, x1, _y1, word, block, line, number in page.get_text("words"):
+                if x1 > VISIBLE_RIGHT_EDGE + 1:
+                    continue
+                grouped.setdefault((block, line), []).append((number, word))
+            for key in sorted(grouped):
+                words = [word for _n, word in sorted(grouped[key])]
+                lines.append(" ".join(words))
+    return "\n".join(lines)
+
+
+def _overflowing_words(content: bytes) -> list[str]:
+    """Words the reader cannot see because they run past the printable area."""
+    offenders: list[str] = []
+    with fitz.open(stream=content, filetype="pdf") as document:
+        for page in document:
+            for x0, _y0, x1, _y1, word, _b, _l, _n in page.get_text("words"):
+                if x1 > VISIBLE_RIGHT_EDGE + 1:
+                    offenders.append(word)
+    return offenders
+
+
+def test_no_text_is_silently_clipped_by_the_page_edge():
+    """A reader must not lose information to a layout that overflows.
+
+    ``insert_text`` neither wraps nor warns, and ``get_text`` still returns the
+    clipped characters, so without this guard a report can look complete to an
+    automated check while a human reads a truncated line.
+    """
+    with TestClient(app) as client, report_storage() as storage:
+        identity = authenticate_client(client, role_code="analyst")
+        analysis_id, _ = _persisted_analysis(client, identity)
+        content = issue_report(client, analysis_id=analysis_id, storage=storage).content
+        offenders = _overflowing_words(content)
+        assert offenders == [], f"texte coupé hors de la zone imprimable : {offenders[:10]}"
+
+
+def _stored_verdicts(analysis_id: str) -> list[AnalysisVerdict]:
+    with SessionLocal() as db:
+        from app.models.domain import AnalysisVersion
+
+        version = db.scalar(
+            select(AnalysisVersion).where(AnalysisVersion.analysis_id == UUID(analysis_id))
+        )
+        assert version is not None
+        return list(
+            db.scalars(
+                select(AnalysisVerdict)
+                .where(AnalysisVerdict.analysis_version_id == version.id)
+                .order_by(AnalysisVerdict.sequence_number.asc())
+            ).all()
+        )
+
+
+# --------------------------------------------------------------------------- #
+# C6.1 — the headline case: three claims, one prohibition, never "CONFORME"
+# --------------------------------------------------------------------------- #
+
+
+def test_report_shows_every_persisted_claim_and_never_claims_compliance():
+    with TestClient(app) as client, report_storage() as storage:
         identity = authenticate_client(client, role_code="analyst")
 
-        eval_payload = {
-            "evaluation_response": {
-                "extracted_source_text": "Produit 100% biodégradable et éco-responsable.",
-                "overall_compliance": "NON_COMPLIANT",
-                "risk_score": 85,
-                "legal_exposure_estimate": "Risque d'amende administrative DGCCRF jusqu'à 100 000 €.",
-                "violations_count": 1,
-                "conditional_findings_count": 0,
-                "detected_claims_count": 1,
-                "evaluations": [
-                    {
-                        "claim_id": "claim-101",
-                        "claim_text": "100% biodégradable",
-                        "claim_type": "biodegradable",
-                        "start_offset": 8,
-                        "end_offset": 26,
-                        "trigger_text": "biodégradable",
-                        "rule_id": "FR-AGEC-R541-220-BIODEC",
-                        "rule_title": "Interdiction absolue allégation biodégradable",
-                        "law_reference": "Code de l'environnement art. L. 541-9-1",
-                        "legal_force": "BINDING_FR",
-                        "severity": "CRITICAL",
-                        "verdict": "NON_COMPLIANT",
-                        "is_legal_violation": True,
-                        "remediation": {
-                            "buyer_explanation": "Allégation formellement proscrite par la loi AGEC.",
-                            "recommended_rewrite": "Supprimer la mention biodégradable.",
-                            "supplier_contract_clause": "Clause d'interdiction stricte AGEC R. 541-220.",
-                        },
-                    }
-                ],
-                "exposure_matrix": {"items": []},
-                "audit_trail": {
-                    "audit_id": "aud-12345",
-                    "engine_version": "1.0.0",
-                    "rulebook_version": "2026.09",
-                    "evaluated_at_utc": "2026-09-29T18:00:00Z",
-                    "as_of_date": "2026-09-29",
-                    "source_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-                    "evidence_manifest_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-                    "report_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-                    "record_hash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-                },
-            },
-            "document_title": "Rapport Pré-Audit Test",
-            "product_identifier": "SKU-PROD-TEST",
-            "surface": "packaging",
-        }
+        analysis_id, _ = _persisted_analysis(client, identity)
+        verdicts = _stored_verdicts(analysis_id)
+        assert verdicts, "aucun verdict persisté: le test ne prouve rien"
 
-        response = client.post("/api/v1/reports/pdf", json=eval_payload)
+        response = issue_report(client, analysis_id=analysis_id, storage=storage)
         assert response.status_code == 200, response.text
-        assert response.headers["content-type"] == "application/pdf"
-        assert "attachment; filename=" in response.headers["content-disposition"]
-        assert response.content.startswith(b"%PDF-")
+        text = _pdf_text(response.content)
 
-        # Vérification du contenu du PDF via PyMuPDF
-        doc = fitz.open(stream=response.content, filetype="pdf")
-        assert len(doc) >= 1
-        page1_text = doc[0].get_text()
-        assert "VERICLAIM AI" in page1_text
-        assert "NON-CONFORMITÉ JURIDIQUE RETENUE" in page1_text
-        assert "FR-AGEC-R541-220-BIODEC" in page1_text
-        assert "DOCUMENT DE PRÉ-AUDIT ET D'AIDE À LA DÉCISION" in page1_text
+        # Every persisted rule and claim appears in the document.
+        for verdict in verdicts:
+            assert verdict.rule_id in text, f"règle absente du PDF: {verdict.rule_id}"
+            assert verdict.claim_text[:40] in text, (
+                f"allégation absente du PDF: {verdict.claim_text[:40]!r}"
+            )
+
+        assert "RULE_AGEC_BIODEGRADABLE" in text
+        assert "STRICTLY_PROHIBITED" in text or "STRICTEMENT INTERDIT" in text.upper()
+
+        # The report must not assert a clean perimeter while violations exist.
+        count = re.search(r"Violations\s*:\s*(\d+)", text)
+        assert count is not None, "le PDF n'annonce aucun compte de violations"
+        assert int(count.group(1)) == sum(1 for v in verdicts if v.is_legal_violation) >= 1
+        assert "CONFORME AU PÉRIMÈTRE AUDITÉ" not in text
 
 
-def test_dossier_zip_pack_generation():
+def test_report_carries_the_real_fingerprints():
+    with TestClient(app) as client, report_storage() as storage:
+        identity = authenticate_client(client, role_code="analyst")
+        analysis_id, _ = _persisted_analysis(client, identity)
+
+        with SessionLocal() as db:
+            from app.models.domain import AnalysisVersion
+
+            version = db.scalar(
+                select(AnalysisVersion).where(AnalysisVersion.analysis_id == UUID(analysis_id))
+            )
+            result_sha256 = version.result_sha256
+            rulebook_version = version.rulebook_version
+            engine_version = version.engine_version
+
+        response = issue_report(client, analysis_id=analysis_id, storage=storage)
+        assert response.status_code == 200, response.text
+        text = _pdf_text(response.content)
+
+        assert result_sha256 in text, "l'empreinte persistée du résultat est absente du PDF"
+        assert rulebook_version in text, "l'empreinte du Rule Book est absente du PDF"
+        assert engine_version in text, "la version du moteur est absente du PDF"
+
+        # No fabricated identifiers from the previous implementation.
+        assert "Rule Engine v1.0.0" not in text
+        assert "2026.09" not in text
+        assert "aud-persisted-export" not in text
+        assert "0" * 64 not in text
+
+
+def test_report_renders_the_stored_date_not_the_download_date():
+    with TestClient(app) as client, report_storage() as storage:
+        identity = authenticate_client(client, role_code="analyst")
+        analysis_id, _ = _persisted_analysis(client, identity)
+
+        with SessionLocal() as db:
+            from app.models.domain import AnalysisVersion
+
+            version = db.scalar(
+                select(AnalysisVersion).where(AnalysisVersion.analysis_id == UUID(analysis_id))
+            )
+            as_of = version.evaluation_context_json["as_of_date"]
+
+        text = _pdf_text(
+            issue_report(client, analysis_id=analysis_id, storage=storage).content
+        )
+        # The ISO reference date of the verdict is printed, so a report cannot be
+        # presented as a fresh audit of a later date.
+        assert as_of in text
+
+
+def test_cited_text_comes_from_persisted_segments():
+    with TestClient(app) as client, report_storage() as storage:
+        identity = authenticate_client(client, role_code="analyst")
+        analysis_id, _ = _persisted_analysis(client, identity)
+        text = _pdf_text(
+            issue_report(client, analysis_id=analysis_id, storage=storage).content
+        )
+
+        assert "biodégradable" in text
+        assert "neutre en carbone" in text
+        # The old default placeholder that produced the false-clean certificate.
+        assert "Texte extrait de la pièce justificative." not in text
+
+
+# --------------------------------------------------------------------------- #
+# C6.2 — a client can no longer supply a verdict
+# --------------------------------------------------------------------------- #
+
+
+def test_client_supplied_verdicts_are_rejected():
     with TestClient(app) as client:
         identity = authenticate_client(client, role_code="analyst")
-
-        eval_payload = {
+        forged = {
+            "analysis_id": str(uuid4()),
             "evaluation_response": {
-                "extracted_source_text": "Emballage issu de forêts gérées durablement.",
+                "extracted_source_text": "Allégation totalement fantaisiste.",
                 "overall_compliance": "COMPLIANT",
-                "risk_score": 10,
-                "legal_exposure_estimate": "Risque faible sous réserve de certificat FSC/PEFC valide.",
+                "risk_score": 0,
+                "legal_exposure_estimate": "Aucun risque.",
                 "violations_count": 0,
                 "conditional_findings_count": 0,
                 "detected_claims_count": 0,
                 "evaluations": [],
                 "exposure_matrix": {"items": []},
                 "audit_trail": {
-                    "audit_id": "aud-67890",
+                    "audit_id": "forged",
                     "engine_version": "1.0.0",
                     "rulebook_version": "2026.09",
                     "evaluated_at_utc": "2026-09-29T18:00:00Z",
                     "as_of_date": "2026-09-29",
-                    "source_sha256": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
-                    "evidence_manifest_sha256": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
-                    "report_sha256": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
-                    "record_hash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+                    "source_sha256": "0" * 64,
+                    "evidence_manifest_sha256": "0" * 64,
+                    "report_sha256": "0" * 64,
+                    "record_hash": "0" * 64,
                 },
             },
-            "product_identifier": "SKU-GREEN-001",
         }
-
-        response = client.post("/api/v1/reports/dossier", json=eval_payload)
-        assert response.status_code == 200, response.text
-        assert response.headers["content-type"] == "application/zip"
-
-        # Vérification de l'intégrité de l'archive ZIP
-        zip_file = zipfile.ZipFile(io.BytesIO(response.content))
-        file_list = zip_file.namelist()
-        assert "rapport_pre_audit.pdf" in file_list
-        assert "manifeste_audit_scelle.json" in file_list
-        assert "matrice_probatoire.csv" in file_list
-        assert "README_DOSSIER_AUDIT.txt" in file_list
-
-        readme_content = zip_file.read("README_DOSSIER_AUDIT.txt").decode("utf-8")
-        assert "DOSSIER DE PRÉ-AUDIT RÉGLEMENTAIRE" in readme_content
-        assert "AVERTISSEMENT JURIDIQUE" in readme_content
+        for path in ("/api/v1/reports/pdf", "/api/v1/reports/dossier"):
+            response = client.post(path, json=forged)
+            assert response.status_code == 422, (
+                f"{path} accepte encore un verdict fourni par le client: {response.status_code}"
+            )
+            assert response.content[:5] != b"%PDF-"
 
 
-def test_analysis_pdf_and_dossier_tenant_isolation():
-    with TestClient(app) as client_a, TestClient(app) as client_b:
-        identity_a = authenticate_client(client_a, role_code="analyst")
-        identity_b = authenticate_client(client_b, role_code="analyst")
+def test_analysis_id_is_mandatory():
+    with TestClient(app) as client:
+        identity = authenticate_client(client, role_code="analyst")
+        response = client.post("/api/v1/reports/pdf", json={"document_title": "sans analyse"})
+        assert response.status_code == 422, response.text
+
+
+def test_a_version_without_verdicts_is_refused_not_rendered():
+    """A pre-v2 version must not be rendered as a compliance report."""
+    with TestClient(app) as client:
+        identity = authenticate_client(client, role_code="analyst")
+        from app.models.domain import Analysis, AnalysisStatus, AnalysisVersion
 
         with SessionLocal() as db:
-            analysis_a = Analysis(
-                organization_id=identity_a.organization_id,
-                analysis_key="ana-alpha-001",
-                status="completed",
+            analysis = Analysis(
+                organization_id=identity.organization_id,
+                analysis_key=f"legacy-{uuid4().hex[:8]}",
+                status=AnalysisStatus.COMPLETED,
             )
-            db.add(analysis_a)
-            db.commit()
-            db.refresh(analysis_a)
-
-            version_a = AnalysisVersion(
-                organization_id=identity_a.organization_id,
-                analysis_id=analysis_a.id,
-                version_number=1,
-                status="completed",
-                engine_version="1.0.0",
-                rulebook_version="2026.09",
-                input_manifest_sha256="0" * 64,
-                result_sha256="0" * 64,
-                result_json={
-                    "extracted_source_text": "Emballage carton 100% recyclable.",
-                },
+            db.add(analysis)
+            db.flush()
+            db.add(
+                AnalysisVersion(
+                    organization_id=identity.organization_id,
+                    analysis_id=analysis.id,
+                    version_number=1,
+                    status=AnalysisStatus.COMPLETED,
+                    engine_version="vericlaim-fact-extractor-v1",
+                    rulebook_version="not-applicable-deterministic-claims-v1",
+                    input_manifest_sha256=_hash("0"),
+                    result_sha256=None,
+                    overall_compliance=None,
+                    result_json={"pipeline": "deterministic_claim_detection"},
+                )
             )
-            db.add(version_a)
             db.commit()
+            analysis_id = str(analysis.id)
 
-            analysis_id = str(analysis_a.id)
+        # C22 : le refus qui ne dépend pas du rendu est prononcé à l'entrée dans la
+        # file, donc immédiatement — un client n'attend pas un worker pour apprendre
+        # qu'il n'y a rien à rendre.
+        response = client.post("/api/v1/reports/pdf", json={"analysis_id": analysis_id})
+        assert response.status_code == 409, response.text
+        assert "aucun verdict" in response.json()["detail"]["message"].lower()
+        assert response.content[:5] != b"%PDF-"
 
-        # Org Alpha peut télécharger son PDF et son dossier
-        res_pdf_a = client_a.get(f"/api/v1/reports/analyses/{analysis_id}/pdf")
-        assert res_pdf_a.status_code == 200, res_pdf_a.text
-        assert res_pdf_a.content.startswith(b"%PDF-")
 
-        res_dossier_a = client_a.get(f"/api/v1/reports/analyses/{analysis_id}/dossier")
-        assert res_dossier_a.status_code == 200, res_dossier_a.text
-        assert res_dossier_a.headers["content-type"] == "application/zip"
+# --------------------------------------------------------------------------- #
+# C6.3 — the ZIP dossier carries the same corrected data
+# --------------------------------------------------------------------------- #
 
-        # Org Beta ne peut pas accéder à l'analyse d'Org Alpha (404 / isolation tenant)
-        res_pdf_b = client_b.get(f"/api/v1/reports/analyses/{analysis_id}/pdf")
-        assert res_pdf_b.status_code == 404
 
-        res_dossier_b = client_b.get(f"/api/v1/reports/analyses/{analysis_id}/dossier")
-        assert res_dossier_b.status_code == 404
+def test_dossier_zip_is_rendered_from_the_persisted_analysis():
+    with TestClient(app) as client, report_storage() as storage:
+        identity = authenticate_client(client, role_code="analyst")
+        analysis_id, _ = _persisted_analysis(client, identity)
+
+        with SessionLocal() as db:
+            from app.models.domain import AnalysisVersion
+
+            version = db.scalar(
+                select(AnalysisVersion).where(AnalysisVersion.analysis_id == UUID(analysis_id))
+            )
+            result_sha256 = version.result_sha256
+
+        response = issue_report(
+            client, analysis_id=analysis_id, report_format="dossier_zip", storage=storage
+        )
+        assert response.status_code == 200, response.text
+        archive = zipfile.ZipFile(io.BytesIO(response.content))
+        names = archive.namelist()
+        assert "rapport_pre_audit.pdf" in names
+        assert "matrice_probatoire.csv" in names
+        assert "README_DOSSIER_AUDIT.txt" in names
+
+        readme = archive.read("README_DOSSIER_AUDIT.txt").decode("utf-8")
+        assert result_sha256 in readme, "le README n'annonce pas la vraie empreinte"
+        assert "Rule Engine v1.0.0" not in readme
+        assert "2026.09" not in readme
+
+        import json
+
+        manifest = json.loads(archive.read("manifeste_audit_scelle.json").decode("utf-8"))
+        assert manifest["audit_trail"]["report_sha256"] == result_sha256
+
+
+# --------------------------------------------------------------------------- #
+# C6.4 — tenant isolation is preserved on the new path
+# --------------------------------------------------------------------------- #
+
+
+def test_tenant_isolation_on_report_download():
+    with TestClient(app) as client_a, TestClient(app) as client_b, report_storage() as storage:
+        identity_a = authenticate_client(client_a, role_code="analyst")
+        authenticate_client(client_b, role_code="analyst")
+        analysis_id, _ = _persisted_analysis(client_a, identity_a)
+
+        issue_report(client_a, analysis_id=analysis_id, storage=storage)
+        assert client_a.get(f"/api/v1/reports/analyses/{analysis_id}/pdf").status_code == 200
+        # B ne voit ni le travail, ni le rapport, ni le fichier.
+        assert client_b.get(f"/api/v1/reports/analyses/{analysis_id}/pdf").status_code == 404
+        assert client_b.get(f"/api/v1/reports/analyses/{analysis_id}/dossier").status_code == 404

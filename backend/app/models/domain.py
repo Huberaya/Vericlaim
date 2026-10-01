@@ -38,6 +38,17 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+# The regulatory taxonomy owned by the engine. Verdict rows must record exactly
+# the vocabulary the evaluator produced, not a re-encoded copy of it, otherwise a
+# persisted verdict could drift from the rule that generated it.
+from app.models.legal_types import (
+    ClaimType as EngineClaimType,
+    LegalForce as EngineLegalForce,
+    OverallCompliance as EngineOverallCompliance,
+    Severity as EngineSeverity,
+    Verdict as EngineVerdict,
+)
+
 from app.core.database import Base
 
 # ---------------------------------------------------------------------------
@@ -253,6 +264,74 @@ class ReportStatus(str, Enum):
     SUPERSEDED = "superseded"
 
 
+class ReportJobStatus(str, Enum):
+    """Cycle de vie du travail de génération, distinct de l'état du rapport.
+
+    ``ReportStatus`` décrit ce qu'un client peut faire du document (il existe, il
+    est en cours, il a échoué) ; ``ReportJobStatus`` décrit la tentative en cours.
+    Les confondre rendrait impossible la reprise d'un travail interrompu : un
+    rapport « en cours » ne dit pas s'il faut réessayer.
+    """
+
+    QUEUED = "queued"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class SupportRequestCategory(str, Enum):
+    """Ce sur quoi porte une demande de support.
+
+    La catégorie n'est pas décorative : elle décide du délai de première réponse
+    appliqué (une indisponibilité de service n'attend pas comme une question de
+    facturation) et elle est publiée dans le centre d'aide.
+    """
+
+    QUESTION = "question"          # fonctionnement du produit
+    INCIDENT = "incident"          # quelque chose ne fonctionne pas
+    EXTRACTION = "extraction"      # documents, OCR, segments, analyse
+    REPORT = "report"              # rapport signé, téléchargement, vérification
+    BILLING = "billing"            # plan, quota, facture
+    PRIVACY = "privacy"            # droits des personnes (renvoi vers C12)
+    OTHER = "other"
+
+
+class SupportRequestStatus(str, Enum):
+    OPEN = "open"
+    ANSWERED = "answered"
+    CLOSED = "closed"
+
+
+class DataSubjectRight(str, Enum):
+    """Les droits qu'une personne peut exercer, nommés comme le règlement.
+
+    Chaque valeur correspond à un article du RGPD, parce que la procédure publiée
+    doit renvoyer au texte, pas à une nomenclature interne.
+    """
+
+    ACCESS = "access"                    # art. 15
+    RECTIFICATION = "rectification"      # art. 16
+    ERASURE = "erasure"                  # art. 17
+    RESTRICTION = "restriction"          # art. 18
+    PORTABILITY = "portability"          # art. 20
+    OBJECTION = "objection"              # art. 21
+
+
+class DataSubjectRequestStatus(str, Enum):
+    RECEIVED = "received"
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+    REFUSED = "refused"
+    WITHDRAWN = "withdrawn"
+
+
+class DataSubjectRequestOutcome(str, Enum):
+    GRANTED = "granted"
+    PARTIALLY_GRANTED = "partially_granted"
+    REFUSED = "refused"
+
+
 class EvidenceRequestStatus(str, Enum):
     DRAFT = "draft"
     SENT = "sent"
@@ -347,6 +426,12 @@ class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     identity_provider: Mapped[str | None] = mapped_column(String(255), nullable=True)
     external_subject: Mapped[str | None] = mapped_column(String(255), nullable=True)
     last_authenticated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # C14 self-service accounts. ``password_hash`` is NULL for SSO-only users: an
+    # account created by OIDC has no password until its owner sets one, and a
+    # missing hash can never authenticate (verify_password refuses NULL).
+    password_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    password_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    email_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     memberships: Mapped[list[Membership]] = relationship(
         back_populates="user", foreign_keys="Membership.user_id"
@@ -395,6 +480,114 @@ class Membership(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     role: Mapped[Role] = relationship(back_populates="memberships")
 
     __table_args__ = (UniqueConstraint("organization_id", "user_id", name="uq_memberships_organization_user"),)
+
+
+class IdentityTokenPurpose(str, Enum):
+    """What a one-shot identity token is allowed to do.
+
+    One table, one purpose per row: a token issued for an invitation can never be
+    replayed as a password reset.
+    """
+
+    EMAIL_VERIFICATION = "email_verification"
+    PASSWORD_RESET = "password_reset"
+    INVITATION = "invitation"
+
+
+class IdentityToken(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """Single-use token backing verification, reset and invitation links.
+
+    Only the SHA-256 digest is stored, exactly like sessions: a database dump does
+    not hand out working links. ``organization_id`` is nullable because an e-mail
+    verification happens before any organization is joined; when it is set, it
+    scopes an invitation to the organization that issued it.
+    """
+
+    __tablename__ = "identity_tokens"
+
+    user_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    organization_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    purpose: Mapped[str] = mapped_column(
+        _enum(IdentityTokenPurpose, "identity_token_purpose"), nullable=False, index=True
+    )
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    created_by_user_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    __table_args__ = (
+        CheckConstraint("length(token_hash) = 64", name="ck_identity_tokens_hash_length"),
+    )
+
+
+class EmailMessageStatus(str, Enum):
+    QUEUED = "queued"
+    SENT = "sent"
+    FAILED = "failed"
+    NOT_CONFIGURED = "not_configured"
+
+
+class EmailMessage(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """Outbox for transactional e-mails.
+
+    Every message the product wants to send is written here first. Two reasons:
+    an operator can see what was attempted (including on an instance where no
+    provider is configured), and the automated tests assert on a real record
+    rather than on a mock that would hide a broken journey.
+
+    ``sent_at`` is only set when a transport really accepted the message. On an
+    instance without a configured provider the row stays ``not_configured`` —
+    the product never pretends an e-mail left the building.
+    """
+
+    __tablename__ = "email_messages"
+
+    organization_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("organizations.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    recipient_email: Mapped[str] = mapped_column(String(320), nullable=False, index=True)
+    subject: Mapped[str] = mapped_column(String(255), nullable=False)
+    body_text: Mapped[str] = mapped_column(Text, nullable=False)
+    purpose: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(
+        _enum(EmailMessageStatus, "email_message_status"),
+        nullable=False,
+        default=EmailMessageStatus.QUEUED,
+        index=True,
+    )
+    transport: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    provider_message_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class PasswordLoginAttempt(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """Failure counter for password logins, keyed by normalized e-mail.
+
+    Deliberately not keyed by IP: an attacker with a botnet would bypass an IP
+    counter, while a shared office IP would lock out a whole team. The counter
+    makes online guessing against one account expensive, which is the threat that
+    matters for a password fallback. It is not a substitute for MFA.
+    """
+
+    __tablename__ = "password_login_attempts"
+
+    email_normalized: Mapped[str] = mapped_column(String(320), nullable=False, unique=True, index=True)
+    failed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    first_failed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    last_failed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        CheckConstraint("failed_count >= 0", name="ck_password_login_attempts_count_positive"),
+    )
 
 
 class AuthSession(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -885,12 +1078,24 @@ class AnalysisVersion(UUIDPrimaryKeyMixin, TimestampMixin, TenantScopedMixin, Ba
     request_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     input_manifest_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     result_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    # C5 claim detection intentionally persists no legal/risk conclusion. A
-    # later reviewed assessment workflow may populate this separately.
+    # Computed regulatory conclusion for this immutable version. NULL means the
+    # version was produced before the verdict pipeline existed; it must never be
+    # rendered as if a conclusion had been reached.
+    # Stored as a constrained VARCHAR rather than a PostgreSQL enum type: the
+    # value is added to an existing table, and a table-referencing CHECK can be
+    # dropped explicitly, which SQLite's table-recreation batch mode requires.
+    overall_compliance: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # Deliberately still NULL: the engine emits a 0-100 risk_score and an
+    # overall_compliance verdict, but no RiskLevel taxonomy. Fabricating a
+    # mapping would invent a legal signal the rule book does not define.
     overall_risk_level: Mapped[RiskLevel | None] = mapped_column(
         _enum(RiskLevel, "analysis_risk_level"), nullable=True
     )
     risk_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Frozen inputs of the evaluation: the audit context and the engine-side
+    # switches (Rule Book fingerprint, transposition status) that produced the
+    # verdicts. Persisting them is what makes a replayed analysis identical.
+    evaluation_context_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     result_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -900,6 +1105,9 @@ class AnalysisVersion(UUIDPrimaryKeyMixin, TimestampMixin, TenantScopedMixin, Ba
         back_populates="analysis_version", uselist=False, cascade="all, delete-orphan"
     )
     claims: Mapped[list[Claim]] = relationship(back_populates="analysis_version", cascade="all, delete-orphan")
+    verdicts: Mapped[list[AnalysisVerdict]] = relationship(
+        back_populates="analysis_version", cascade="all, delete-orphan"
+    )
     risks: Mapped[list[Risk]] = relationship(back_populates="analysis_version", cascade="all, delete-orphan")
     recommendations: Mapped[list[Recommendation]] = relationship(
         back_populates="analysis_version", cascade="all, delete-orphan"
@@ -917,6 +1125,12 @@ class AnalysisVersion(UUIDPrimaryKeyMixin, TimestampMixin, TenantScopedMixin, Ba
             name="uq_analysis_versions_organization_idempotency_key",
         ),
         CheckConstraint("version_number > 0", name="ck_analysis_versions_positive_number"),
+        CheckConstraint(
+            "overall_compliance IS NULL OR overall_compliance IN "
+            "('COMPLIANT', 'NON_COMPLIANT', 'CONDITIONAL_REJECT', "
+            "'REVIEW_REQUIRED', 'UPCOMING_REQUIREMENTS', 'NO_CLAIMS_DETECTED')",
+            name="ck_analysis_versions_overall_compliance",
+        ),
         CheckConstraint("risk_score IS NULL OR (risk_score >= 0 AND risk_score <= 100)", name="ck_analysis_versions_risk_score"),
         CheckConstraint("length(input_manifest_sha256) = 64", name="ck_analysis_versions_input_sha256_length"),
         CheckConstraint(
@@ -927,6 +1141,132 @@ class AnalysisVersion(UUIDPrimaryKeyMixin, TimestampMixin, TenantScopedMixin, Ba
             "result_sha256 IS NULL OR length(result_sha256) = 64",
             name="ck_analysis_versions_result_sha256_length",
         ),
+    )
+
+
+class OrganizationRetentionPolicy(UUIDPrimaryKeyMixin, TimestampMixin, TenantScopedMixin, Base):
+    """A retention policy a customer has actually declared, or no row at all.
+
+    Before this table the endpoint returned the same literals for every tenant:
+    ``dpo@vericlaim.ai``, ``AES-256 / TLS 1.3``, ``EU (Paris / Frankfurt)``, 5 and
+    10 years, reviewed on a fixed date. Those were presented as a compliance
+    artefact and were false for every client, and an unverified hosting region
+    displayed by the publisher is a contractual commitment nobody made.
+
+    Therefore: no row means "not configured", and the API says so with ``null``
+    values. Every field here is a declaration by the organization, stored with who
+    declared it and when; nothing is inferred, and nothing is defaulted.
+    """
+
+    __tablename__ = "organization_retention_policies"
+    __table_args__ = (
+        UniqueConstraint("organization_id", name="uq_organization_retention_policies_org"),
+        CheckConstraint(
+            "documents_retention_years IS NULL OR documents_retention_years > 0",
+            name="ck_org_retention_documents_positive",
+        ),
+        CheckConstraint(
+            "audit_trail_retention_years IS NULL OR audit_trail_retention_years > 0",
+            name="ck_org_retention_audit_positive",
+        ),
+        CheckConstraint(
+            "evidence_archive_retention_years IS NULL OR evidence_archive_retention_years > 0",
+            name="ck_org_retention_evidence_positive",
+        ),
+        CheckConstraint(
+            "storage_region IS NULL OR length(storage_region) > 0",
+            name="ck_org_retention_region_not_blank",
+        ),
+    )
+
+    documents_retention_years: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    audit_trail_retention_years: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    evidence_archive_retention_years: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Declared, never asserted by the platform: the platform does not know where
+    # the customer's data actually sits unless an operator says so.
+    gdpr_contact_email: Mapped[str | None] = mapped_column(String(length=320), nullable=True)
+    encryption_standard: Mapped[str | None] = mapped_column(String(length=64), nullable=True)
+    storage_region: Mapped[str | None] = mapped_column(String(length=128), nullable=True)
+    export_formats_supported: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    last_policy_review: Mapped[date | None] = mapped_column(Date, nullable=True)
+    configured_by_user_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    configured_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class AnalysisVerdict(UUIDPrimaryKeyMixin, TimestampMixin, TenantScopedMixin, Base):
+    """One persisted regulatory verdict for one claim and one formal rule.
+
+    ``AnalysisVersion.result_json`` stays a summary; this table is the record a
+    report is rendered from. It stores the rule that was applied, the reasoning
+    trace and the remediation exactly as the deterministic engine produced them,
+    together with the fingerprints needed to replay the decision years later.
+
+    A verdict is never recomputed at read time. If the Rule Book changes, a new
+    ``AnalysisVersion`` is created; an existing row is immutable.
+    """
+
+    __tablename__ = "analysis_verdicts"
+
+    analysis_version_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("analysis_versions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    claim_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("claims.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    document_segment_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("document_segments.id", ondelete="SET NULL"), nullable=True
+    )
+    # Stable ordering so a replayed analysis yields byte-identical output.
+    sequence_number: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    # Claim snapshot, so the verdict remains readable even if the claim row is
+    # ever detached.
+    claim_type: Mapped[str] = mapped_column(_enum(EngineClaimType, "verdict_claim_type"), nullable=False)
+    claim_text: Mapped[str] = mapped_column(Text, nullable=False)
+    trigger_text: Mapped[str] = mapped_column(Text, nullable=False)
+    start_offset: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    end_offset: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # Applied rule.
+    rule_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    rule_title: Mapped[str] = mapped_column(Text, nullable=False)
+    law_reference: Mapped[str] = mapped_column(Text, nullable=False)
+    legal_force: Mapped[str] = mapped_column(_enum(EngineLegalForce, "verdict_legal_force"), nullable=False)
+    severity: Mapped[str] = mapped_column(_enum(EngineSeverity, "verdict_severity"), nullable=False)
+    verdict: Mapped[str] = mapped_column(_enum(EngineVerdict, "verdict_value"), nullable=False, index=True)
+    is_legal_violation: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    safe_harbor_applicable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    safe_harbor_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    legal_caveat: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_urls_json: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    required_evidence_json: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    evidence_checks_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False, default=list)
+    reasoning_steps_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False, default=list)
+    remediation_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    sanction_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+
+    # Replay fingerprints: which engine and which rule book produced this row.
+    engine_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    rulebook_version: Mapped[str] = mapped_column(String(128), nullable=False)
+
+    analysis_version: Mapped[AnalysisVersion] = relationship(back_populates="verdicts")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "analysis_version_id",
+            "sequence_number",
+            name="uq_analysis_verdicts_version_sequence",
+        ),
+        UniqueConstraint(
+            "analysis_version_id",
+            "claim_id",
+            "rule_id",
+            name="uq_analysis_verdicts_version_claim_rule",
+        ),
+        CheckConstraint("sequence_number >= 0", name="ck_analysis_verdicts_sequence"),
     )
 
 
@@ -1247,11 +1587,32 @@ class Report(UUIDPrimaryKeyMixin, TimestampMixin, TenantScopedMixin, Base):
     )
     storage_key: Mapped[str | None] = mapped_column(String(1024), nullable=True, unique=True)
     sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # C22 — le binaire est stocké par le worker et téléchargé plus tard : la taille
+    # et le type de contenu sont des faits sur l'objet stocké, pas des suppositions
+    # du lecteur.
+    size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    content_type: Mapped[str | None] = mapped_column(String(128), nullable=True)
     requested_by_user_id: Mapped[UUID | None] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     generated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     failure_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
+    # --- C7: probative integrity -------------------------------------------------
+    # ``verification_reference`` is the only thing a third party needs. It is a
+    # random handle rather than the analysis UUID because the verification
+    # endpoint is public: an internal identifier would leak that an organisation
+    # exists and is running analyses.
+    verification_reference: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True)
+    signature: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    signature_key_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    signature_schema_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Fingerprint of the analysis as it stood when this report was signed. A
+    # later change to the version makes verification fail instead of silently
+    # validating a stale document.
+    signed_result_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    signed_rulebook_version: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    signed_engine_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     analysis_version: Mapped[AnalysisVersion] = relationship(back_populates="reports")
 
@@ -1259,6 +1620,222 @@ class Report(UUIDPrimaryKeyMixin, TimestampMixin, TenantScopedMixin, Base):
         UniqueConstraint("analysis_version_id", "version_number", "report_format", name="uq_reports_analysis_version_format"),
         CheckConstraint("version_number > 0", name="ck_reports_positive_number"),
         CheckConstraint("sha256 IS NULL OR length(sha256) = 64", name="ck_reports_sha256_length"),
+        CheckConstraint(
+            "size_bytes IS NULL OR size_bytes > 0", name="ck_reports_size_positive"
+        ),
+        CheckConstraint(
+            "signature IS NULL OR length(signature) = 64", name="ck_reports_signature_length"
+        ),
+        CheckConstraint(
+            "signed_result_sha256 IS NULL OR length(signed_result_sha256) = 64",
+            name="ck_reports_signed_result_sha256_length",
+        ),
+    )
+
+
+class ReportJob(UUIDPrimaryKeyMixin, TimestampMixin, TenantScopedMixin, Base):
+    """Travail de génération d'un rapport, réclamé par un worker dédié (C22).
+
+    Avant C22, le PDF et le ZIP étaient rendus **dans la requête HTTP** : une
+    requête qui dure, qu'aucun redémarrage ne peut reprendre, et dont l'échec est
+    un 500 sans trace. Le travail est ici une ligne, avec un bail, un compteur de
+    tentatives et une date de disponibilité — donc reprennable, traçable et
+    dimensionnable en ajoutant des workers, pas des secondes de timeout.
+
+    ``options_json`` conserve la demande **telle qu'elle a été faite** : un rapport
+    régénéré six mois plus tard doit pouvoir être reproduit à l'identique, sinon
+    la référence de vérification ne vaut que pour l'instant où elle a été émise.
+    """
+
+    __tablename__ = "report_jobs"
+
+    analysis_version_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("analysis_versions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    report_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("reports.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    report_format: Mapped[str] = mapped_column(String(32), nullable=False)
+    options_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    requested_by_user_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    status: Mapped[ReportJobStatus] = mapped_column(
+        _enum(ReportJobStatus, "report_job_status"),
+        nullable=False,
+        default=ReportJobStatus.QUEUED,
+        index=True,
+    )
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=3, server_default="3")
+    available_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow, index=True
+    )
+    locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    worker_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    __table_args__ = (
+        CheckConstraint("attempt_count >= 0", name="ck_report_jobs_attempt_nonnegative"),
+        CheckConstraint("max_attempts > 0", name="ck_report_jobs_max_attempts_positive"),
+        CheckConstraint("max_attempts >= attempt_count", name="ck_report_jobs_attempts_within_max"),
+        Index("ix_report_jobs_claim", "organization_id", "status", "available_at"),
+    )
+
+
+class DataSubjectRequest(UUIDPrimaryKeyMixin, TimestampMixin, TenantScopedMixin, Base):
+    """Demande d'exercice d'un droit, suivie jusqu'à sa clôture.
+
+    Le manque que cette table comble n'est pas « il n'y a pas de page RGPD » mais
+    « personne ne peut prouver qu'une demande a été reçue, traitée dans le délai
+    légal, et qu'elle a produit quelque chose ». Deux champs portent cette preuve :
+
+    * ``due_at`` est **calculé** à partir de ``received_at`` (+ un mois, art. 12.3) —
+      jamais saisi à la main, sinon il ne vaut rien ;
+    * ``outcome_reference`` dit **ce qui a été remis** (l'empreinte de l'export, la
+      référence du manifeste d'effacement). Un accord sans référence est un accord
+      sans preuve : la base le refuse.
+    """
+
+    __tablename__ = "data_subject_requests"
+
+    request_type: Mapped[DataSubjectRight] = mapped_column(
+        _enum(DataSubjectRight, "data_subject_right"), nullable=False, index=True
+    )
+    requester_email: Mapped[str] = mapped_column(String(320), nullable=False)
+    requester_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    requester_is_member: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    details: Mapped[str] = mapped_column(Text, nullable=False)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    extension_due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    extension_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[DataSubjectRequestStatus] = mapped_column(
+        _enum(DataSubjectRequestStatus, "data_subject_request_status"),
+        nullable=False,
+        default=DataSubjectRequestStatus.RECEIVED,
+        index=True,
+    )
+    outcome: Mapped[DataSubjectRequestOutcome | None] = mapped_column(
+        _enum(DataSubjectRequestOutcome, "data_subject_request_outcome"), nullable=True
+    )
+    outcome_reference: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    outcome_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    refusal_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    handled_by_user_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        CheckConstraint("due_at > received_at", name="ck_data_subject_requests_due_after_receipt"),
+        CheckConstraint(
+            "extension_due_at IS NULL OR extension_reason IS NOT NULL",
+            name="ck_data_subject_requests_extension_has_reason",
+        ),
+        CheckConstraint(
+            "extension_due_at IS NULL OR extension_due_at > due_at",
+            name="ck_data_subject_requests_extension_after_due",
+        ),
+        CheckConstraint(
+            "status NOT IN ('completed', 'refused') OR completed_at IS NOT NULL",
+            name="ck_data_subject_requests_closed_has_date",
+        ),
+        CheckConstraint(
+            "status <> 'refused' OR refusal_reason IS NOT NULL",
+            name="ck_data_subject_requests_refusal_has_reason",
+        ),
+        CheckConstraint(
+            "outcome IS NULL OR outcome = 'refused' OR outcome_reference IS NOT NULL",
+            name="ck_data_subject_requests_grant_references_delivery",
+        ),
+        Index(
+            "ix_data_subject_requests_open",
+            "organization_id",
+            "status",
+            "due_at",
+        ),
+    )
+
+
+class SupportRequest(UUIDPrimaryKeyMixin, TimestampMixin, TenantScopedMixin, Base):
+    """Demande de support déposée depuis l'application, avec son contexte d'écran.
+
+    C15 demandait un bouton de contact « contextualisé à l'écran » et un SLA affiché
+    par plan. Les deux sont ici, et d'une façon qui ne peut pas mentir :
+
+    * ``screen`` et ``last_error_code`` sont renseignés **par le client au moment de
+      l'envoi** : le support reçoit le contexte, pas une description approximative ;
+    * ``first_response_due_at`` est **calculé** à partir du plan réel de l'organisation
+      et du délai publié pour la catégorie — un délai saisi à la main ne serait tenu
+      par personne ;
+    * ``plan_code`` et ``first_response_hours`` sont figés sur la ligne : si le plan
+      change ou si la politique évolue, la demande passée reste jugée selon ce qui
+      était publié le jour où elle a été déposée.
+    """
+
+    __tablename__ = "support_requests"
+
+    category: Mapped[SupportRequestCategory] = mapped_column(
+        _enum(SupportRequestCategory, "support_request_category"), nullable=False, index=True
+    )
+    subject: Mapped[str] = mapped_column(String(255), nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    #: écran ou parcours d'où la demande a été envoyée (ex. « analyse », « rapport »)
+    screen: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    #: dernier code d'erreur affiché à l'utilisateur, s'il y en avait un
+    last_error_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    requester_user_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    requester_email: Mapped[str] = mapped_column(String(320), nullable=False)
+    plan_code: Mapped[str] = mapped_column(String(32), nullable=False)
+    first_response_hours: Mapped[int] = mapped_column(Integer, nullable=False)
+    first_response_due_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+    status: Mapped[SupportRequestStatus] = mapped_column(
+        _enum(SupportRequestStatus, "support_request_status"),
+        nullable=False,
+        default=SupportRequestStatus.OPEN,
+        index=True,
+    )
+    resolution: Mapped[str | None] = mapped_column(Text, nullable=True)
+    answered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    closed_by_user_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    __table_args__ = (
+        CheckConstraint("first_response_hours > 0", name="ck_support_requests_target_positive"),
+        CheckConstraint(
+            "first_response_due_at > created_at",
+            name="ck_support_requests_due_after_creation",
+        ),
+        CheckConstraint(
+            "status = 'open' OR answered_at IS NOT NULL",
+            name="ck_support_requests_handled_has_date",
+        ),
+        CheckConstraint(
+            "status <> 'closed' OR resolution IS NOT NULL",
+            name="ck_support_requests_closed_has_resolution",
+        ),
+        Index("ix_support_requests_open", "organization_id", "status", "first_response_due_at"),
     )
 
 
@@ -1352,4 +1929,193 @@ class LegalHold(UUIDPrimaryKeyMixin, TimestampMixin, TenantScopedMixin, Base):
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_by_user_id: Mapped[UUID | None] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+
+
+# ---------------------------------------------------------------------------
+# C13 — plans, quotas, abonnements, journal d'usage et facturation
+# ---------------------------------------------------------------------------
+#
+# Quatre tables, dont deux seulement portent du contenu métier lourd :
+#
+# * `billing_subscriptions` — une ligne au plus par organisation, créée par le
+#   paiement (ou par un événement prestataire), jamais par une lecture ;
+# * `billing_usage_events` — journal d'usage **append-only** : les compteurs sont
+#   la somme du journal, pas une colonne à incrémenter. Un compteur qui dérive
+#   serait un compteur qu'on ne peut pas expliquer à un client qui conteste ;
+# * `billing_provider_events` — les événements reçus du prestataire, avec leur
+#   identifiant et le résultat de leur application (idempotence vérifiable) ;
+# * `billing_invoices` et `billing_checkout_sessions` — le miroir des objets du
+#   prestataire, afin que le portail client n'interroge pas un tiers pour
+#   afficher une facture.
+#
+# L'essai de 14 jours n'a **pas** de ligne ici : il se dérive de
+# `organizations.created_at` (voir `app.billing.subscriptions`). Une ligne
+# « essai » serait une ligne qu'un appel d'API pourrait remettre à zéro.
+
+
+class BillingSubscriptionStatus(str, Enum):
+    """États d'abonnement, et ce qu'ils autorisent réellement.
+
+    `TRIALING` : période d'essai en cours, accès complet, date de fin publiée.
+    `ACTIVE` : payé et à jour.
+    `PAST_DUE` : paiement échoué ; les lectures restent ouvertes, les actions
+    payantes sont refusées avec la raison exacte.
+    `CANCELED` : résilié ; l'accès s'arrête à `current_period_end` (dernier jour
+    payé), pas au moment du clic.
+    """
+
+    TRIALING = "trialing"
+    ACTIVE = "active"
+    PAST_DUE = "past_due"
+    CANCELED = "canceled"
+
+
+class BillingSubscription(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "billing_subscriptions"
+
+    organization_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("organizations.id", ondelete="RESTRICT"), nullable=False
+    )
+    plan_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[BillingSubscriptionStatus] = mapped_column(
+        _enum(BillingSubscriptionStatus, "billing_subscription_status"),
+        nullable=False,
+        default=BillingSubscriptionStatus.ACTIVE,
+    )
+    provider: Mapped[str] = mapped_column(String(32), nullable=False, default="local")
+    provider_customer_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    provider_subscription_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    provider_price_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    current_period_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    current_period_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    cancel_at_period_end: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    canceled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    past_due_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Une descente de gamme n'est jamais appliquée au milieu d'une période payée :
+    # elle est enregistrée ici et appliquée par l'événement de renouvellement.
+    pending_plan_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    pending_plan_effective_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_provider_event_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("organization_id", name="uq_billing_subscriptions_organization_id"),
+        UniqueConstraint(
+            "provider", "provider_subscription_id", name="uq_billing_subscriptions_provider_subscription_id"
+        ),
+        CheckConstraint(
+            "current_period_end > current_period_start", name="ck_billing_subscriptions_period_ordered"
+        ),
+    )
+
+
+class BillingUsageEvent(UUIDPrimaryKeyMixin, TenantScopedMixin, Base):
+    """Une ligne = une unité consommée, une fois et une seule.
+
+    ``idempotency_key`` est dérivée de la source (``document:<uuid>``,
+    ``ocr:<version_uuid>``, ``seat:<membership_uuid>``) : rejouer un import ne
+    double pas la consommation, y compris après un redémarrage du worker.
+    """
+
+    __tablename__ = "billing_usage_events"
+
+    metric: Mapped[str] = mapped_column(String(32), nullable=False)
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    #: Identifiant exact de la période de comptage (ISO-8601 UTC du début de
+    #: période). Une date seule ne suffit pas : deux périodes payées peuvent
+    #: commencer le même jour, et confondre leurs clés remettrait à zéro un quota
+    #: déjà consommé — ou, pire, l'inverse.
+    period_key: Mapped[str] = mapped_column(String(40), nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    source_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    recorded_by_user_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id", "idempotency_key", name="uq_billing_usage_events_organization_idempotency"
+        ),
+        Index("ix_billing_usage_events_period", "organization_id", "metric", "period_key"),
+        CheckConstraint("quantity > 0", name="ck_billing_usage_events_quantity_positive"),
+    )
+
+
+class BillingProviderEvent(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """Un événement prestataire reçu sur le webhook, appliqué au plus une fois.
+
+    Cette table n'est volontairement **pas** soumise au RLS par organisation :
+    elle est écrite par un appel non authentifié, avant que l'organisation ne
+    soit résolue depuis l'identifiant d'abonnement du prestataire. C'est le même
+    choix que pour les tables d'identité (`identity_tokens`) : consultation
+    service uniquement, jamais par un identifiant de locataire fourni par
+    l'appelant.
+    """
+
+    __tablename__ = "billing_provider_events"
+
+    organization_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("organizations.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    provider_event_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    signature_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    applied: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    apply_result: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "provider", "provider_event_id", name="uq_billing_provider_events_provider_event_id"
+        ),
+    )
+
+
+class BillingInvoice(UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Base):
+    """Miroir local d'une facture du prestataire (aucune facture n'est émise ici)."""
+
+    __tablename__ = "billing_invoices"
+
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    provider_invoice_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    amount_cents: Mapped[int] = mapped_column(Integer, nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False, default="eur")
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    plan_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    period_start: Mapped[date | None] = mapped_column(Date, nullable=True)
+    period_end: Mapped[date | None] = mapped_column(Date, nullable=True)
+    issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    hosted_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("provider", "provider_invoice_id", name="uq_billing_invoices_provider_invoice_id"),
+        CheckConstraint("amount_cents >= 0", name="ck_billing_invoices_amount_non_negative"),
+    )
+
+
+class BillingCheckoutSession(UUIDPrimaryKeyMixin, TenantScopedMixin, TimestampMixin, Base):
+    """Un paiement en cours. Aucun accès n'est accordé avant sa confirmation."""
+
+    __tablename__ = "billing_checkout_sessions"
+
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    provider_session_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    plan_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    url: Mapped[str] = mapped_column(String(1024), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_by_user_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "provider", "provider_session_id", name="uq_billing_checkout_sessions_provider_session_id"
+        ),
     )

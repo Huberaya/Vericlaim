@@ -14,6 +14,58 @@ import type {
 } from "@/lib/types";
 import { SupplierEvidenceRequestModal } from "./SupplierEvidenceRequestModal";
 
+const CONFIDENCE_LEVELS: Record<
+  string,
+  { label: string; hint: string; className: string }
+> = {
+  high: {
+    label: "Élevée",
+    hint: "Formulation ancrée, lisible et vérifiable dans le texte.",
+    className: "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/80 dark:text-emerald-300",
+  },
+  medium: {
+    label: "Moyenne",
+    hint: "Détection lisible mais dépendante du contexte (polarité, portée).",
+    className: "bg-amber-100 text-amber-800 dark:bg-amber-950/80 dark:text-amber-300",
+  },
+  low: {
+    label: "Faible",
+    hint: "Détection fragile : à relire avant tout usage.",
+    className: "bg-orange-100 text-orange-800 dark:bg-orange-950/80 dark:text-orange-300",
+  },
+  human_review_required: {
+    label: "Revue humaine requise",
+    hint: "OCR, extraction douteuse, conflit de polarité ou verdict qui demande un arbitrage.",
+    className: "bg-rose-100 text-rose-800 dark:bg-rose-950/80 dark:text-rose-300",
+  },
+};
+
+const REVIEW_REASON_LABELS: Record<string, string> = {
+  segment_ocr: "segment OCR",
+  document_extraction_review_required: "extraction à revoir",
+  polarity_conflict: "polarité contradictoire",
+  verdict_requires_review: "verdict à arbitrer",
+};
+
+function confidenceBadge(claim: PersistentClaim) {
+  const level = claim.confidence_level ?? null;
+  if (level === null || claim.confidence_score === null) {
+    return {
+      label: "Non publiée",
+      hint: "Analyse antérieure à la rubrique de confiance (confidence-rubric-v1).",
+      className: "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300",
+      score: null as number | null,
+    };
+  }
+  const known = CONFIDENCE_LEVELS[level];
+  return {
+    label: known?.label ?? level,
+    hint: known?.hint ?? "",
+    className: known?.className ?? "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300",
+    score: claim.confidence_score,
+  };
+}
+
 interface HumanReviewPanelProps {
   analysisId: string;
   versionNumber: number;
@@ -233,6 +285,18 @@ export function HumanReviewPanel({
         />
       </div>
 
+      {/* Bandeau permanent : ce que le score est, et ce qu'il n'est pas. */}
+      <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-[11px] leading-relaxed text-slate-600 dark:border-slate-800 dark:bg-slate-900/60 dark:text-slate-300">
+        <p>
+          <strong>Détection déterministe (confidence-rubric-v1), ne constitue pas un avis juridique.</strong>{" "}
+          Le score de confiance additionne des éléments lisibles dans le texte (formulation ancrée,
+          chiffre, qualificatif, numéro de certification, polarité, qualité de l&apos;extraction) :
+          ce n&apos;est ni une probabilité, ni une appréciation du risque juridique, ni une décision
+          d&apos;autorité. Une allégation marquée « revue humaine requise » doit être relue avant toute
+          conclusion, et une allégation non détectée ne vaut pas conformité.
+        </p>
+      </div>
+
       {/* Claims Review Table */}
       <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
         <table className="w-full text-left text-xs">
@@ -240,6 +304,7 @@ export function HumanReviewPanel({
             <tr>
               <th className="py-3 px-4 font-semibold">Allégation environnementale</th>
               <th className="py-3 px-4 font-semibold">Catégorie</th>
+              <th className="py-3 px-4 font-semibold">Confiance de détection</th>
               <th className="py-3 px-4 font-semibold">Statut Couverture Preuves</th>
               <th className="py-3 px-4 font-semibold">Décision d&apos;Arbitrage</th>
               <th className="py-3 px-4 font-semibold text-right">Actions</th>
@@ -275,6 +340,33 @@ export function HumanReviewPanel({
                     <span className="rounded bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700 dark:bg-slate-800 dark:text-slate-300 uppercase tracking-wider">
                       {claim.category || claim.claim_type}
                     </span>
+                  </td>
+                  <td className="py-3.5 px-4">
+                    {(() => {
+                      const badge = confidenceBadge(claim);
+                      return (
+                        <div className="space-y-1">
+                          <span
+                            className={`inline-flex items-center gap-1 rounded px-2 py-0.5 text-[11px] font-semibold ${badge.className}`}
+                            title={badge.hint}
+                          >
+                            {badge.label}
+                            {badge.score !== null && (
+                              <span className="font-normal opacity-80">
+                                {Math.round(badge.score * 100)} %
+                              </span>
+                            )}
+                          </span>
+                          {(claim.review_reasons ?? []).length > 0 && (
+                            <span className="block text-[10px] text-slate-500 dark:text-slate-400">
+                              {(claim.review_reasons ?? [])
+                                .map((reason) => REVIEW_REASON_LABELS[reason] ?? reason)
+                                .join(" · ")}
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </td>
                   <td className="py-3.5 px-4 whitespace-nowrap">
                     {coverage === "verified" && (

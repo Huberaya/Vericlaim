@@ -1,0 +1,223 @@
+{
+  "review": {
+    "external_review": "not_performed",
+    "reviewer": null,
+    "label": "Non validé par un juriste",
+    "statement": "Ces informations décrivent ce que le produit fait réellement, vérifié dans le code et par des tests. Elles n'ont pas été relues par un juriste ni par un délégué à la protection des données, et elles ne constituent pas une déclaration de conformité.",
+    "missing_fields_notice": "Les mentions obligatoires marquées « à compléter » dépendent de l'entité qui exploitera le service : elles ne sont pas inventées ici."
+  },
+  "publisher": {
+    "title": "Éditeur du service",
+    "fields": [
+      {
+        "label": "Dénomination sociale",
+        "value": null
+      },
+      {
+        "label": "Forme juridique et capital",
+        "value": null
+      },
+      {
+        "label": "Siège social",
+        "value": null
+      },
+      {
+        "label": "RCS / SIREN",
+        "value": null
+      },
+      {
+        "label": "TVA intracommunautaire",
+        "value": null
+      },
+      {
+        "label": "Directeur de la publication",
+        "value": null
+      },
+      {
+        "label": "Assurance (RC pro, cyber)",
+        "value": null
+      }
+    ],
+    "note": "Obligatoires au titre de l'article 6 III de la loi n° 2004-575 du 21 juin 2004. Aucun service ne doit être commercialisé avant qu'ils soient renseignés."
+  },
+  "hosting": {
+    "title": "Hébergement",
+    "fields": [
+      {
+        "label": "Hébergeur",
+        "value": null
+      },
+      {
+        "label": "Localisation des données",
+        "value": null
+      }
+    ],
+    "note": "La localisation n'est pas une propriété du logiciel : elle dépend du déploiement, du stockage objet et du relais de messagerie retenus. Elle est publiée ici une fois constatée, pas avant."
+  },
+  "rights": {
+    "title": "Exercice des droits",
+    "response_window_months": 1,
+    "extension_months": 2,
+    "contact_email": null,
+    "contact_note": "Aucune adresse de contact n'est configurée : l'API publie ce champ vide plutôt qu'une adresse plausible. Tant qu'il est vide, une demande ne peut pas être reçue par un canal officiel, et la page ne prétend pas le contraire.",
+    "procedure_path": "GET /api/v1/public/rights-procedure",
+    "handling": [
+      {
+        "request_type": "access",
+        "article": "RGPD art. 15",
+        "automated": true,
+        "route": "GET /api/v1/privacy/export",
+        "requires_permission": "organization:manage",
+        "note": "L'export complet de l'organisation (membres, documents, analyses, audit) est produit par l'application ; la référence remise est l'empreinte du manifeste."
+      },
+      {
+        "request_type": "rectification",
+        "article": "RGPD art. 16",
+        "automated": false,
+        "route": null,
+        "requires_permission": "organization:manage",
+        "note": "Non outillé comme un « droit » : les données de l'organisation sont des documents et des verdicts, corrigés par la revue humaine (une nouvelle version d'analyse remplace la précédente sans l'écraser) ou par le remplacement de la version de document. La demande est enregistrée et traitée à la main tant qu'un parcours dédié n'existe pas."
+      },
+      {
+        "request_type": "erasure",
+        "article": "RGPD art. 17",
+        "automated": true,
+        "route": "POST /api/v1/privacy/erasures",
+        "requires_permission": "organization:manage",
+        "note": "L'effacement est refusé (409) lorsqu'un gel légal actif le protège : le refus cite le dossier de gel, il n'est jamais silencieux."
+      },
+      {
+        "request_type": "restriction",
+        "article": "RGPD art. 18",
+        "automated": false,
+        "route": null,
+        "requires_permission": "organization:manage",
+        "note": "Non outillé : le produit ne sait pas marquer un contenu « conservé mais non traité ». Le gel légal (C20) empêche la suppression, il ne limite pas le traitement. À construire si un client le demande."
+      },
+      {
+        "request_type": "portability",
+        "article": "RGPD art. 20",
+        "automated": true,
+        "route": "GET /api/v1/privacy/export",
+        "requires_permission": "organization:manage",
+        "note": "Le même export sert la portabilité : il est structuré (JSON) et contient les données fournies par la personne. Il ne contient pas de format dédié interopérable : c'est une limite connue, publiée ici."
+      },
+      {
+        "request_type": "objection",
+        "article": "RGPD art. 21",
+        "automated": false,
+        "route": null,
+        "requires_permission": "organization:manage",
+        "note": "Non outillé : l'opposition se traite contractuellement (fin de la base légale) et conduit en pratique à un effacement, qui lui est outillé."
+      }
+    ],
+    "manual_label": "Traité à la main",
+    "automated_label": "Outillé"
+  },
+  "cookies": {
+    "title": "Cookies",
+    "items": [
+      {
+        "name": "vericlaim_session",
+        "purpose": "Session authentifiée (jeton opaque, stocké haché côté serveur)",
+        "duration": "Durée de la session (AUTH_SESSION_TTL_SECONDS)",
+        "attributes": "HttpOnly, SameSite=Lax, Secure (obligatoire en production)",
+        "consent_required": false
+      },
+      {
+        "name": "vericlaim_csrf",
+        "purpose": "Jeton anti-CSRF, renvoyé dans l'en-tête X-CSRF-Token",
+        "duration": "Durée de la session",
+        "attributes": "SameSite=Strict (lisible par le client, par conception)",
+        "consent_required": false
+      },
+      {
+        "name": "vericlaim_oidc_*",
+        "purpose": "État de la transaction SSO (anti-rejeu), le temps d'une connexion",
+        "duration": "Quelques minutes",
+        "attributes": "HttpOnly, SameSite=Lax",
+        "consent_required": false
+      }
+    ],
+    "note": "Aucun cookie de mesure d'audience, de publicité ou de réseau social ; aucun script tiers chargé par les pages. Il n'y a donc pas de bandeau de consentement : en afficher un pour des cookies nécessaires serait un faux choix."
+  },
+  "retention": {
+    "title": "Durées de conservation",
+    "rules": [
+      "Les durées des documents et des analyses sont déclarées par l'organisation cliente, puis plafonnées par son offre : la durée appliquée est la plus courte des deux.",
+      "Si l'organisation ne déclare aucune durée, rien n'est purgé automatiquement.",
+      "La purge est un travail exécutable, non planifié : une durée déclarée est une politique, pas encore une exécution automatique.",
+      "Le journal d'audit n'est jamais purgé automatiquement ; un effacement laisse une trace sans le contenu (empreinte)."
+    ]
+  },
+  "transfers": {
+    "title": "Sous-traitants et transferts",
+    "no_ai_statement": "Aucun document, texte extrait ou verdict n'est transmis à un service d'intelligence artificielle : le produit n'en contient aucune dépendance, et l'extraction de texte comme l'analyse sont exécutées localement.",
+    "verified_by": [
+      "backend/tests/test_data_subject_rights.py::test_no_inference_dependency_is_installed",
+      "backend/tests/test_data_subject_rights.py::test_the_document_pipeline_makes_no_outbound_call"
+    ],
+    "outbound_flows": [
+      "Messagerie transactionnelle (vérification, réinitialisation, invitation) via le relais SMTP de l'exploitant — prestataire à renseigner.",
+      "Paiement et abonnement via le prestataire de paiement — adaptateur écrit, jamais exécuté avec de vraies clés.",
+      "Journaux techniques sur la sortie standard du conteneur — plateforme d'exploitation à renseigner.",
+      "Stockage objet des documents et des rapports : service choisi par l'exploitant."
+    ]
+  },
+  "gaps": {
+    "title": "Ce qui manque, et qui est écrit plutôt que découvert plus tard",
+    "items": [
+      "Aucune sauvegarde du stockage objet : un sinistre sur le stockage perd les documents et les rapports.",
+      "Purge des données non planifiée : un effacement de fin de contrat est une opération manuelle.",
+      "Les artefacts de rapports ne sont pas encore couverts par une politique de rétention.",
+      "Rectification, limitation et opposition ne sont pas outillées : les demandes sont enregistrées, suivies et traitées à la main.",
+      "Aucune notification automatique au demandeur, aucune alerte automatique avant échéance."
+    ]
+  },
+  "documents": {
+    "title": "Documents du dossier",
+    "items": [
+      {
+        "title": "Mentions légales",
+        "path": "docs/legal/mentions-legales.md",
+        "status": "modèle, identité à compléter"
+      },
+      {
+        "title": "Politique de confidentialité",
+        "path": "docs/legal/politique-de-confidentialite.md",
+        "status": "modèle à relire"
+      },
+      {
+        "title": "CGU / CGV",
+        "path": "docs/legal/cgu-cgv.md",
+        "status": "modèle à valider (contrats)"
+      },
+      {
+        "title": "Politique de cookies",
+        "path": "docs/legal/politique-cookies.md",
+        "status": "vérifié sur le code"
+      },
+      {
+        "title": "Accord de sous-traitance (art. 28)",
+        "path": "docs/legal/dpa.md",
+        "status": "modèle à valider"
+      },
+      {
+        "title": "Registre des traitements (art. 30)",
+        "path": "docs/legal/registre-des-traitements.md",
+        "status": "établi depuis le code, à valider"
+      },
+      {
+        "title": "Sous-traitants et transferts",
+        "path": "docs/legal/sous-traitants-et-transferts.md",
+        "status": "vérifié, dépend de l'hébergement"
+      },
+      {
+        "title": "Procédure des droits des personnes",
+        "path": "docs/legal/procedure-droits-des-personnes.md",
+        "status": "implémentée et testée"
+      }
+    ],
+    "served_note": "Ces documents ne sont pas encore servis publiquement : ils sont dans le dépôt, à compléter puis à publier. Seuls les faits vérifiables sont affichés sur cette page."
+  }
+}
