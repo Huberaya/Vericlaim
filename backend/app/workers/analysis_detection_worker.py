@@ -27,6 +27,8 @@ from app.analyses.service import (
     record_analysis_detection_failure,
 )
 from app.core.config import Settings, settings
+from app.core.logging import bind_log_context, configure_logging
+from app.core.metrics import record_job_outcome, record_worker_heartbeat
 from app.core.database import SessionLocal
 from app.identity.service import set_db_request_context
 from app.models.domain import Organization, OrganizationStatus
@@ -111,6 +113,11 @@ class AnalysisDetectionWorker:
                 )
 
     def _process(self, claim: ClaimedAnalysisDetectionJob) -> None:
+        # C16: every log line of this job carries the correlation context, and the
+        # outcome is counted as a metric — a worker that fails silently was invisible.
+        bind_log_context(job_id=str(claim.id), organization_id=str(claim.organization_id))
+        started = time.perf_counter()
+        outcome = "processed"
         with self.session_factory() as db:
             try:
                 set_db_request_context(
@@ -118,7 +125,9 @@ class AnalysisDetectionWorker:
                     user_id=WORKER_CONTEXT_USER_ID,
                     organization_id=claim.organization_id,
                 )
-                completion = process_claimed_analysis_detection(db, claim=claim)
+                completion = process_claimed_analysis_detection(
+                    db, settings=self.settings, claim=claim
+                )
                 db.commit()
                 logger.info(
                     "Analysis claim detection completed",
@@ -132,19 +141,51 @@ class AnalysisDetectionWorker:
                 )
             except AnalysisDetectionTerminalError as exc:
                 db.rollback()
+                outcome = "failed"
+                logger.error(
+                    "Claim detection failed definitively",
+                    extra={
+                        "event": "job_failed",
+                        "job_id": str(claim.id),
+                        "organization_id": str(claim.organization_id),
+                        "analysis_version_id": str(claim.analysis_version_id),
+                        "error_code": exc.code,
+                        "retryable": False,
+                    },
+                )
                 self._record_failure(claim, error_code=exc.code, retryable=False)
             except AnalysisDetectionRetryableError as exc:
                 db.rollback()
+                outcome = "failed"
+                logger.warning(
+                    "Claim detection failed, will be retried",
+                    extra={
+                        "event": "job_failed",
+                        "job_id": str(claim.id),
+                        "organization_id": str(claim.organization_id),
+                        "analysis_version_id": str(claim.analysis_version_id),
+                        "error_code": exc.code,
+                        "retryable": True,
+                    },
+                )
                 self._record_failure(claim, error_code=exc.code, retryable=True)
             except AnalysisConflictError:
                 # Another worker may legitimately have recovered a lease. Do
                 # not overwrite the durable state it published.
                 db.rollback()
+                outcome = "skipped"
                 logger.warning("Analysis detection lease was lost", extra={"job_id": str(claim.id)})
             except Exception:
                 db.rollback()
+                outcome = "failed"
                 logger.exception("Unexpected analysis-detection worker error", extra={"job_id": str(claim.id)})
                 self._record_failure(claim, error_code="unexpected_worker_error", retryable=True)
+            finally:
+                record_job_outcome(
+                    job_kind="analysis_detection",
+                    outcome=outcome,
+                    duration_seconds=time.perf_counter() - started,
+                )
 
     def run_once(self) -> bool:
         """Claim and process at most one job, returning whether work was found."""
@@ -167,12 +208,17 @@ class AnalysisDetectionWorker:
     def run_forever(self) -> None:
         logger.info("Analysis detection worker started", extra={"worker_id": self.worker_id})
         while True:
+            # A heartbeat per loop: without it, "the worker is running" was an
+            # assumption nobody could check.
+            record_worker_heartbeat(worker_kind="analysis_detection", worker_id=self.worker_id)
             if not self.run_once():
                 time.sleep(self.settings.analysis_detection_poll_seconds)
 
 
 def main() -> None:
-    logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
+    # Structured logs, same formatter as the API: a worker and the API it serves
+    # must produce lines a single collector can index together.
+    configure_logging(service="vericlaim-analysis-worker")
     worker_id = os.getenv("ANALYSIS_DETECTION_WORKER_ID") or f"{socket.gethostname()}-{os.getpid()}"
     AnalysisDetectionWorker(settings=settings, worker_id=worker_id).run_forever()
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,6 +14,8 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sess
 from sqlalchemy.pool import StaticPool
 
 from app.core.config import settings
+
+logger = logging.getLogger("vericlaim.database")
 
 
 # Stable names make Alembic diffs and production database diagnostics readable.
@@ -119,7 +122,17 @@ _fallback_engine = None
 _FallbackSession = None
 
 
+class DatabaseUnavailableError(RuntimeError):
+    """The configured database could not be reached.
+
+    Raised instead of silently substituting a different database: a silent
+    fallback hides an outage, loses writes on an ephemeral filesystem and
+    bypasses PostgreSQL row-level security.
+    """
+
+
 def _get_fallback_sessionmaker():
+    """Local-only throwaway database, gated by settings.allow_local_sqlite_fallback."""
     global _fallback_engine, _FallbackSession
     if _FallbackSession is None:
         _fallback_engine = create_engine("sqlite:////tmp/vericlaim_fallback.db", connect_args={"check_same_thread": False})
@@ -142,18 +155,38 @@ def get_db() -> Iterator[Session]:
     ``set_config(..., true)`` and therefore remain active until this transaction
     ends.  Service functions must ``flush`` for integrity errors, not commit
     independently.
+
+    A database outage fails closed: the caller receives
+    :class:`DatabaseUnavailableError` (mapped to HTTP 503) rather than an empty
+    database. The single exception is an explicit local opt-in.
     """
     db = None
     try:
         db = SessionLocal()
         db.execute(select(1))
-    except Exception:
+    except Exception as exc:
         if db is not None:
             db.close()
-        if settings.is_production_like:
-            raise
-        fallback_sm = _get_fallback_sessionmaker()
-        db = fallback_sm()
+        if settings.allow_local_sqlite_fallback and not settings.is_production_like:
+            logger.warning(
+                "Configured database unreachable; substituting the local SQLite fallback because "
+                "ALLOW_LOCAL_SQLITE_FALLBACK is enabled. This is a development-only behaviour.",
+                extra={"event": "database_fallback_used", "environment": settings.environment},
+            )
+            db = _get_fallback_sessionmaker()()
+        else:
+            logger.error(
+                "Configured database unreachable; refusing to serve. Set ALLOW_LOCAL_SQLITE_FALLBACK=true "
+                "only on an isolated development machine.",
+                extra={
+                    "event": "database_unavailable",
+                    "environment": settings.environment,
+                    "database_backend": settings.database_url.split(":", 1)[0],
+                },
+            )
+            raise DatabaseUnavailableError(
+                "La base de données configurée est injoignable. Aucune donnée n'a été modifiée."
+            ) from exc
 
     try:
         yield db
@@ -171,6 +204,41 @@ def canonical_json(value: Any) -> str:
 
 def sha256_json(value: Any) -> str:
     return hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()
+
+
+def canonical_event_occurred_at(value: datetime) -> str:
+    """Canonical UTC rendering of an audit timestamp.
+
+    Write and verify paths must produce the exact same string, otherwise every
+    recomputed chain hash is wrong. A naive datetime read back from the driver
+    is treated as UTC rather than rendered differently from an aware one.
+    """
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    else:
+        value = value.astimezone(timezone.utc)
+    return value.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def build_audit_event_material(event: Any) -> dict[str, Any]:
+    """Single source of truth for the sealed material of an AuditEvent.
+
+    Both ``append_audit_event`` (writer) and ``verify_audit_chain`` (verifier)
+    must use this exact structure; divergence silently invalidates the chain.
+    """
+    payload = event.payload_json if isinstance(event.payload_json, dict) else {}
+    return {
+        "organization_id": str(event.organization_id),
+        "actor_user_id": str(event.actor_user_id) if event.actor_user_id else None,
+        "entity_type": event.entity_type,
+        "entity_id": str(event.entity_id) if event.entity_id else None,
+        "action": event.action,
+        "occurred_at": canonical_event_occurred_at(event.occurred_at),
+        "request_id": event.request_id,
+        "payload": json.loads(canonical_json(payload)),
+        "payload_sha256": event.payload_sha256,
+        "previous_event_hash": event.previous_event_hash,
+    }
 
 
 def append_audit_record(

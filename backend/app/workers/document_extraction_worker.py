@@ -18,6 +18,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import Settings, settings
+from app.core.logging import bind_log_context, configure_logging
+from app.core.metrics import record_job_outcome, record_worker_heartbeat
 from app.core.database import SessionLocal
 from app.documents.extraction import (
     ClaimedExtractionJob,
@@ -116,6 +118,10 @@ class DocumentExtractionWorker:
                 )
 
     def _process(self, claim: ClaimedExtractionJob) -> None:
+        # C16: correlation context on every line, and a counted outcome.
+        bind_log_context(job_id=str(claim.id), organization_id=str(claim.organization_id))
+        started = time.perf_counter()
+        outcome = "processed"
         with self.session_factory() as db:
             try:
                 set_db_request_context(
@@ -142,19 +148,53 @@ class DocumentExtractionWorker:
                 )
             except DocumentExtractionTerminalError as exc:
                 db.rollback()
+                outcome = "failed"
+                # A job that fails must leave a line: a failure recorded only in the
+                # database is invisible to whoever reads the logs at 3 a.m.
+                logger.error(
+                    "Document extraction failed definitively",
+                    extra={
+                        "event": "job_failed",
+                        "job_id": str(claim.id),
+                        "organization_id": str(claim.organization_id),
+                        "document_version_id": str(claim.document_version_id),
+                        "error_code": exc.code,
+                        "retryable": False,
+                    },
+                )
                 self._record_failure(claim, error_code=exc.code, retryable=False)
             except DocumentExtractionRetryableError as exc:
                 db.rollback()
+                outcome = "failed"
+                logger.warning(
+                    "Document extraction failed, will be retried",
+                    extra={
+                        "event": "job_failed",
+                        "job_id": str(claim.id),
+                        "organization_id": str(claim.organization_id),
+                        "document_version_id": str(claim.document_version_id),
+                        "error_code": exc.code,
+                        "retryable": True,
+                    },
+                )
                 self._record_failure(claim, error_code=exc.code, retryable=True)
             except DocumentExtractionConflictError:
                 # A lease can legitimately be recovered by another worker after
                 # a crash/timeout. Do not overwrite its decision.
                 db.rollback()
+                outcome = "skipped"
                 logger.warning("Document extraction lease was lost", extra={"job_id": str(claim.id)})
             except Exception:
                 db.rollback()
+                outcome = "failed"
                 logger.exception("Unexpected document extraction worker error", extra={"job_id": str(claim.id)})
                 self._record_failure(claim, error_code="unexpected_worker_error", retryable=True)
+            finally:
+                record_job_outcome(
+                    job_kind="document_extraction",
+                    outcome=outcome,
+                    duration_seconds=time.perf_counter() - started,
+                )
 
     def run_once(self) -> bool:
         """Claim and process at most one job, returning whether work was found."""
@@ -177,12 +217,13 @@ class DocumentExtractionWorker:
     def run_forever(self) -> None:
         logger.info("Document extraction worker started", extra={"worker_id": self.worker_id})
         while True:
+            record_worker_heartbeat(worker_kind="document_extraction", worker_id=self.worker_id)
             if not self.run_once():
                 time.sleep(self.settings.document_extraction_poll_seconds)
 
 
 def main() -> None:
-    logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
+    configure_logging(service="vericlaim-extraction-worker")
     worker_id = os.getenv("DOCUMENT_EXTRACTION_WORKER_ID") or f"{socket.gethostname()}-{os.getpid()}"
     DocumentExtractionWorker(
         settings=settings,

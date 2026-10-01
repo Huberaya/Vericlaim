@@ -7,6 +7,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
+from app.billing.http import require_active_subscription
 from app.core.database import get_db
 from app.enterprise.service import (
     create_organization_api_key,
@@ -37,12 +38,38 @@ from app.models.enterprise_schemas import (
 
 router = APIRouter(prefix="/api/v1/enterprise", tags=["enterprise-readiness"])
 
+# C13 — garde d'abonnement : cette route produit un artefact payant ou une
+# dépense réelle (OCR, e-mail tiers, rapport signé). Voir app/billing/http.py.
+SUBSCRIPTION_GATE = Depends(require_active_subscription())
+
 DATABASE_DEPENDENCY = Depends(get_db)
 ORG_READ_DEPENDENCY = Depends(require_permission("organization:read"))
 ORG_MANAGE_DEPENDENCY = Depends(require_permission("organization:manage", csrf_protected=True))
 
 
-@router.post("/api-keys", response_model=ApiKeyCreatedResponse, status_code=status.HTTP_201_CREATED)
+def _runtime_snapshot() -> dict[str, object]:
+    """What the process can say about itself right now, for the observability routes."""
+    from app.core.config import settings as runtime_settings
+    from app.core.metrics import worker_heartbeats
+    from app.core.readiness import build_readiness_report
+    from app.main import app as application
+
+    settings = runtime_settings
+
+    return {
+        "settings": settings,
+        "storage": getattr(application.state, "document_storage", None),
+        "scanner": getattr(application.state, "document_scanner", None),
+        "readiness_checks": build_readiness_report(
+            settings,
+            storage=getattr(application.state, "document_storage", None),
+            scanner=getattr(application.state, "document_scanner", None),
+        ).checks,
+        "worker_heartbeats": list(worker_heartbeats()),
+    }
+
+
+@router.post("/api-keys", response_model=ApiKeyCreatedResponse, status_code=status.HTTP_201_CREATED, dependencies=[SUBSCRIPTION_GATE])
 def create_api_key(
     body: ApiKeyCreateRequest,
     request: Request,
@@ -64,10 +91,19 @@ def create_api_key(
 
 @router.get("/api-keys", response_model=list[ApiKeySummary])
 def list_api_keys(
-    principal: TenantPrincipal = ORG_READ_DEPENDENCY,
+    # C18: this used to require only `organization:read`, which every viewer holds.
+    # A list of API keys is *operational security material* — names, prefixes,
+    # scopes, expiry, last use — not product data a reader needs. It is a secret
+    # boundary, so it now requires the same permission as creating one.
+    principal: TenantPrincipal = ORG_MANAGE_DEPENDENCY,
     db: Session = DATABASE_DEPENDENCY,
 ) -> list[ApiKeySummary]:
-    """Lists all active and revoked API keys for the organization."""
+    """Lists all active and revoked API keys for the organization.
+
+    Reading this requires `organization:manage`: the listing reveals which
+    integrations exist and when they were last used, which is exactly the
+    reconnaissance an attacker with a low-privilege session would want.
+    """
     return list_organization_api_keys(db, organization_id=principal.organization_id)
 
 
@@ -96,8 +132,17 @@ def get_metrics(
     principal: TenantPrincipal = ORG_READ_DEPENDENCY,
     db: Session = DATABASE_DEPENDENCY,
 ) -> EnterpriseMetricsResponse:
-    """Returns enterprise system observability, performance metrics, and service status."""
-    return get_enterprise_metrics(db, organization_id=principal.organization_id)
+    """Observability figures: measured, tenant-scoped, or explicitly null (C16).
+
+    The runtime block passed below is the only source of the storage/worker/readiness
+    statuses, so the response cannot claim an operational dependency that the
+    readiness probes do not see.
+    """
+    return get_enterprise_metrics(
+        db,
+        organization_id=principal.organization_id,
+        runtime=_runtime_snapshot(),
+    )
 
 
 @router.get("/alerts", response_model=list[EnterpriseAlert])
@@ -105,8 +150,16 @@ def get_alerts(
     principal: TenantPrincipal = ORG_READ_DEPENDENCY,
     db: Session = DATABASE_DEPENDENCY,
 ) -> list[EnterpriseAlert]:
-    """Returns active enterprise security, system, and quota alerts."""
-    return list_enterprise_alerts(db, organization_id=principal.organization_id)
+    """Alerts computed from this organization's data and the instance's readiness.
+
+    None of them is acknowledged automatically: acknowledgement is a human act that
+    this codebase does not store, and pretending otherwise was part of the defect.
+    """
+    return list_enterprise_alerts(
+        db,
+        organization_id=principal.organization_id,
+        runtime=_runtime_snapshot(),
+    )
 
 
 @router.post("/scim/v2/Users", response_model=ScimUserResponse, status_code=status.HTTP_201_CREATED)

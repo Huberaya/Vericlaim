@@ -82,6 +82,17 @@ class DocumentResponse(BaseModel):
     updated_at: datetime
 
 
+class DocumentListResponse(BaseModel):
+    """A page of documents plus the cursor for the next one (C18).
+
+    The cursor is opaque and must be passed back verbatim; `next_cursor: null` means
+    the caller has reached the end of the collection.
+    """
+
+    items: list[DocumentResponse]
+    next_cursor: str | None = None
+
+
 class DocumentExtractionJobResponse(BaseModel):
     status: DocumentExtractionJobStatus
     attempt_count: int

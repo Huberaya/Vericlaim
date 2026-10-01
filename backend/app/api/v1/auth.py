@@ -53,6 +53,10 @@ from app.models.identity_schemas import (
 
 
 router = APIRouter(prefix="/api/v1/auth", tags=["authentication"])
+# Local pilot helper, registered ONLY when settings.enable_dev_login is true.
+# Kept on its own router so a deployment can omit the route entirely instead of
+# relying on an in-handler check alone; the handler keeps its own guard too.
+dev_router = APIRouter(prefix="/api/v1/auth", tags=["authentication"], include_in_schema=False)
 
 
 def _oidc_client_or_503(request: Request):
@@ -185,13 +189,25 @@ def switch_active_organization(
     return present_membership(membership)
 
 
-@router.post("/dev-login", response_model=AuthMeResponse)
+@dev_router.post("/dev-login", response_model=AuthMeResponse)
 def dev_login(
     request: Request,
     response: Response,
     db: Session = Depends(get_db),
 ) -> AuthMeResponse:
-    """Allow immediate developer/pilot session creation when OIDC is not yet connected."""
+    """Local-only pilot session helper.
+
+    Defence in depth: the router is normally not registered outside
+    development/test, but this check runs first regardless so that a
+    registration mistake can never expose an unauthenticated owner session.
+    Returns 404 (not 403) to avoid confirming the route exists.
+    """
+    if not settings.enable_dev_login:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Not Found",
+        )
+
     user = db.scalar(select(User).where(User.email == "pilote@vericlaim.ai"))
     if not user:
         user = User(

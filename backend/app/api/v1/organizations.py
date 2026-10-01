@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.billing.http import require_active_subscription
 from app.api.v1.presenters import (
     present_membership,
     present_organization,
@@ -37,6 +38,7 @@ from app.identity.service import (
     update_member_role,
     update_organization_name,
 )
+from app.models.domain import Organization
 from app.models.identity_schemas import (
     InvitationResponse,
     OrganizationCreateRequest,
@@ -51,6 +53,10 @@ from app.models.identity_schemas import (
 
 
 router = APIRouter(prefix="/api/v1/organizations", tags=["organizations"])
+
+# C13 — garde d'abonnement : cette route produit un artefact payant ou une
+# dépense réelle (OCR, e-mail tiers, rapport signé). Voir app/billing/http.py.
+SUBSCRIPTION_GATE = Depends(require_active_subscription())
 
 
 def _slugify(name: str) -> str:
@@ -164,7 +170,7 @@ def members_of_current_organization(
     return [present_organization_member(view) for view in list_organization_members(db, principal.organization_id)]
 
 
-@router.post("/current/members/invitations", response_model=InvitationResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/current/members/invitations", response_model=InvitationResponse, status_code=status.HTTP_201_CREATED, dependencies=[SUBSCRIPTION_GATE])
 def invite_member(
     body: InviteMemberRequest,
     request: Request,
@@ -182,6 +188,32 @@ def invite_member(
         )
     except (IdentityNotFoundError, IdentityConflictError, AuthorizationInvariantError) as exc:
         _raise_known_identity_error(exc)
+    # C14: the invitation e-mail the audit found missing. The delivery outcome is
+    # reported to the inviter (status + note) and written to the audit trail: on an
+    # instance without a mail transport the answer says "recorded, not delivered"
+    # instead of letting the inviter believe the colleague was notified.
+    from app.core.config import get_settings as _get_settings
+    from app.identity.self_service import send_invitation_email
+
+    organization = db.get(Organization, principal.organization_id)
+    if organization is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Organisation active introuvable : invitation non enregistrée.",
+        )
+    delivery = send_invitation_email(
+        db,
+        settings=_get_settings(),
+        user=user,
+        organization=organization,
+        invited_by_user_id=principal.user_id,
+        role_code=role.code,
+    )
+    invitation_delivery = {
+        "status": delivery.status.value,
+        "transport": delivery.transport,
+        "message_id": str(delivery.message_id),
+    }
     append_audit_event(
         db,
         organization_id=principal.organization_id,
@@ -189,10 +221,20 @@ def invite_member(
         entity_type="membership",
         entity_id=membership.id,
         action="membership.invited",
-        payload={"target_user_id": str(user.id), "role_code": role.code},
+        payload={
+            "target_user_id": str(user.id),
+            "role_code": role.code,
+            "invitation_delivery": invitation_delivery,
+        },
         request_id=request_id_from_request(request),
     )
-    return InvitationResponse(**present_organization_member(_member_view_from_mutation(principal, membership, user, role)).model_dump())
+    return InvitationResponse(
+        **present_organization_member(
+            _member_view_from_mutation(principal, membership, user, role)
+        ).model_dump(),
+        delivery_status=delivery.status.value,
+        delivery_note=delivery.detail,
+    )
 
 
 @router.patch("/current/members/{user_id}/role", response_model=OrganizationMemberResponse)

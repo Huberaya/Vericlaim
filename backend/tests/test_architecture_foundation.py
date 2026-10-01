@@ -95,6 +95,8 @@ def test_schema_autocreation_is_opt_in_outside_local_and_test(monkeypatch):
     monkeypatch.setenv("DOCUMENT_STORAGE_PUBLIC_ENDPOINT", "https://objects.example")
     monkeypatch.setenv("DOCUMENT_QUARANTINE_BUCKET", "vericlaim-quarantine-test")
     monkeypatch.setenv("DOCUMENT_CLEAN_BUCKET", "vericlaim-clean-test")
+    # C7: signing a report requires a real key in production-like environments.
+    monkeypatch.setenv("REPORT_SIGNING_KEY", "Rk7Qm2Xv9BpL4Tn6Ys3Wz8Hd5Jc0Fa1Ug")
     monkeypatch.delenv("AUTO_CREATE_SCHEMA", raising=False)
     assert get_settings().auto_create_schema is False
 

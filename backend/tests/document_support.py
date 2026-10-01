@@ -68,6 +68,14 @@ class FakeObjectStorage:
         )
         return bucket, key
 
+    def probe(self, *, bucket: str) -> tuple[bool, str]:
+        """C18 readiness probe, mirroring S3ObjectStorage.probe semantics."""
+        try:
+            self._maybe_fail("probe")
+        except ObjectStorageError as exc:
+            return False, f"head_bucket: {type(exc).__name__}"
+        return True, "head_bucket: ok"
+
     def head(self, *, bucket: str, key: str) -> ObjectMetadata:
         self._maybe_fail("head")
         stored = self.objects.get((bucket, key))
@@ -141,6 +149,11 @@ class FakeScanner:
         self.available = available
         self.on_scan = on_scan
         self.scanned_payloads: list[bytes] = []
+
+    def probe(self) -> tuple[bool, str]:
+        if not self.available:
+            return False, "ping: unavailable"
+        return True, "ping: pong"
 
     def scan(self, payload: bytes) -> MalwareScanResult:
         self.scanned_payloads.append(payload)

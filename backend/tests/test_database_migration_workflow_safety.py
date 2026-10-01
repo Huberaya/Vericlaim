@@ -69,3 +69,47 @@ def test_ci_runs_without_secrets_and_never_applies_a_database_migration() -> Non
     assert "ENABLE ROW LEVEL SECURITY" in text
     assert "FORCE ROW LEVEL SECURITY" in text
     assert "git grep -nE" in text
+
+
+def test_migration_workflows_never_allow_silent_schema_creation() -> None:
+    """A migration job must never be able to create schema implicitly.
+
+    The migration jobs run with APP_ENV=development so that Alembic can load
+    application settings without requiring unrelated production secrets. That
+    makes the permissive ``AUTO_CREATE_SCHEMA`` default apply, so every step
+    must pin it to false explicitly. This test is the guard that stops the pin
+    from being removed: without it, a shared database could be mutated outside
+    the reviewed Alembic chain.
+    """
+    for name in ("production-database-migration.yml", "staging-database-migration.yml"):
+        text = _workflow(name)
+        app_env_steps = text.count("APP_ENV: development")
+        pinned_steps = text.count('AUTO_CREATE_SCHEMA: "false"')
+
+        assert app_env_steps > 0, f"{name} no longer sets APP_ENV; revisit this guard"
+        assert pinned_steps >= app_env_steps, (
+            f"{name}: every step that sets APP_ENV must also pin "
+            f'AUTO_CREATE_SCHEMA: "false" (found {app_env_steps} APP_ENV steps '
+            f"but only {pinned_steps} pins)"
+        )
+        assert 'AUTO_CREATE_SCHEMA: "true"' not in text
+        assert "AUTO_CREATE_SCHEMA: true" not in text
+
+
+def test_deployment_platform_must_not_rely_on_the_default_app_env() -> None:
+    """The Vercel manifest must not silently serve the permissive default.
+
+    A missing APP_ENV on the platform boots the application as `development`,
+    which re-enables the credential-less pilot route and points at SQLite.
+    The application now refuses that combination at startup; this test records
+    the requirement on the deployment side too.
+    """
+    manifest = (REPOSITORY_ROOT / "vercel.json").read_text(encoding="utf-8")
+    assert "APP_ENV" not in manifest, (
+        "APP_ENV must be configured as a platform environment variable, not hardcoded in "
+        "vercel.json where it could drift from the actual target environment"
+    )
+    checklist = REPOSITORY_ROOT / "docs" / "operations" / "release-checklist.md"
+    assert checklist.exists(), "the release checklist is missing"
+    checklist_text = checklist.read_text(encoding="utf-8")
+    assert "APP_ENV" in checklist_text

@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.billing.http import require_active_subscription
 from app.analyses.service import (
     AnalysisConflictError,
     AnalysisEnqueueResult,
@@ -51,6 +52,10 @@ from app.models.domain import (
 )
 
 router = APIRouter(prefix="/api/v1/analyses", tags=["analyses"])
+
+# C13 — garde d'abonnement : cette route produit un artefact payant ou une
+# dépense réelle (OCR, e-mail tiers, rapport signé). Voir app/billing/http.py.
+SUBSCRIPTION_GATE = Depends(require_active_subscription())
 claims_router = APIRouter(prefix="/api/v1/claims", tags=["claims"])
 
 PRE_AUDIT_DISCLAIMER = (
@@ -96,6 +101,8 @@ def _present_version(version: AnalysisVersion, *, include_claim_manifest: bool =
         rulebook_version=version.rulebook_version,
         input_manifest_sha256=version.input_manifest_sha256,
         result_sha256=version.result_sha256,
+        overall_compliance=version.overall_compliance,
+        risk_score=version.risk_score,
         input_manifest=input_manifest,
         result=result,
         started_at=version.started_at,
@@ -147,7 +154,11 @@ def _present_claim(claim: Claim, *, segment: DocumentSegment | None) -> ClaimRes
         segment_start_offset=segment.start_offset if segment is not None else attributes.get("segment_start_offset_in_document"),
         segment_end_offset=segment.end_offset if segment is not None else attributes.get("segment_end_offset_in_document"),
         source_sha256=segment.source_sha256 if segment is not None else attributes.get("segment_source_sha256"),
+        # C23 — la lecture de la cellule est publiée telle que le moteur l'a calculée.
+        table_citation=attributes.get("table_citation"),
     )
+    confidence = attributes.get("detection_confidence")
+    confidence = confidence if isinstance(confidence, dict) else {}
     return ClaimResponse(
         id=claim.id,
         analysis_version_id=claim.analysis_version_id,
@@ -161,6 +172,11 @@ def _present_claim(claim: Claim, *, segment: DocumentSegment | None) -> ClaimRes
         end_offset=claim.end_offset,
         source=claim.source,
         confidence_score=claim.confidence_score,
+        confidence_level=confidence.get("level"),
+        confidence_factors=list(confidence.get("factors") or []),
+        confidence_basis=confidence.get("basis"),
+        confidence_rubric_version=confidence.get("rubric_version"),
+        review_reasons=list(confidence.get("review_reasons") or []),
         status=claim.status,
         detector_version=claim.detector_version,
         attributes=attributes,
@@ -191,7 +207,7 @@ def _raise_analysis_error(exc: Exception) -> None:
     raise exc
 
 
-@router.post("", response_model=AnalysisEnqueueResponse, status_code=status.HTTP_202_ACCEPTED)
+@router.post("", response_model=AnalysisEnqueueResponse, status_code=status.HTTP_202_ACCEPTED, dependencies=[SUBSCRIPTION_GATE])
 def enqueue_analysis(
     body: AnalysisCreateRequest,
     request: Request,
@@ -266,7 +282,7 @@ def read_analysis_version(
         _raise_analysis_error(exc)
 
 
-@router.post("/{analysis_id}/retry", response_model=AnalysisEnqueueResponse, status_code=status.HTTP_202_ACCEPTED)
+@router.post("/{analysis_id}/retry", response_model=AnalysisEnqueueResponse, status_code=status.HTTP_202_ACCEPTED, dependencies=[SUBSCRIPTION_GATE])
 def enqueue_analysis_retry(
     analysis_id: UUID,
     request: Request,

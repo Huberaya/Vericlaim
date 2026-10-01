@@ -9,7 +9,7 @@ from sqlalchemy import Select, func, select, text
 from sqlalchemy.orm import Session, joinedload
 
 from app.core.config import Settings
-from app.core.database import canonical_json, sha256_json
+from app.core.database import canonical_event_occurred_at, canonical_json, sha256_json
 from app.identity.oidc import OidcIdentity
 from app.identity.roles import SYSTEM_ROLE_BY_CODE, ensure_system_roles
 from app.identity.security import create_csrf_token, create_session_token, token_hmac, user_agent_hash
@@ -356,6 +356,15 @@ def invite_or_provision_member(
         db.flush()
 
     existing = _membership_with_user_and_role(db, organization_id, user.id)
+    if existing is None or existing[0].status != MembershipStatus.INVITED:
+        # C13 — un siège ne se consomme qu'une fois : réinviter une personne déjà
+        # invitée ne consomme rien, en inviter une nouvelle en consomme un. Le
+        # contrôle est ici pour qu'aucun chemin (API, SCIM, script) ne l'oublie.
+        # Import différé : `app.billing.usage` importe ce module pour poser le
+        # contexte RLS, un import en tête de fichier créerait un cycle.
+        from app.billing.enforcement import assert_seat_available
+
+        assert_seat_available(db, organization_id=organization_id)
     if existing is not None:
         membership, _, existing_role = existing
         if membership.status == MembershipStatus.ACTIVE:
@@ -453,7 +462,7 @@ def append_audit_event(
         "entity_type": entity_type,
         "entity_id": str(entity_id) if entity_id else None,
         "action": action,
-        "occurred_at": occurred_at.isoformat(),
+        "occurred_at": canonical_event_occurred_at(occurred_at),
         "request_id": request_id,
         "payload": json_safe(payload),
         "payload_sha256": payload_hash,
