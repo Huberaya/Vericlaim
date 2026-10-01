@@ -214,8 +214,30 @@ class Rehearsal:
     def backup_role(self) -> str:
         return urlsplit(self.backup_url).username or ""
 
-    def grant_read_to_backup(self, database: str) -> None:
-        """Le rôle de sauvegarde doit pouvoir lire **tables et séquences** de la base visée."""
+    def grant_read_to_backup(self, database: str, *, restored: bool = False) -> None:
+        """Le rôle de sauvegarde doit pouvoir lire **tables et séquences** de la base visée.
+
+        Sur une base **restaurée**, les objets appartiennent au rôle qui a restauré
+        (l'administration), pas au rôle de migration : accorder les droits depuis le rôle de
+        migration échoue alors avec ``permission denied for table alembic_version`` — mesuré à
+        la première exécution réelle de ce travail. La propriété est donc d'abord rendue au rôle
+        de migration, comme l'exige la procédure de production : sans elle, les migrations
+        suivantes ne pourraient plus s'appliquer non plus.
+        """
+        if restored:
+            admin_role = urlsplit(self.admin_url).username or ""
+            migration_role = urlsplit(self.source_url).username or ""
+            if admin_role and migration_role and admin_role != migration_role:
+                outcome = self.psql(
+                    with_database(self.admin_url, database),
+                    "-v", "ON_ERROR_STOP=1", "-c",
+                    f'REASSIGN OWNED BY "{admin_role}" TO "{migration_role}"',
+                )
+                if outcome.returncode != 0:
+                    raise RuntimeError(
+                        "reprise de propriété par le rôle de migration impossible : "
+                        f"{outcome.stderr.strip()[:300]}"
+                    )
         migrator = with_database(self.source_url, database)
         statements = (
             f'GRANT USAGE ON SCHEMA public TO "{self.backup_role()}"',
@@ -401,7 +423,7 @@ with Session(engine) as db:
                 message=restored.stderr.strip()[:200],
             )
             return
-        self.grant_read_to_backup(scratch)
+        self.grant_read_to_backup(scratch, restored=True)
         recovered = self.counts(with_database(self.backup_url, scratch))
         self.record(
             "sauvegarde avec --enable-row-security (le piège silencieux)",
@@ -441,7 +463,7 @@ with Session(engine) as db:
         outcome = self.pg_restore(with_database(self.admin_url, self.target_database), dump)
         if outcome.returncode != 0:
             raise RuntimeError(f"pg_restore a échoué : {outcome.stderr.strip()[:600]}")
-        self.grant_read_to_backup(self.target_database)
+        self.grant_read_to_backup(self.target_database, restored=True)
         self.record(label, duree_s=round(time.time() - started, 2), erreurs=0)
         return target
 
