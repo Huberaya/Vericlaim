@@ -59,7 +59,7 @@ SUBSCRIPTION_GATE = Depends(require_active_subscription())
 claims_router = APIRouter(prefix="/api/v1/claims", tags=["claims"])
 
 PRE_AUDIT_DISCLAIMER = (
-    "VeriClaim AI fournit une détection automatisée d’allégations pour le pré-audit et la gestion du risque. "
+    "VeriClaim fournit une détection automatisée d’allégations pour le pré-audit et la gestion du risque. "
     "Ce résultat ne constitue pas un avis juridique, une certification ni une décision d’autorité."
 )
 

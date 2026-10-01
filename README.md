@@ -1,4 +1,4 @@
-# VeriClaim AI — moteur réglementaire déterministe
+# VeriClaim — moteur réglementaire déterministe
 
 Prototype exécutable d'un moteur d'audit des allégations environnementales. Le cœur combine un lexique explicite, des règles juridiques typées et versionnées, des contrôles de périmètre et de date, des critères probatoires, des Safe Harbors configurables, une remédiation par modèles de clauses et un journal d'audit chaîné par SHA-256. **Aucun LLM n'intervient dans le verdict.**
 

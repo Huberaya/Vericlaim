@@ -2,7 +2,7 @@
 
 ## 1. Contexte et Objectifs de Sécurité
 
-Le **Chantier 11** fournit à **VeriClaim AI** un moteur de traçabilité cryptographique opposable (*Tamper-Evident Ledger*) répondant aux exigences des réglementations européennes, des auditeurs de conformité (ISO 14001, CSRD/ESRS) et des autorités de contrôle (DGCCRF, juridictions commerciales) :
+Le **Chantier 11** fournit à **VeriClaim** un moteur de traçabilité cryptographique opposable (*Tamper-Evident Ledger*) répondant aux exigences des réglementations européennes, des auditeurs de conformité (ISO 14001, CSRD/ESRS) et des autorités de contrôle (DGCCRF, juridictions commerciales) :
 
 1. **Sérialisation Immuable & Append-Only** : Tout événement métier critique (`analysis`, `claim`, `document`, `evidence`, `validation`, `apikey`, `legal_hold`) est persisté sans possibilité de modification ou de suppression en base.
 2. **Hash-Chaining SHA-256 par Organisation** : Chaque événement intègre l'empreinte cryptographique de son prédécesseur immédiat (`previous_event_hash`) et calcule son propre condensat scellé (`event_hash`), formant une blockchain locale et cloisonnée par tenant.

@@ -1,6 +1,6 @@
 """Transactional, tenant-scoped persistent evidence registry and claim linking.
 
-This module provides the core Evidence Engine for VeriClaim AI:
+This module provides the core Evidence Engine for VeriClaim:
 - Registering and managing verifiable pieces of evidence (LCA reports, ISO/Ecolabel certificates, lab tests, GHG reduction plans, recycling route declarations).
 - Establishing explicit, auditable links between detected claims and supporting evidence.
 - Evaluating evidence coverage, validity dates, product scopes, and computing transparent rationale without statistical hallucination.

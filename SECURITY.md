@@ -1,4 +1,4 @@
-# Sécurité — VeriClaim AI
+# Sécurité — VeriClaim
 
 Ce document décrit les règles de sécurité **opposables** du dépôt : ce qui ne doit
 jamais atteindre un environnement partagé, comment signaler une vulnérabilité, et

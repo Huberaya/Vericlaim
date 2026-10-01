@@ -3,7 +3,7 @@
 **Statut :** livré techniquement.
 **Choix validé :** SSO OIDC générique et accès au moteur réservé aux membres authentifiés d’une organisation active.
 
-> VeriClaim AI ne stocke ni mot de passe utilisateur, ni token d’accès/refresh token du fournisseur d’identité. Il établit une session opaque locale après validation cryptographique d’un ID token OIDC.
+> VeriClaim ne stocke ni mot de passe utilisateur, ni token d’accès/refresh token du fournisseur d’identité. Il établit une session opaque locale après validation cryptographique d’un ID token OIDC.
 
 ## 1. Décisions d’architecture
 

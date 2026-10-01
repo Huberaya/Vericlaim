@@ -1,4 +1,4 @@
-# Checklist de release — VeriClaim AI
+# Checklist de release — VeriClaim
 
 À dérouler **avant chaque mise en production**. Chaque case doit être cochée avec
 une preuve, pas de mémoire. Une case non cochée bloque la release.

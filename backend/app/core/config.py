@@ -52,7 +52,7 @@ MAX_REPORT_LEASE_SECONDS = 30 * 60
 
 @dataclass(frozen=True)
 class Settings:
-    app_name: str = "VeriClaim AI — Regulatory Rule Engine"
+    app_name: str = "VeriClaim — Regulatory Rule Engine"
     environment: str = "development"
     database_url: str = "sqlite:///./vericlaim.db"
     auto_create_schema: bool = True
@@ -680,7 +680,7 @@ def get_settings() -> Settings:
     )
 
     return Settings(
-        app_name=os.getenv("APP_NAME", "VeriClaim AI — Regulatory Rule Engine"),
+        app_name=os.getenv("APP_NAME", "VeriClaim — Regulatory Rule Engine"),
         environment=environment,
         database_url=database_url,
         auto_create_schema=auto_create_schema,
