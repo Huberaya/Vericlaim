@@ -1054,7 +1054,7 @@ def _stripe_settings(tmp_path: Path) -> Settings:
         environment="test",
         frontend_url="https://app.example.test",
         billing_provider="stripe",
-        stripe_secret_key="sk_test_not_a_real_key",
+        stripe_secret_key="faux-secret-stripe-de-test",
         stripe_webhook_secret="whsec_not_a_real_secret",
         stripe_price_ids_json=json.dumps({"starter": "price_start", "pro": "price_pro"}),
         auto_create_schema=False,
@@ -1229,7 +1229,7 @@ def test_the_simulated_payment_route_does_not_exist_in_a_production_like_boot():
         {
             "APP_ENV": "production",
             "BILLING_PROVIDER": "stripe",
-            "STRIPE_SECRET_KEY": "sk_live_not_a_real_key",
+            "STRIPE_SECRET_KEY": "faux-secret-stripe-de-test",
             "STRIPE_WEBHOOK_SECRET": "whsec_not_a_real_secret",
         },
         script=probe,
@@ -1255,7 +1255,7 @@ def test_the_stripe_provider_requires_both_keys(tmp_path):
         {
             "APP_ENV": "production",
             "BILLING_PROVIDER": "stripe",
-            "STRIPE_SECRET_KEY": "sk_live_not_a_real_key",
+            "STRIPE_SECRET_KEY": "faux-secret-stripe-de-test",
         }
     )
     assert result.returncode != 0
