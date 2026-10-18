@@ -94,3 +94,43 @@ done
 ```
 
 Aucune sortie attendue.
+
+## 5. Journal d'exécution — étape 3
+
+**Exécutée le 19 octobre 2026, après confirmation de la rotation par le
+propriétaire du dépôt.**
+
+| Action | Résultat |
+|---|---|
+| Suppression de `quarantine/unreviewed-main-be90de9` | ✅ supprimée (`94409fb1…`) |
+| Suppression de `feat/compliance-engine-full` | ✅ supprimée (`9fb790bc…`) |
+| Ancestrité vérifiée avant purge | ✅ aucun tip infecté n'était ancêtre d'une branche conservée ni d'une ref `refs/pull/*` |
+| Point de fork de la lignée rejetée (`47c8e782`) | ✅ aucun marqueur d'identifiant réel |
+| Tags distants | aucun (pas d'ancre alternative) |
+| Scan des 9 branches restantes + 7 refs de PR | ✅ aucune valeur réelle détectée (motifs DSN à mot de passe, `sk_…`, `npg_…`) |
+| Preuve d'exposition | copie locale hors dépôt : `/home/user/vericlaim-evidence/2026-10-19-branch-purge-evidence.md` (chemins, noms de variables et SHAs uniquement) |
+
+### Point non résolu : rétention des commits par GitHub
+
+Après suppression des branches, les commits restent **accessibles par SHA
+direct** via l'API et l'interface GitHub tant que le garbage collection n'a pas
+eu lieu (rétention des objets non atteignables). Test effectué le 19/10/2026 :
+`GET /repos/Huberaya/Vericlaim/commits/<sha>` renvoie encore `200`.
+
+Cela n'a plus d'impact **si et seulement si** la rotation de l'étape 1 est
+effective : les valeurs exposées sont alors mortes. Pour supprimer la vue
+cache, ouvrir une demande auprès du support GitHub (« remove cached views /
+unreachable commits from a public repository »), en citant le dépôt et les
+SHAs — **jamais** les valeurs. Modèle :
+
+> Bonjour,
+> Le dépôt public `Huberaya/Vericlaim` a exposé des identifiants dans des
+> branches depuis supprimées (`quarantine/unreviewed-main-be90de9`,
+> `feat/compliance-engine-full`) et dans des commits désormais non atteignables.
+> Les identifiants ont été révoqués et rotés le 19/10/2026.
+> Merci de purger les vues en cache et les objets non atteignables suivants :
+> `be90de97…`, `94409fb1…`, `9fb790bc…` (et leurs ancêtres).
+> Aucune valeur de secret n'est jointe à cette demande.
+
+Sans cette demande (ou sans attente du cycle de GC), l'historique reste
+téléchargeable par SHA. La révocation reste la seule protection réelle.
