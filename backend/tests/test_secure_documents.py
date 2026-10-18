@@ -150,8 +150,8 @@ def test_s3_signed_capabilities_bind_server_key_size_encryption_and_source_etag(
         endpoint_url="https://internal-storage.example.test",
         public_endpoint_url="https://uploads.example.test",
         region_name="eu-west-3",
-        access_key_id="test-access-key",
-        secret_access_key="test-secret-key",
+        access_key_id="not-a-real-access-key",
+        secret_access_key="not-a-real-secret-key",
         sse_mode="aes256",
         sse_kms_key_id=None,
     )

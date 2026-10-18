@@ -1,13 +1,26 @@
 from __future__ import annotations
 
 import os
+import secrets
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
 
 PRODUCTION_LIKE_ENVIRONMENTS = frozenset({"staging", "production"})
 KNOWN_ENVIRONMENTS = frozenset({"development", "test", *PRODUCTION_LIKE_ENVIRONMENTS})
-DEV_SESSION_SECRET = "development-only-session-secret-change-before-shared-use"
+
+
+def _ephemeral_dev_session_secret() -> str:
+    """Development/test-only fallback: fresh random secret per process.
+
+    The repository intentionally contains no shared credential. Sessions
+    issued in development do not survive a process restart. Staging and
+    production must always provide AUTH_SESSION_SECRET explicitly.
+    """
+    return secrets.token_urlsafe(48)
+
+
+DEV_SESSION_SECRET = _ephemeral_dev_session_secret()
 MAX_DOCUMENT_BYTES = 50 * 1024 * 1024
 MAX_DOCUMENT_UPLOAD_TTL_SECONDS = 60 * 60
 MAX_DOCUMENT_DOWNLOAD_TTL_SECONDS = 15 * 60

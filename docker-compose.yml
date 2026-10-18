@@ -4,7 +4,7 @@ services:
     environment:
       POSTGRES_DB: vericlaim
       POSTGRES_USER: vericlaim
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vericlaim-dev-only}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -78,7 +78,7 @@ services:
       context: ./backend
     environment: &backend_environment
       APP_ENV: ${APP_ENV:-development}
-      DATABASE_URL: postgresql+psycopg://vericlaim:${POSTGRES_PASSWORD:-vericlaim-dev-only}@postgres:5432/vericlaim
+      DATABASE_URL: postgresql+psycopg://vericlaim:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/vericlaim
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
       AUTH_SESSION_SECRET: ${AUTH_SESSION_SECRET:?Set AUTH_SESSION_SECRET in .env}
