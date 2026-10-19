@@ -69,3 +69,38 @@ def test_ci_runs_without_secrets_and_never_applies_a_database_migration() -> Non
     assert "ENABLE ROW LEVEL SECURITY" in text
     assert "FORCE ROW LEVEL SECURITY" in text
     assert "git grep -nE" in text
+
+
+
+def test_staging_preflight_runs_before_first_migration_write() -> None:
+    workflow = _workflow("staging-database-migration.yml")
+    preflight = "python infra/neon/preflight_staging.py"
+    migration = "python -m alembic upgrade head"
+
+    assert preflight in workflow
+    assert workflow.index(preflight) < workflow.index(migration)
+    assert "STAGING_DATABASE_HOST: ${{ vars.STAGING_DATABASE_HOST }}" in workflow
+    assert "STAGING_DATABASE_NAME: ${{ vars.STAGING_DATABASE_NAME }}" in workflow
+    assert "PRODUCTION_DATABASE_HOST: ${{ vars.PRODUCTION_DATABASE_HOST }}" in workflow
+
+
+def test_staging_preflight_fails_closed_on_missing_or_mismatched_target() -> None:
+    text = (REPOSITORY_ROOT / "infra" / "neon" / "preflight_staging.py").read_text(encoding="utf-8")
+
+    assert "STAGING_DATABASE_HOST" in text
+    assert "STAGING_DATABASE_NAME" in text
+    assert "actual_host != expected_host" in text
+    assert "actual_database != expected_database" in text
+    assert "production host" in text
+    assert "require_tls(connection)" in text
+    assert 'role != EXPECTED_ROLE' in text
+    assert "rolsuper" in text
+    assert "rolbypassrls" in text
+
+
+def test_neon_runbook_documents_current_alembic_head() -> None:
+    text = (REPOSITORY_ROOT / "infra" / "neon" / "README.md").read_text(encoding="utf-8")
+
+    assert "--expected-revision e8f9a1b2c3d4" in text
+    assert "d3c8a6e1b409" not in text
+    assert "preflight_staging.py" in text
