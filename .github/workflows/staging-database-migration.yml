@@ -54,6 +54,16 @@ jobs:
             exit 1
           }
 
+      - name: Verify staging target, TLS, and migration role before any write
+        env:
+          DATABASE_URL_MIGRATOR: ${{ secrets.DATABASE_URL_MIGRATOR }}
+          STAGING_DATABASE_HOST: ${{ vars.STAGING_DATABASE_HOST }}
+          STAGING_DATABASE_NAME: ${{ vars.STAGING_DATABASE_NAME }}
+          PRODUCTION_DATABASE_HOST: ${{ vars.PRODUCTION_DATABASE_HOST }}
+        run: |
+          set -euo pipefail
+          python infra/neon/preflight_staging.py
+
       - name: Apply reviewed Alembic migrations as vericlaim_migrator
         working-directory: backend
         env:
