@@ -56,14 +56,17 @@ router = APIRouter(prefix="/api/v1/auth", tags=["authentication"])
 
 
 def dev_login_allowed(current_settings: Settings | None = None) -> bool:
-    """The pilot bypass only exists in local development and test runs.
+    """The pilot bypass requires an explicit opt-in and never runs deployed.
 
     Fail closed by default: any staging/production process must never expose an
-    unauthenticated endpoint that mints an administrator session.
+    unauthenticated endpoint that mints an administrator session, and a local
+    process must ask for it explicitly through ``AUTH_DEV_LOGIN_ENABLED``.
     """
 
     active = current_settings or settings
-    return not active.is_production_like
+    if active.is_production_like:
+        return False
+    return bool(active.auth_dev_login_enabled)
 
 
 def _oidc_client_or_503(request: Request):
