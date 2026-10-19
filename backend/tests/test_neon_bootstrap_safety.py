@@ -34,4 +34,8 @@ def test_neon_bootstrap_keeps_roles_non_privileged_after_activation() -> None:
 
     for privilege in ("rolsuper", "rolbypassrls", "rolcreaterole", "rolcreatedb", "rolinherit"):
         assert privilege in sql
+    assert "pg_auth_members" in sql
+    assert "granted_role.rolname = candidate.rolname" in sql
+    assert "member_role.rolname = candidate.rolname" in sql
+    assert "has PostgreSQL role memberships; refusing reuse" in sql
     assert "least-privilege bootstrap requirements" in sql
