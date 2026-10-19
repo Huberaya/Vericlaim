@@ -370,3 +370,77 @@ def test_oidc_client_verifies_a_real_asymmetric_id_token_signature():
     )
     assert identity.subject == "verified-subject"
     assert identity.email == "verified.user@example.com"
+
+
+def test_dev_login_is_refused_unless_explicitly_opted_in(monkeypatch):
+    """The pilot bypass must never mint an administrator session by default."""
+    from dataclasses import replace
+
+    from fastapi import HTTPException
+
+    from app.api.v1 import auth as auth_module
+
+    enabled = replace(settings, auth_dev_login_enabled=True)
+    disabled = replace(settings, auth_dev_login_enabled=False)
+
+    # Opt-in locally is the only accepted state.
+    assert auth_module.dev_login_allowed(replace(enabled, environment="development")) is True
+    assert auth_module.dev_login_allowed(replace(enabled, environment="test")) is True
+
+    # Default-off everywhere.
+    assert auth_module.dev_login_allowed(replace(disabled, environment="development")) is False
+    assert auth_module.dev_login_allowed(replace(disabled, environment="test")) is False
+
+    # Never reachable when deployed, even with the flag forced on.
+    assert auth_module.dev_login_allowed(replace(enabled, environment="staging")) is False
+    assert auth_module.dev_login_allowed(replace(enabled, environment="production")) is False
+
+    staging_settings = replace(enabled, environment="staging")
+    monkeypatch.setattr(auth_module, "settings", staging_settings)
+    with pytest.raises(HTTPException) as excinfo:
+        auth_module.dev_login(request=None, response=None, db=None)  # type: ignore[arg-type]
+
+    assert excinfo.value.status_code == 404
+    assert excinfo.value.detail == "Not Found"
+
+
+def test_production_like_configuration_refuses_to_start_with_dev_login_enabled(monkeypatch):
+    """A deployment must fail at startup, not at request time."""
+    from app.core import config as config_module
+
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("AUTO_CREATE_SCHEMA", "false")
+    monkeypatch.setenv("AUTH_DEV_LOGIN_ENABLED", "true")
+    monkeypatch.setenv("AUTH_SESSION_SECRET", "x" * 48)
+    monkeypatch.setenv("FRONTEND_URL", "https://app.example.test")
+    monkeypatch.setenv("CORS_ORIGINS", "https://app.example.test")
+    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://vericlaim@db.invalid:5432/vericlaim")
+    monkeypatch.setenv("DOCUMENT_STORAGE_ENDPOINT", "https://minio.example.test")
+    monkeypatch.setenv("DOCUMENT_STORAGE_PUBLIC_ENDPOINT", "https://uploads.example.test")
+    monkeypatch.setenv("DOCUMENT_QUARANTINE_BUCKET", "vc-quarantine")
+    monkeypatch.setenv("DOCUMENT_CLEAN_BUCKET", "vc-clean")
+    monkeypatch.setenv("DOCUMENT_SCANNER_MODE", "clamav")
+    monkeypatch.setenv("DOCUMENT_CLAMAV_HOST", "clamav.example.test")
+    monkeypatch.setenv("OIDC_ISSUER", "https://idp.example.test")
+    monkeypatch.setenv("OIDC_CLIENT_ID", "vericlaim")
+    monkeypatch.setenv("OIDC_REDIRECT_URI", "https://app.example.test/auth/callback")
+
+    with pytest.raises(RuntimeError, match="AUTH_DEV_LOGIN_ENABLED"):
+        config_module.get_settings()
+
+
+def test_authentication_status_hides_the_dev_login_in_production_like_environments(monkeypatch):
+    from dataclasses import replace
+    from types import SimpleNamespace
+
+    from app.api.v1 import auth as auth_module
+
+    monkeypatch.setattr(
+        auth_module, "settings", replace(settings, environment="production", auth_dev_login_enabled=True)
+    )
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(oidc_client=object())))
+
+    response = auth_module.authentication_status(request)
+
+    assert response.oidc_configured is True
+    assert response.dev_login_enabled is False
