@@ -427,6 +427,7 @@ def complete_document_upload(
             bucket=settings.document_quarantine_bucket,
             key=upload.quarantine_storage_key,
             max_size_bytes=settings.max_upload_bytes,
+            expected_etag=metadata.etag,
         )
     except ObjectNotFoundError:
         return _record_rejection(

@@ -51,7 +51,7 @@ class ObjectStorage(Protocol):
 
     def head(self, *, bucket: str, key: str) -> ObjectMetadata: ...
 
-    def read_bytes(self, *, bucket: str, key: str, max_size_bytes: int) -> bytes: ...
+    def read_bytes(self, *, bucket: str, key: str, max_size_bytes: int, expected_etag: str | None = None) -> bytes: ...
 
     def put_bytes(self, *, bucket: str, key: str, payload: bytes, content_type: str) -> None: ...
 
@@ -223,9 +223,11 @@ class S3ObjectStorage:
             etag=str(response["ETag"]) if response.get("ETag") else None,
         )
 
-    def read_bytes(self, *, bucket: str, key: str, max_size_bytes: int) -> bytes:
+    def read_bytes(self, *, bucket: str, key: str, max_size_bytes: int, expected_etag: str | None = None) -> bytes:
         try:
-            response = self._client.get_object(Bucket=bucket, Key=key)
+            # Bind the bytes being scanned to the revision used for promotion.
+            condition = {"IfMatch": expected_etag} if expected_etag else {}
+            response = self._client.get_object(Bucket=bucket, Key=key, **condition)
             body = response["Body"]
             try:
                 payload = body.read(max_size_bytes + 1)
