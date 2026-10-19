@@ -62,10 +62,14 @@ Le compte propriétaire Neon ne doit pas être configuré comme `DATABASE_URL` d
 
    ```bash
    DATABASE_URL_APP="$DATABASE_URL_APP" \
-     python infra/neon/verify_runtime.py --expected-revision d3c8a6e1b409
+     python infra/neon/verify_runtime.py --expected-revision e8f9a1b2c3d4
    ```
 
-6. Vérifier que la révision est `d3c8a6e1b409`, que RLS est activé/forcé et que l’API ne démarre qu’avec le rôle runtime.
+6. Vérifier que la révision est `e8f9a1b2c3d4` (head Alembic actuel), que RLS est activé/forcé et que l’API ne démarre qu’avec le rôle runtime.
+
+## Préflight obligatoire avant migration staging
+
+Le workflow staging exécute `infra/neon/preflight_staging.py` **avant** `alembic upgrade head`. Ce contrôle est en lecture seule et échoue fermé si la cible n’est pas explicitement configurée ou vérifiée. Dans les paramètres **Variables** de l’environnement GitHub `staging`, configurez `STAGING_DATABASE_HOST` avec le nom d’hôte exact du endpoint Neon staging et `STAGING_DATABASE_NAME=vericlaim`. Si `PRODUCTION_DATABASE_HOST` est configurée dans l’environnement, le script refuse une égalité exacte entre l’hôte attendu staging et l’hôte production. La variable secrète `DATABASE_URL_MIGRATOR` doit pointer vers ce même hôte et cette même base. Le script confirme ensuite TLS actif, `current_database()`, `current_user=vericlaim_migrator` et l’absence de privilèges superuser/CREATEROLE/CREATEDB/BYPASSRLS. `PRODUCTION_DATABASE_HOST` doit être une variable au niveau du dépôt (pas uniquement dans l’environnement `production`) afin qu’elle soit visible pendant le workflow staging. Les valeurs d’hôte doivent être vérifiées depuis la console Neon avant de configurer les variables; ne pas deviner ni copier l’endpoint de production.
 
 ## Secrets et shell
 

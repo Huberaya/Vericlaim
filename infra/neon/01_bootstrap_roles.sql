@@ -63,6 +63,20 @@ BEGIN
     IF candidate.rolcanlogin THEN
       RAISE EXCEPTION 'Role % already has LOGIN; refusing to rotate an existing credential.', candidate.rolname;
     END IF;
+
+    -- A role membership can reintroduce privileges through SET ROLE even when
+    -- NOINHERIT is set. Refuse either direction so these dedicated identities
+    -- cannot inherit privileged roles or be assumed by unrelated login roles.
+    IF EXISTS (
+      SELECT 1
+      FROM pg_auth_members AS membership
+      JOIN pg_roles AS granted_role ON granted_role.oid = membership.roleid
+      JOIN pg_roles AS member_role ON member_role.oid = membership.member
+      WHERE granted_role.rolname = candidate.rolname
+         OR member_role.rolname = candidate.rolname
+    ) THEN
+      RAISE EXCEPTION 'Role % has PostgreSQL role memberships; refusing reuse.', candidate.rolname;
+    END IF;
   END LOOP;
 END
 $$;
