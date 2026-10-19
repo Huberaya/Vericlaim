@@ -37,6 +37,7 @@ export type AuthSession = {
 export type AuthStatus = {
   oidc_configured: boolean;
   authentication_required: true;
+  dev_login_enabled?: boolean;
 };
 
 export type CatalogProductLifecycle = "active" | "inactive" | "discontinued";

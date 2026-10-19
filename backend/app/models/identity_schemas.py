@@ -50,6 +50,7 @@ class AuthMeResponse(BaseModel):
 class AuthStatusResponse(BaseModel):
     oidc_configured: bool
     authentication_required: bool = True
+    dev_login_enabled: bool = False
 
 
 class OrganizationCreateRequest(BaseModel):

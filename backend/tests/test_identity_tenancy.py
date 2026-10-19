@@ -370,3 +370,42 @@ def test_oidc_client_verifies_a_real_asymmetric_id_token_signature():
     )
     assert identity.subject == "verified-subject"
     assert identity.email == "verified.user@example.com"
+
+
+def test_dev_login_is_refused_in_production_like_environments(monkeypatch):
+    """The pilot bypass must never mint an administrator session when deployed."""
+    from dataclasses import replace
+
+    from fastapi import HTTPException
+
+    from app.api.v1 import auth as auth_module
+
+    production_settings = replace(settings, environment="production")
+    staging_settings = replace(settings, environment="staging")
+
+    assert auth_module.dev_login_allowed(production_settings) is False
+    assert auth_module.dev_login_allowed(staging_settings) is False
+    assert auth_module.dev_login_allowed(replace(settings, environment="development")) is True
+    assert auth_module.dev_login_allowed(replace(settings, environment="test")) is True
+
+    monkeypatch.setattr(auth_module, "settings", staging_settings)
+    with pytest.raises(HTTPException) as excinfo:
+        auth_module.dev_login(request=None, response=None, db=None)  # type: ignore[arg-type]
+
+    assert excinfo.value.status_code == 404
+    assert excinfo.value.detail == "Not Found"
+
+
+def test_authentication_status_hides_the_dev_login_in_production_like_environments(monkeypatch):
+    from dataclasses import replace
+    from types import SimpleNamespace
+
+    from app.api.v1 import auth as auth_module
+
+    monkeypatch.setattr(auth_module, "settings", replace(settings, environment="production"))
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(oidc_client=object())))
+
+    response = auth_module.authentication_status(request)
+
+    assert response.oidc_configured is True
+    assert response.dev_login_enabled is False
