@@ -50,3 +50,36 @@ GitHub expose les environnements Preview, Production et staging. La dernière Pr
 - OIDC réel, stockage privé S3/MinIO, signatures ClamAV, traitement complet avec ces services, browser E2E et tâches planifiées distantes non validés. Le code de main contient deux workers exécutables en processus mais pas l'ordonnanceur serverless de #7. Une Preview ne prouve pas leur exécution.
 - Staging complet non validé : provisionner et autoriser une application staging avec OIDC, PostgreSQL runtime/migrator séparés, stockage privé chiffré et ClamAV, démarrer les workers, puis rejouer les parcours authentifiés et documentaires réels. Ne pas activer dev-login pour contourner ce prérequis.
 - Revue humaine requise sur auth/RLS/migrations et migration Tailwind (contrôle visuel), puis décision d'intégration ; aucune fusion vers main effectuée.
+
+## Validation HTTP réellement exécutée
+
+Application démarrée via les outils de processus Arena : API Uvicorn `0.0.0.0:8000`, frontend `next start --hostname 0.0.0.0 --port 3000`, proxy serveur relatif `/api`. Base SQLite dédiée `.cache/preview.db`, secret éphémère local ignoré par Git ; aucun dev-login activé. Cette instance est une **preview locale de validation, pas un staging complet**.
+
+Commande depuis backend (secret lu localement, non affiché) :
+
+```sh
+APP_ENV=development AUTH_DEV_LOGIN_ENABLED=false \
+DATABASE_URL=sqlite:////home/user/Vericlaim/.cache/preview.db \
+AUTH_SESSION_SECRET="$(cat ../.cache/preview-session-secret)" \
+VERICLAIM_ALLOW_LOCAL_HTTP_SEED=true \
+../.venv/bin/python -m tests.http_preview_smoke
+```
+
+Résultat observé : code 0 et quatre groupes PASS :
+
+1. HTML frontend 200, proxy API, anonyme 401, dev-login 404, OIDC absent 503 explicite.
+2. Sessions réelles opaques créées directement dans la **base jetable** par le support de test, `/auth/me` 200 ; mutation sans CSRF 403 ; création documentaire 201 ; lecture par propriétaire 200 et autre organisation 404.
+3. Import documentaire avec stockage désactivé 503, sans remplacement par un faux stockage.
+4. Logout 204 puis rejeu du jeton révoqué 401 ; expiration en base puis accès 401.
+
+Le premier lancement du script attendait un objet status sans `authentication_required` : assertion de test rectifiée selon le vrai schéma, aucun contournement côté application. Test navigateur avec rendu/interaction visuelle non exécuté (aucun navigateur installé). Les tests documentaires de la suite exécutent le vrai worker et la persistance avec adaptateurs de test, pas S3/ClamAV externes.
+
+## Publication et état de clôture
+
+- Commit d'intégration de #9 : `fe871a5`.
+- Commit des corrections et registre : `92ffc1bd7a340316110176155198251adc596d44`.
+- PR de cette session : https://github.com/Huberaya/Vericlaim/pull/10 ; base main, head `arena/b48349e4-vericlaim`, ouverte, aucune fusion.
+- CI du commit `92ffc1b` observée verte : https://github.com/Huberaya/Vericlaim/actions/runs/39331921447 (backend, PostgreSQL/RLS, frontend). Un dernier commit ajoute ce script reproductible et ce compte rendu ; ses contrôles doivent être observés à nouveau, pas déduits du précédent run.
+- #7 et #9 laissées ouvertes. #9 est incluse dans #10 ; éviter de compter deux fois ces changements lors de la future intégration.
+- Fichiers supplémentaires hors #9 : workflow CI, environnement Alembic, service/stockage documents, support et tests documents, test URL Alembic, script HTTP, package/lock frontend, PostCSS, directives CSS, ce registre. La liste exhaustive se vérifie par `git diff --name-only 36cd831 HEAD`.
+- **A-01, A-02, A-03, B-01, T-01, T-02 : appliqués, intégrés à la branche, tests locaux réussis. T-03 : bloqué / non validé. Produit complet : non clôturé**, pour les limites explicitement listées plus haut. Aucune revendication de validation OIDC/stockage/antivirus/planification distante.
