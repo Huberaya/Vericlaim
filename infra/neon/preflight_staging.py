@@ -20,10 +20,11 @@ def main() -> int:
     expected_database = os.environ.get("STAGING_DATABASE_NAME", "").strip()
     production_host = os.environ.get("PRODUCTION_DATABASE_HOST", "").strip().lower()
 
-    if not expected_host or not expected_database:
+    if not expected_host or not expected_database or not production_host:
         raise RuntimeError(
             "Refusing staging migration: STAGING_DATABASE_HOST and "
-            "STAGING_DATABASE_NAME must be configured in the staging environment."
+            "STAGING_DATABASE_NAME must be configured in the staging environment, "
+            "and PRODUCTION_DATABASE_HOST must be configured as a repository variable."
         )
     if expected_database != "vericlaim":
         raise RuntimeError("Refusing staging migration: expected staging database name must be 'vericlaim'.")
