@@ -77,6 +77,20 @@ import type {
  */
 export const DOCUMENT_IMPORT_MAX_BYTES = 15 * 1024 * 1024;
 
+// La borne fait foi quand le serveur la publie: /api/v1/auth/status est consulte
+// par le garde d'authentification a chaque ouverture de session, donc le controle
+// anticipe suit le serveur des qu'il connait sa configuration. Un serveur qui ne la
+// publie pas refuse neanmoins les octets plus bas, via l'instruction d'import.
+let serverDocumentUploadMaxBytes: number | null = null;
+
+export function noteServerDocumentUploadBound(value: number | null | undefined): void {
+  serverDocumentUploadMaxBytes = typeof value === "number" && value > 0 ? Math.floor(value) : null;
+}
+
+export function documentImportMaxBytes(): number {
+  return serverDocumentUploadMaxBytes ?? DOCUMENT_IMPORT_MAX_BYTES;
+}
+
 export const API_BASE_URL = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000").replace(/\/+$/, "");
 
 export type AuditOptions = {

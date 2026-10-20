@@ -169,6 +169,9 @@ class DocumentUploadInstructionResponse(BaseModel):
     upload_url: str
     upload_fields: dict[str, str]
     upload_method: str = "POST"
+    # Plafond d'import applique par le serveur (MAX_UPLOAD_BYTES). Ce n'est pas la
+    # taille declaree par le client: la politique du POST, elle, est bornee a la
+    # declaration pour empecher un client de deposer plus qu'il n'a annonce.
     max_size_bytes: int
 
 

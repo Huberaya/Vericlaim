@@ -12,7 +12,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy.orm import Session
 
-from app.core.config import settings
+from app.core.config import settings, settings_of
 from app.api.v1.pagination import decode_page_cursor as _decode_page_cursor, encode_page_cursor
 from app.core.database import get_db
 from app.documents.extraction import (
@@ -293,7 +293,7 @@ def request_document_version_upload(
     try:
         upload_request = request_document_upload(
             db,
-            settings=settings,
+            settings=settings_of(request.app),
             storage=storage,
             organization_id=principal.organization_id,
             actor_user_id=principal.user_id,
@@ -310,7 +310,11 @@ def request_document_version_upload(
         upload=_present_upload(upload_request.upload),
         upload_url=upload_request.upload_form.url,
         upload_fields=upload_request.upload_form.fields,
-        max_size_bytes=body.size_bytes,
+        # La borne qui fait foi est celle du serveur, jamais la taille declaree par
+        # le client: renvoyer body.size_bytes transformait tout controle anticipe en
+        # tautologie (file.size > file.size) et mentait aux integrateurs tiers qui
+        # lisent ce champ comme le plafond du service.
+        max_size_bytes=settings_of(request.app).max_upload_bytes,
     )
 
 
@@ -340,7 +344,7 @@ def complete_document_upload_endpoint(
     try:
         result = complete_document_upload(
             db,
-            settings=settings,
+            settings=settings_of(request.app),
             storage=storage,
             scanner=scanner,
             organization_id=principal.organization_id,
@@ -399,7 +403,7 @@ def retry_document_version_extraction(
     try:
         version, job = retry_document_extraction(
             db,
-            settings=settings,
+            settings=settings_of(request.app),
             organization_id=principal.organization_id,
             actor_user_id=principal.user_id,
             document_version_id=parsed_id,
@@ -427,7 +431,7 @@ def create_download_url(
     try:
         _, url, expires_at = create_document_download(
             db,
-            settings=settings,
+            settings=settings_of(request.app),
             storage=request.app.state.document_storage,
             organization_id=principal.organization_id,
             actor_user_id=principal.user_id,

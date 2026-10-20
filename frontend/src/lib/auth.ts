@@ -1,4 +1,4 @@
-import { requestUrl } from "@/lib/api";
+import { noteServerDocumentUploadBound, requestUrl } from "@/lib/api";
 import { csrfHeaders } from "@/lib/csrf";
 import type { AuthSession, AuthStatus, OrganizationMembership } from "@/lib/types";
 
@@ -32,7 +32,9 @@ async function authenticatedFetch(path: string, init: RequestInit = {}): Promise
 export async function getAuthStatus(): Promise<AuthStatus> {
   const response = await authenticatedFetch("/api/v1/auth/status");
   if (!response.ok) throw new Error(await errorMessage(response));
-  return (await response.json()) as AuthStatus;
+  const status = (await response.json()) as AuthStatus;
+  noteServerDocumentUploadBound(status.document_upload_max_bytes);
+  return status;
 }
 
 export async function getCurrentSession(): Promise<AuthSession | null> {

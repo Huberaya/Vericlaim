@@ -98,6 +98,27 @@ class Settings:
         return self.environment in PRODUCTION_LIKE_ENVIRONMENTS
 
 
+def settings_of(app: object, *, fallback: Settings | None = None) -> Settings:
+    """La configuration reellement servie par cette application.
+
+    Le module expose un singleton `settings`, et `app.state.settings` le reproduit
+    au demarrage. Lire la configuration via l'application rend les gardes et les
+    contrats publishables cohérents entre eux quand un hote installe une autre
+    configuration (tests d'integration, serveur embarque) : sans cela, le garde de
+    session de developpement pouvait refuser un acces que l'application autorisait,
+    ou la borne publiee par /auth/status ne plus etre celle qu'applique l'import.
+
+    `fallback` permet a un module appele de conserver sa propre reference patchable
+    (les tests unitaires remplacent ``settings`` module par module) ; sans lui, le
+    singleton du module config sert de derniere ressource. Un `app` absent ou `None`
+    n'est pas une erreur : la configuration de secours repond.
+    """
+
+    state = getattr(app, "state", None)
+    installed = getattr(state, "settings", None)
+    return installed if installed is not None else (fallback if fallback is not None else settings)
+
+
 def _bool_from_env(value: str | None, *, default: bool) -> bool:
     if value is None:
         return default

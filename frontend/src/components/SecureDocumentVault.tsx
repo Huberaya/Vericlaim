@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, type ChangeEvent, type DragEvent } from "react";
 import PersistentAnalysisPanel from "@/components/PersistentAnalysisPanel";
 import {
-  DOCUMENT_IMPORT_MAX_BYTES,
+  documentImportMaxBytes,
   archiveSecureDocument,
   createSecureDocumentDownloadUrl,
   getSecureDocument,
@@ -94,7 +94,8 @@ function validateFile(file: File): string | null {
   if (!ACCEPTED_EXTENSIONS.has(extension)) return "Formats acceptés : PDF, TXT UTF-8, PNG, JPG, TIFF ou WEBP.";
   if (file.name.length > 500 || /["/\\\u0000]/.test(file.name)) return "Le nom du fichier contient un caractère non autorisé.";
   if (file.size === 0) return "Le fichier est vide.";
-  if (file.size > DOCUMENT_IMPORT_MAX_BYTES) return `Le fichier dépasse le plafond de ${Math.round(DOCUMENT_IMPORT_MAX_BYTES / (1024 * 1024))} Mo appliqué par le navigateur. Le serveur applique sa propre limite et la refusera si elle est dépassée.`;
+  const maxBytes = documentImportMaxBytes();
+  if (file.size > maxBytes) return `Le fichier dépasse la limite d'import en vigueur (${Math.round(maxBytes / (1024 * 1024))} Mo) publiée par le serveur : aucun octet ne sera transféré.`;
   return null;
 }
 
@@ -438,7 +439,7 @@ export default function SecureDocumentVault({ canManage, canRunAnalysis, canRead
             <div>
               <strong>{file ? file.name : "Déposez une pièce à conserver"}</strong>
               <p>{file ? `${(file.size / 1024).toLocaleString("fr-FR", { maximumFractionDigits: 1 })} Ko · contrôle avant promotion`
-                  : `PDF, TXT UTF-8, PNG, JPG, TIFF ou WEBP · ${Math.round(DOCUMENT_IMPORT_MAX_BYTES / (1024 * 1024))} Mo maximum par le navigateur`}</p>
+                  : `PDF, TXT UTF-8, PNG, JPG, TIFF ou WEBP · ${Math.round(documentImportMaxBytes() / (1024 * 1024))} Mo maximum`}</p>
             </div>
             <button type="button" className="button button-secondary choose-file" disabled={isSubmitting} onClick={() => inputRef.current?.click()}>
               Choisir un fichier

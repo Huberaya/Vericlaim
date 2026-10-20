@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState, type DragEvent, type ChangeEvent } from "react";
-import { DOCUMENT_IMPORT_MAX_BYTES } from "@/lib/api";
+import { documentImportMaxBytes } from "@/lib/api";
 import type { EvidenceItem } from "@/lib/types";
 
 type Props = {
@@ -74,8 +74,9 @@ export default function DocumentUploader({
       setLocalError("Le fichier est vide.");
       return;
     }
-    if (file.size > DOCUMENT_IMPORT_MAX_BYTES) {
-      setLocalError(`Le fichier dépasse le plafond de ${Math.round(DOCUMENT_IMPORT_MAX_BYTES / (1024 * 1024))} Mo appliqué par le navigateur.`);
+    const maxBytes = documentImportMaxBytes();
+    if (file.size > maxBytes) {
+      setLocalError(`Le fichier dépasse la limite d'import en vigueur (${Math.round(maxBytes / (1024 * 1024))} Mo) publiée par le serveur.`);
       return;
     }
     setFileName(file.name);
@@ -159,7 +160,7 @@ export default function DocumentUploader({
           <div className="drop-icon" aria-hidden="true"><span>↑</span></div>
           <div className="drop-title">Glissez votre fichier ici</div>
           <div className="drop-caption">
-            {`PDF ou TXT · ${Math.round(DOCUMENT_IMPORT_MAX_BYTES / (1024 * 1024))} Mo maximum par le navigateur · OCR disponible pour les PDF numérisés`}
+            {`PDF ou TXT · ${Math.round(documentImportMaxBytes() / (1024 * 1024))} Mo maximum · OCR disponible pour les PDF numérisés`}
           </div>
           {fileName && <div className="selected-file"><span aria-hidden="true">▤</span>{fileName}</div>}
           <button type="button" className="button button-secondary choose-file" onClick={() => inputRef.current?.click()} disabled={isLoading}>
