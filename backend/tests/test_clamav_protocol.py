@@ -21,7 +21,7 @@ def receive_exact(connection, size):
 
 
 @contextmanager
-def protocol_peer(response, *, stall=0):
+def protocol_peer(response, *, stall=0, trailing=b"", keep_open=0):
     with socket.socket() as listener, ThreadPoolExecutor(max_workers=1) as pool:
         listener.bind(("127.0.0.1", 0))
         listener.listen(1)
@@ -40,6 +40,10 @@ def protocol_peer(response, *, stall=0):
                 time.sleep(stall)
                 try:
                     connection.sendall(response)
+                    if trailing:
+                        time.sleep(0.02)  # separate TCP reads must not change the verdict
+                        connection.sendall(trailing)
+                    time.sleep(keep_open)
                 except (BrokenPipeError, ConnectionResetError):
                     pass  # expected when the client rejects a timeout/oversize
                 return bytes(received)
@@ -58,6 +62,7 @@ def protocol_peer(response, *, stall=0):
     b"stream: OK\0stream: Eicar FOUND\0",
     b"stream: " + b"x" * (16 * 1024) + b" OK\0",
     b"stream: \xff FOUND\0",
+    b"stream:    FOUND\0",
     b"stream: size limit exceeded ERROR\0",
     b"",
 ])
@@ -101,7 +106,7 @@ def test_response_deadline_is_total_not_renewed_per_fragment(monkeypatch):
 
 def test_fragmented_clean_verdict_is_accepted():
     class FragmentedPeer:
-        chunks = iter([b"str", b"eam: ", b"OK", b"\0"])
+        chunks = iter([b"str", b"eam: ", b"OK", b"\0", b""])
 
         def settimeout(self, timeout):
             pass
@@ -112,14 +117,19 @@ def test_fragmented_clean_verdict_is_accepted():
     assert ClamAvMalwareScanner._read_response(FragmentedPeer(), deadline=time.monotonic() + 1) == "stream: OK"
 
 
-def test_invalid_tcp_verdict_leaves_upload_unavailable_not_clean():
+@pytest.mark.parametrize("response,trailing", [
+    (b"not-a-verdict OK\0", b""),
+    (b"stream: OK\0", b"stream: Eicar FOUND\0"),
+    (b"stream:    FOUND\0", b""),
+])
+def test_invalid_tcp_verdict_leaves_upload_unavailable_not_clean(response, trailing):
     from fastapi.testclient import TestClient
     from tests.auth_support import authenticate_client
     from tests.test_secure_documents import _install_document_fakes, _create_document, _request_upload
 
     app, storage, _, old_storage, old_scanner = _install_document_fakes()
     try:
-        with protocol_peer(b"not-a-verdict OK\0") as (scanner, _), TestClient(app) as client:
+        with protocol_peer(response, trailing=trailing) as (scanner, _), TestClient(app) as client:
             app.state.document_scanner = scanner
             authenticate_client(client, role_code="analyst")
             document = _create_document(client)
@@ -134,3 +144,25 @@ def test_invalid_tcp_verdict_leaves_upload_unavailable_not_clean():
     finally:
         app.state.document_storage = old_storage
         app.state.document_scanner = old_scanner
+
+
+@pytest.mark.parametrize("trailing", [b"stream: Eicar FOUND\0", b"\0", b"unexpected"])
+def test_trailing_frame_in_a_later_tcp_read_is_ambiguous(trailing):
+    class FragmentedPeer:
+        chunks = iter([b"stream: OK\0", trailing, b""])
+
+        def settimeout(self, timeout):
+            assert timeout > 0
+
+        def recv(self, size):
+            return next(self.chunks)
+
+    with pytest.raises(MalwareScanError):
+        ClamAvMalwareScanner._read_response(FragmentedPeer(), deadline=time.monotonic() + 1)
+
+
+def test_clean_frame_without_connection_end_times_out_closed():
+    with protocol_peer(b"stream: OK\0", keep_open=0.15) as (scanner, _):
+        scanner._timeout_seconds = 0.05
+        with pytest.raises(MalwareScannerUnavailableError):
+            scanner.scan(b"untrusted bytes")

@@ -82,7 +82,7 @@ class ClamAvMalwareScanner:
         # A clamd response is e.g. "stream: OK" or
         # "stream: Eicar-Test-Signature FOUND". Never return the signature to
         # callers: it is recorded only as a generic security rejection.
-        if response.startswith("stream: ") and response.endswith(" FOUND") and response[8:-6]:
+        if response.startswith("stream: ") and response.endswith(" FOUND") and response[8:-6].strip():
             return MalwareScanResult(is_clean=False, engine="clamav")
         if response == "stream: OK":
             return MalwareScanResult(is_clean=True, engine="clamav")
@@ -117,6 +117,13 @@ class ClamAvMalwareScanner:
                     raise MalwareScanError("Le verdict antivirus est mal encodé.") from exc
                 if not response or any(ord(char) < 32 or ord(char) == 127 for char in response):
                     raise MalwareScanError("Le verdict antivirus contient des caractères invalides.")
+                # Outside IDSESSION, clamd closes the connection after its single
+                # reply. TCP boundaries are arbitrary: a second frame may arrive in
+                # another recv(), not in `trailing` above. Require EOF within the
+                # same total deadline; a peer that stalls or sends more is unknown.
+                connection.settimeout(ClamAvMalwareScanner._remaining_timeout(deadline))
+                if connection.recv(1):
+                    raise MalwareScanError("Le service antivirus a retourné une réponse ambiguë.")
                 return response
         raise MalwareScanError("Le verdict antivirus dépasse la taille autorisée.")
 
