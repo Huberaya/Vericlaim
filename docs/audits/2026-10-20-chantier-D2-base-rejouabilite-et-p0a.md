@@ -135,3 +135,54 @@ ajoutée là où le code est déjà juste, mais vérification refaite ici plutô
 - La CI de la branche va désormais exécuter `test_upload_bound_contract.py` **sans** PostgreSQL ni npm : la
   parité de contrat frontend y est vérifiée par lecture statique des fichiers du dépôt, pour ne pas créer de
   faux négatif ; le test saute si `frontend/src` est absent du checkout.
+
+## 6. Incident de cible mobile : la base a bougé pendant le lot, et a été fusionnée
+
+Pendant l'implémentation de P0-A, la branche du candidat A a avancé : `274c6ee` →
+**`1449ee9b`** (6 commits, dont `d74b6a8`, `4ac6555`, `96f3afc`, `1449ee9`, et deux commits
+de rejouabilité `3eecfff`/`4a1d707`). `274c6ee` reste **ancêtre** de `1449ee9b` (vérifié :
+`merge-base --is-ancestor` = 0), donc aucune régression d'ascendance — mais le contenu
+respectif divergeait. Aucun commit n'a été réécrit sur leur ref, aucune branche n'a été
+forcée : le choix a été de **fusionner leur tête dans la mienne** (`5ee39b8`), et non de
+redécouper leur travail.
+
+| Leur commit | Contenu | Effet sur ce chantier |
+| --- | --- | --- |
+| `d74b6a8` | même correction que P0-A sur la ligne `max_size_bytes`, plus le *fencing* des tentatives d'analyse revendues (`analyses/service.py`) et `test_delivery_regressions.py` (109 l.) | **1 seule ligne de conflit** dans `documents.py` : leur `settings.max_upload_bytes` (singleton du module) contre ma borne lue dans la configuration servie. Résolu vers la version la plus large, leur attente de test (`== settings.max_upload_bytes`) reste vraie : `create_app` installe le même objet, et leur test ne rebind aucune référence |
+| `4ac6555` | chaîne d'audit sérialisée et transactions préservées | **clôt les deux corrections transverses** que le chantier G devait faire approuver : verrou `pg_advisory_xact_lock` par organisation, dérivé de `sha256("engine-audit:"+org)`, posé même sur chaîne vide et sans privilège `UPDATE` (`core/database.py:206-224`) ; contexte PostgreSQL request-local restauré par un hook `after_begin` après chaque commit. Test dédié `test_postgres_operational_integrity.py` (96 l.) exécuté sur le serveur réel |
+| `96f3afc` | reprise des jobs de documents inactifs sans bloquer les files des autres tenants (`extraction.py`) + `test_inactive_document_jobs.py` (105 l.) | recoupe la borne des tentatives du worker annoncée au lot P0-C |
+| `1449ee9` | test de l'audit documentaire sur HTTP, `http_preview_smoke.py`, rapport de livraison | rien à redécider |
+| `3eecfff`/`4a1d707` | leur propre rejouabilité des sources G1 (dont le rapport B-exécution sous `docs/audits/`) | converge avec ma copie de préservation : même source, deux reconstructions — d'où cette fusion plutôt qu'un second dépôt parallèle |
+
+### Ce qui reste ouvert, mesuré après fusion
+
+Les symboles des correctifs F (cycle de vie et purge) sont **absents** de l'arbre fusionné
+(dénombrement par `grep -rl` sur `backend/app` et `backend/tests`) :
+`retry_retained_document_purges` 0, `PrefixDeletionResult` 0, `delete_prefix` 0,
+`upload_object_purge_retained` 0 — le lot **P1 reste donc entier** : purger l'objet après le
+commit de transition, marqueur posé avec ce commit, sweep ligne par ligne, et honnêteté des
+champs (`scan_error_code`, et `quarantine_deleted` dans `_record_rejection` (`service.py:421`)
+qui dit « non supprimé » quand il n'y avait rien à supprimer). P0-C conserve le rejet d'une
+réponse ClamAV **ambiguë** (leur `fencing` porte sur la reprise de job, pas sur la réponse de
+l'antivirus).
+
+### Mesures sur l'arbre fusionné (état final mesuré)
+
+- `pytest -q` avec `VERICLAIM_TEST_POSTGRES_URL` : **183 passed, 0 failed, 0 skipped** en 18,04 s
+  (baseline avant P0-A sur `274c6ee` : 139 ; leur tête seule en apportait d'autres, l'addition
+  est vérifiée exécutée, pas comptée).
+- `npx tsc --noEmit` : 0 erreur ; `npm run build` : exit 0 ; `npm audit --omit=dev` : 0.
+- Copie de préservation resynchronisée puis revérifiée après la fusion : V1 15/0, V2 24/0,
+  V3 True, V4 applicable, V5 24 identiques/0 divergent, V6 True.
+- Environnement CI de la branche : `APP_ENV=test`, `DATABASE_URL=sqlite:////tmp/vericlaim-ci.db`,
+  `AUTH_DEV_LOGIN_ENABLED` **absent** (vérifié dans `.github/workflows/continuous-integration.yml`
+  lignes 25-26 et 107-108) — les assertions fail-closed du nouveau test restent donc exactes en CI,
+  et le test de parité frontend y lit les fichiers du dépôt sans dépendre de `npm test`.
+
+### Conséquence pour la revue
+
+La branche poussée `arena/2672a0ba-vericlaim` **contient désormais la tête de la PR #10** par
+ascendance. Deux issues pour le pilote, pas pour moi : fusionner cette PR-là fait disparaître #10
+(comme fusionnée par contenu) ; fusionner #10 d'abord réduit cette PR à trois commits (rejouabilité
+B/G1, P0-A, ce rapport). Le choix d'ordre de fusion, comme la décision sur les rapports non suivis
+de `main` qui ne sont pas réintégrés (§3), reste au responsable.
