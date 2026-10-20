@@ -104,14 +104,15 @@ def _get_version(db: Session, *, organization_id: UUID, version_id: UUID, lock: 
     return version
 
 
-def _get_document(db: Session, *, organization_id: UUID, document_id: UUID, lock: bool = False) -> Document:
+def _get_document(db: Session, *, organization_id: UUID, document_id: UUID, lock: bool = False, include_deleted: bool = False) -> Document:
     statement = select(Document).where(
         Document.organization_id == organization_id,
         Document.id == document_id,
-        Document.deleted_at.is_(None),
     )
+    if not include_deleted:
+        statement = statement.where(Document.deleted_at.is_(None))
     if lock:
-        statement = statement.with_for_update()
+        statement = statement.execution_options(populate_existing=True).with_for_update()
     document = db.scalar(statement)
     if document is None:
         raise DocumentExtractionNotFoundError("Document introuvable ou inaccessible.")
@@ -136,7 +137,7 @@ def _get_job_for_version(
 
 def _set_document_status_from_latest_version(db: Session, *, document: Document, organization_id: UUID) -> None:
     """Keep the logical document status aligned with its latest immutable version."""
-    if document.status in {DocumentStatus.ARCHIVED, DocumentStatus.DELETED}:
+    if document.deleted_at is not None or document.status in {DocumentStatus.ARCHIVED, DocumentStatus.DELETED}:
         return
     latest = db.scalar(
         select(DocumentVersion)
@@ -307,6 +308,28 @@ def retry_document_extraction(
     return version, job
 
 
+def _document_inactive(document: Document) -> bool:
+    return document.deleted_at is not None or document.status in {DocumentStatus.ARCHIVED, DocumentStatus.DELETED}
+
+
+def _finish_inactive_job(db: Session, *, job: DocumentExtractionJob, version: DocumentVersion, organization_id: UUID) -> None:
+    """Terminate dead work without changing archived/deleted document state."""
+    now = utcnow()
+    already_complete = version.extraction_status in {ExtractionStatus.COMPLETED, ExtractionStatus.REVIEW_REQUIRED}
+    job.status = DocumentExtractionJobStatus.COMPLETED if already_complete else DocumentExtractionJobStatus.FAILED
+    job.error_code = None if already_complete else "document_inactive"
+    job.completed_at = now
+    job.locked_at = job.lease_expires_at = job.worker_id = None
+    if not already_complete:
+        version.extraction_status = ExtractionStatus.FAILED
+        version.extraction_error_code = "document_inactive"
+        version.extraction_completed_at = now
+    append_audit_event(db, organization_id=organization_id, actor_user_id=None,
+        entity_type="document_extraction_job", entity_id=job.id, action="document.extraction_stopped",
+        payload={"document_version_id": str(version.id), "reason": "document_inactive"})
+    db.flush()
+
+
 def _recover_expired_leases(
     db: Session,
     *,
@@ -328,7 +351,10 @@ def _recover_expired_leases(
     )
     for job in expired:
         version = _get_version(db, organization_id=organization_id, version_id=job.document_version_id, lock=True)
-        document = _get_document(db, organization_id=organization_id, document_id=version.document_id, lock=True)
+        document = _get_document(db, organization_id=organization_id, document_id=version.document_id, lock=True, include_deleted=True)
+        if _document_inactive(document):
+            _finish_inactive_job(db, job=job, version=version, organization_id=organization_id)
+            continue
         job.locked_at = None
         job.lease_expires_at = None
         job.worker_id = None
@@ -407,7 +433,10 @@ def claim_next_document_extraction_job(
     if job is None:
         return None
     version = _get_version(db, organization_id=organization_id, version_id=job.document_version_id, lock=True)
-    document = _get_document(db, organization_id=organization_id, document_id=version.document_id, lock=True)
+    document = _get_document(db, organization_id=organization_id, document_id=version.document_id, lock=True, include_deleted=True)
+    if _document_inactive(document):
+        _finish_inactive_job(db, job=job, version=version, organization_id=organization_id)
+        return None
 
     if version.extraction_status in {ExtractionStatus.COMPLETED, ExtractionStatus.REVIEW_REQUIRED}:
         job.status = DocumentExtractionJobStatus.COMPLETED
@@ -514,6 +543,9 @@ def process_claimed_document_extraction(
         raise DocumentExtractionConflictError("Le lease du job d’extraction a expiré avant son traitement.")
 
     version = _get_version(db, organization_id=claim.organization_id, version_id=job.document_version_id)
+    document = _get_document(db, organization_id=claim.organization_id, document_id=version.document_id, include_deleted=True)
+    if _document_inactive(document):
+        raise DocumentExtractionTerminalError("document_inactive", "Le document est archivé ou supprimé.")
     try:
         payload = storage.read_bytes(
             bucket=settings.document_clean_bucket,
@@ -604,7 +636,9 @@ def _publish_extraction_result(
         raise DocumentExtractionConflictError("Le lease du job d’extraction a expiré avant la publication.")
     job = current_job
     version = _get_version(db, organization_id=claim.organization_id, version_id=job.document_version_id, lock=True)
-    document = _get_document(db, organization_id=claim.organization_id, document_id=version.document_id, lock=True)
+    document = _get_document(db, organization_id=claim.organization_id, document_id=version.document_id, lock=True, include_deleted=True)
+    if _document_inactive(document):
+        raise DocumentExtractionTerminalError("document_inactive", "Le document est archivé ou supprimé.")
 
     existing_segments = db.scalar(
         select(func.count())
@@ -743,7 +777,7 @@ def record_document_extraction_failure(
     ):
         return False
     version = _get_version(db, organization_id=claim.organization_id, version_id=job.document_version_id, lock=True)
-    document = _get_document(db, organization_id=claim.organization_id, document_id=version.document_id, lock=True)
+    document = _get_document(db, organization_id=claim.organization_id, document_id=version.document_id, lock=True, include_deleted=True)
     now = utcnow()
     job.error_code = error_code
     job.locked_at = None
