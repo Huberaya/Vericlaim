@@ -64,6 +64,7 @@ if settings.database_url.startswith("sqlite"):
 engine = create_engine(settings.database_url, **_engine_kwargs)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
 
+
 @event.listens_for(Session, "after_begin")
 def _restore_transaction_request_context(session: Session, transaction, connection) -> None:
     """SET LOCAL expires at commit/rollback; restore only this Session's context.
@@ -79,7 +80,6 @@ def _restore_transaction_request_context(session: Session, transaction, connecti
         {"user_id": str(session.info["current_user_id"]),
          "organization_id": str(session.info.get("current_organization_id") or "")},
     )
-
 
 
 def _expected_alembic_revision() -> str:

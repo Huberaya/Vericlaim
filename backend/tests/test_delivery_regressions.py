@@ -106,4 +106,3 @@ def test_analysis_old_attempt_cannot_modify_reclaimed_job(operation, monkeypatch
                 process_claimed_analysis_detection(db, claim=fresh)
     finally:
         engine.dispose()
-
