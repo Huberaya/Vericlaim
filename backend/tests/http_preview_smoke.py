@@ -50,7 +50,11 @@ def main() -> None:
         document_id = response.json()["id"]
         assert a.get(f"/api/v1/documents/{document_id}").status_code == 200
         assert b.get(f"/api/v1/documents/{document_id}").status_code == 404
-        print("PASS valid sessions, CSRF refusal, document metadata persistence, two-tenant API isolation")
+        verification = a.get("/api/v1/audit/verify")
+        assert verification.status_code == 200, verification.text
+        assert verification.json()["is_valid"] is True
+        assert verification.json()["total_events"] >= 1
+        print("PASS valid sessions, CSRF refusal, document metadata persistence, two-tenant API isolation and audit verification")
 
         response = a.post(f"/api/v1/documents/{document_id}/versions", json={
             "source_filename": "sample.txt", "content_type": "text/plain", "size_bytes": 4,

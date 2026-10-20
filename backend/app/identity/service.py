@@ -430,22 +430,28 @@ def append_audit_event(
     action: str,
     payload: dict[str, Any],
     request_id: str | None = None,
+    occurred_at: datetime | None = None,
 ) -> AuditEvent:
-    """Append a tenant-scoped event without mutating historical events.
+    """Append atomically under a tenant transaction lock, including genesis.
 
-    PostgreSQL callers are already in a request transaction and RLS context.
-    ``FOR UPDATE`` serializes the common non-empty-chain case; a stronger
-    cross-writer serialization strategy remains a dedicated audit workstream.
+    Audit rows are append-only: SELECT FOR UPDATE is not permitted for the
+    runtime role. A transaction-scoped advisory lock serializes all writers
+    without weakening table grants or requiring an existing genesis row.
     """
+    if db.get_bind().dialect.name == "postgresql":
+        import hashlib
+        lock_key = int.from_bytes(hashlib.sha256(("audit:" + str(organization_id)).encode()).digest()[:8], "big", signed=True)
+        db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": lock_key})
     previous = db.scalar(
         select(AuditEvent)
         .where(AuditEvent.organization_id == organization_id)
         .order_by(AuditEvent.occurred_at.desc(), AuditEvent.id.desc())
         .limit(1)
-        .with_for_update()
     )
     previous_hash = previous.event_hash if previous else None
-    occurred_at = utcnow()
+    occurred_at = _as_utc(occurred_at) if occurred_at else utcnow()
+    if previous is not None and occurred_at <= _as_utc(previous.occurred_at):
+        occurred_at = _as_utc(previous.occurred_at) + timedelta(microseconds=1)
     payload_hash = sha256_json(payload)
     material = {
         "organization_id": str(organization_id),

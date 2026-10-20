@@ -313,8 +313,9 @@ def request_document_version_upload(
         # La borne qui fait foi est celle du serveur, jamais la taille declaree par
         # le client: renvoyer body.size_bytes transformait tout controle anticipe en
         # tautologie (file.size > file.size) et mentait aux integrateurs tiers qui
-        # lisent ce champ comme le plafond du service.
-        max_size_bytes=settings_of(request.app).max_upload_bytes,
+        # lisent ce champ comme le plafond du service. Le module reste la derniere
+        # ressource patchable (voir settings_of) pour les appels unitaires.
+        max_size_bytes=settings_of(request.app, fallback=settings).max_upload_bytes,
     )
 
 
