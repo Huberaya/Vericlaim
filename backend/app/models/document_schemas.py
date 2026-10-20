@@ -82,6 +82,20 @@ class DocumentResponse(BaseModel):
     updated_at: datetime
 
 
+class DocumentListResponse(BaseModel):
+    """One page of the tenant vault; the cursor is opaque, like the catalogue's."""
+
+    items: list[DocumentResponse]
+    next_cursor: str | None = None
+
+
+class DocumentArchiveResponse(BaseModel):
+    document: DocumentResponse
+    # ``True`` when the document was already retired, so the caller can tell a
+    # repeated idempotent request from the transition it triggered.
+    already_archived: bool
+
+
 class DocumentExtractionJobResponse(BaseModel):
     status: DocumentExtractionJobStatus
     attempt_count: int
@@ -155,6 +169,9 @@ class DocumentUploadInstructionResponse(BaseModel):
     upload_url: str
     upload_fields: dict[str, str]
     upload_method: str = "POST"
+    # Plafond d'import applique par le serveur (MAX_UPLOAD_BYTES). Ce n'est pas la
+    # taille declaree par le client: la politique du POST, elle, est bornee a la
+    # declaration pour empecher un client de deposer plus qu'il n'a annonce.
     max_size_bytes: int
 
 

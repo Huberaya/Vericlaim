@@ -32,6 +32,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     Uuid,
+    text,
 )
 from sqlalchemy import (
     Enum as SAEnum,
@@ -664,8 +665,31 @@ class DocumentUpload(UUIDPrimaryKeyMixin, TimestampMixin, TenantScopedMixin, Bas
     scan_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     scan_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     scan_error_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # Registre de libération: « cet objet doit encore sortir du stockage ». Il est écrit
+    # avec la transition qui autorise la suppression, jamais après, et il n'est fermé que
+    # par une passe qui a relit le stockage. Sans lui, un échec de suppression ou un krach
+    # entre commit et libération laissait l'objet en quarantaine sans trace ni reprise.
+    purge_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
+    purge_kind: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    purge_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    purge_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+    purge_last_error: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    purge_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (
+        CheckConstraint(
+            "purge_attempts >= 0",
+            name="ck_document_uploads_purge_attempts_nonnegative",
+        ),
+        CheckConstraint(
+            "purge_required = false OR purge_kind IS NOT NULL",
+            name="ck_document_uploads_purge_kind_required",
+        ),
+        Index(
+            "ix_document_uploads_purge_open",
+            "organization_id",
+            "purge_requested_at",
+        ),
         CheckConstraint("declared_size_bytes > 0", name="ck_document_uploads_declared_size_positive"),
         CheckConstraint(
             "uploaded_size_bytes IS NULL OR uploaded_size_bytes > 0",

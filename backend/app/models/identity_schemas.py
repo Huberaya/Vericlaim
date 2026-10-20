@@ -51,6 +51,10 @@ class AuthStatusResponse(BaseModel):
     oidc_configured: bool
     authentication_required: bool = True
     dev_login_enabled: bool = False
+    # Publiee ici pour que le client connaisse la borne avant toute declaration
+    # d'import: MAX_UPLOAD_BYTES est configurable, une constante compilee cote
+    # navigateur ne peut que diverger du serveur.
+    document_upload_max_bytes: int | None = None
 
 
 class OrganizationCreateRequest(BaseModel):

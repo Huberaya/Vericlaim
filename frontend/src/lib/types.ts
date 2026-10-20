@@ -38,6 +38,10 @@ export type AuthStatus = {
   oidc_configured: boolean;
   authentication_required: true;
   dev_login_enabled?: boolean;
+  // Borne d'import reellement appliquee par le serveur (MAX_UPLOAD_BYTES), publiee
+  // pour que le controle anticipe du navigateur ne parle plus au nom du serveur
+  // depuis une constante compilee. Absente sur un serveur plus ancien: repli.
+  document_upload_max_bytes?: number | null;
 };
 
 export type CatalogProductLifecycle = "active" | "inactive" | "discontinued";
@@ -1143,4 +1147,16 @@ export type AuditIntegrityCertificate = {
   certified_at: string;
   issuer: string;
   legal_disclaimer: string;
+};
+
+export type DocumentListPage = {
+  items: StoredDocument[];
+  next_cursor: string | null;
+};
+
+export type DocumentArchiveResult = {
+  document: StoredDocument;
+  // Le serveur répond déjà_archivé lors d'une relance: la retirement est
+  // idempotente et ne doit jamais être présentée comme un échec.
+  already_archived: boolean;
 };

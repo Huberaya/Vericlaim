@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.v1.presenters import present_membership, present_user
-from app.core.config import Settings, settings
+from app.core.config import Settings, settings, settings_of
 from app.core.database import get_db
 from app.identity.dependencies import (
     AuthenticatedPrincipal,
@@ -55,6 +55,17 @@ from app.models.identity_schemas import (
 router = APIRouter(prefix="/api/v1/auth", tags=["authentication"])
 
 
+def _live_settings(request: Request | None) -> Settings:
+    """La configuration reellement servie par cette application (voir ``settings_of``).
+
+    Le module reste la derniere ressource : `dev_login` est egalement appele
+    directement par les tests, sans objet requete, et un module qui patche
+    ``auth.settings`` doit continuer d'etre cru par le garde.
+    """
+
+    return settings_of(getattr(request, "app", None), fallback=settings)
+
+
 def dev_login_allowed(current_settings: Settings | None = None) -> bool:
     """The pilot bypass requires an explicit opt-in and never runs deployed.
 
@@ -81,9 +92,11 @@ def _oidc_client_or_503(request: Request):
 
 @router.get("/status", response_model=AuthStatusResponse)
 def authentication_status(request: Request) -> AuthStatusResponse:
+    active = _live_settings(request)
     return AuthStatusResponse(
         oidc_configured=getattr(request.app.state, "oidc_client", None) is not None,
-        dev_login_enabled=dev_login_allowed(),
+        dev_login_enabled=dev_login_allowed(active),
+        document_upload_max_bytes=active.max_upload_bytes,
     )
 
 
@@ -209,7 +222,7 @@ def dev_login(
     db: Session = Depends(get_db),
 ) -> AuthMeResponse:
     """Allow immediate developer/pilot session creation when OIDC is not yet connected."""
-    if not dev_login_allowed():
+    if not dev_login_allowed(_live_settings(request)):
         # This bypass creates an administrator membership, so it must not be
         # reachable once the application runs in a production-like environment.
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")

@@ -132,45 +132,58 @@ def create_tables() -> None:
     Base.metadata.create_all(bind=engine)
 
 
-_fallback_engine = None
-_FallbackSession = None
+class DatabaseUnavailableError(RuntimeError):
+    """The configured database cannot be reached for this request.
+
+    Raised instead of the former transparent SQLite fallback. It is mapped to a
+    tenant-safe ``503`` by the ASGI boundary in ``app.main`` so an outage is
+    never answered with a fabricated success.
+    """
 
 
-def _get_fallback_sessionmaker():
-    global _fallback_engine, _FallbackSession
-    if _FallbackSession is None:
-        _fallback_engine = create_engine("sqlite:////tmp/vericlaim_fallback.db", connect_args={"check_same_thread": False})
-        from app.models import domain as _domain_models  # noqa: F401
+def probe_database() -> bool:
+    """Return whether the configured database answers, without opening a request session.
 
-        Base.metadata.create_all(bind=_fallback_engine)
-        _FallbackSession = sessionmaker(bind=_fallback_engine, autoflush=False, autocommit=False, expire_on_commit=False)
-        with _FallbackSession() as init_db:
-            from app.identity.roles import ensure_system_roles
-
-            ensure_system_roles(init_db)
-            init_db.commit()
-    return _FallbackSession
+    The readiness view reports the same fact the request path depends on, so a
+    deployment can never advertise readiness from a cached import-time check.
+    """
+    try:
+        with SessionLocal() as db:
+            db.execute(select(1))
+        return True
+    except Exception:
+        return False
 
 
 def get_db() -> Iterator[Session]:
-    """Yield one transaction per HTTP request.
+    """Yield one transaction per HTTP request, failing closed on any outage.
 
     Request-scoped PostgreSQL settings used by RLS are installed with
     ``set_config(..., true)`` and therefore remain active until this transaction
     ends.  Service functions must ``flush`` for integrity errors, not commit
     independently.
+
+    ADR-002 makes PostgreSQL the only source of truth: there is deliberately no
+    secondary, in-process or on-disk session factory here. A silent fallback
+    would (1) leave every tenant-scoped read and write unprotected by row-level
+    security, (2) forge ``audit_events``/``audit_records`` hash chains inside a
+    scratch file that is never backed up or replicated, and (3) answer 2xx while
+    PostgreSQL is down, splitting the durable document pipeline across two
+    divergent datasets. SQLite stays legitimate only as an explicitly configured
+    ``DATABASE_URL`` for isolated tests and local development.
     """
+    # Session construction is inside the guard as well: a pool or transport
+    # failure must surface as the mapped 503, never as a raw driver traceback.
     db = None
     try:
         db = SessionLocal()
         db.execute(select(1))
-    except Exception:
+    except Exception as exc:
         if db is not None:
             db.close()
-        if settings.is_production_like:
-            raise
-        fallback_sm = _get_fallback_sessionmaker()
-        db = fallback_sm()
+        raise DatabaseUnavailableError(
+            "La base de données VeriClaim est injoignable; aucune session de secours n’est ouverte."
+        ) from exc
 
     try:
         yield db

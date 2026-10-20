@@ -7,10 +7,13 @@ metadata, scans malware and promotes the object to the clean bucket.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy.orm import Session
 
-from app.core.config import settings
+from app.core.config import settings, settings_of
+from app.api.v1.pagination import decode_page_cursor as _decode_page_cursor, encode_page_cursor
 from app.core.database import get_db
 from app.documents.extraction import (
     DocumentExtractionConflictError,
@@ -23,10 +26,12 @@ from app.documents.security import DocumentSecurityValidationError
 from app.documents.service import (
     DocumentConflictError,
     DocumentNotFoundError,
+    archive_document,
     complete_document_upload,
     create_document,
     create_document_download,
     document_detail,
+    list_documents,
     request_document_upload,
 )
 from app.documents.storage import ObjectStorageError, ObjectStorageUnavailableError
@@ -36,11 +41,13 @@ from app.identity.dependencies import (
     require_permission,
 )
 from app.models.document_schemas import (
+    DocumentArchiveResponse,
     DocumentCreateRequest,
     DocumentDetailResponse,
     DocumentDownloadResponse,
     DocumentExtractionJobResponse,
     DocumentExtractionRetryResponse,
+    DocumentListResponse,
     DocumentResponse,
     DocumentSegmentResponse,
     DocumentUploadCompletionResponse,
@@ -54,6 +61,8 @@ from app.models.domain import (
     Document,
     DocumentExtractionJob,
     DocumentSegment,
+    DocumentStatus,
+    DocumentType,
     DocumentUpload,
     DocumentVersion,
 )
@@ -195,14 +204,68 @@ def create_document_endpoint(
     return _present_document(document)
 
 
+@router.get("", response_model=DocumentListResponse)
+def list_documents_endpoint(
+    principal: TenantPrincipal = DOCUMENTS_READ_DEPENDENCY,
+    db: Session = DATABASE_DEPENDENCY,
+    status_filter: DocumentStatus | None = Query(default=None, alias="status", description="Étape de cycle de vie."),
+    document_type: DocumentType | None = Query(default=None, description="Type documentaire."),
+    supplier_id: UUID | None = Query(default=None, description="Rattachement fournisseur."),
+    product_id: UUID | None = Query(default=None, description="Rattachement produit."),
+    q: str | None = Query(default=None, min_length=2, max_length=200, description="Recherche sur le titre."),
+    cursor: str | None = Query(default=None, description="Curseur opaque de la page précédente."),
+    limit: int = Query(default=25, ge=1, le=100),
+) -> DocumentListResponse:
+    after_sort_key, after_id = _decode_page_cursor(cursor)
+    page = list_documents(
+        db,
+        organization_id=principal.organization_id,
+        limit=limit,
+        status_filter=status_filter,
+        document_type=document_type,
+        supplier_id=supplier_id,
+        product_id=product_id,
+        query=q,
+        after_sort_key=after_sort_key,
+        after_id=after_id,
+    )
+    return DocumentListResponse(
+        items=[_present_document(document) for document in page.items],
+        next_cursor=encode_page_cursor(page.next_sort_key, page.next_id),
+    )
+
+
+@router.post("/{document_id}/archive", response_model=DocumentArchiveResponse)
+def archive_document_endpoint(
+    document_id: str,
+    request: Request,
+    principal: TenantPrincipal = DOCUMENTS_MANAGE_DEPENDENCY,
+    db: Session = DATABASE_DEPENDENCY,
+) -> DocumentArchiveResponse:
+    """Retire a document from the active vault; no object and no audit row is deleted."""
+    try:
+        parsed_id = UUID(document_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document introuvable ou inaccessible.") from exc
+    try:
+        document, already_archived = archive_document(
+            db,
+            organization_id=principal.organization_id,
+            actor_user_id=principal.user_id,
+            document_id=parsed_id,
+            request_id=request_id_from_request(request),
+        )
+    except DocumentNotFoundError as exc:
+        _raise_document_error(exc)
+    return DocumentArchiveResponse(document=_present_document(document), already_archived=already_archived)
+
+
 @router.get("/{document_id}", response_model=DocumentDetailResponse)
 def get_document_endpoint(
     document_id: str,
     principal: TenantPrincipal = DOCUMENTS_READ_DEPENDENCY,
     db: Session = DATABASE_DEPENDENCY,
 ) -> DocumentDetailResponse:
-    from uuid import UUID
-
     try:
         parsed_id = UUID(document_id)
     except ValueError as exc:
@@ -222,8 +285,6 @@ def request_document_version_upload(
     principal: TenantPrincipal = DOCUMENTS_MANAGE_DEPENDENCY,
     db: Session = DATABASE_DEPENDENCY,
 ) -> DocumentUploadInstructionResponse:
-    from uuid import UUID
-
     try:
         parsed_id = UUID(document_id)
     except ValueError as exc:
@@ -232,7 +293,7 @@ def request_document_version_upload(
     try:
         upload_request = request_document_upload(
             db,
-            settings=settings,
+            settings=settings_of(request.app),
             storage=storage,
             organization_id=principal.organization_id,
             actor_user_id=principal.user_id,
@@ -249,7 +310,12 @@ def request_document_version_upload(
         upload=_present_upload(upload_request.upload),
         upload_url=upload_request.upload_form.url,
         upload_fields=upload_request.upload_form.fields,
-        max_size_bytes=settings.max_upload_bytes,
+        # La borne qui fait foi est celle du serveur, jamais la taille declaree par
+        # le client: renvoyer body.size_bytes transformait tout controle anticipe en
+        # tautologie (file.size > file.size) et mentait aux integrateurs tiers qui
+        # lisent ce champ comme le plafond du service. Le module reste la derniere
+        # ressource patchable (voir settings_of) pour les appels unitaires.
+        max_size_bytes=settings_of(request.app, fallback=settings).max_upload_bytes,
     )
 
 
@@ -270,8 +336,6 @@ def complete_document_upload_endpoint(
     principal: TenantPrincipal = DOCUMENTS_MANAGE_DEPENDENCY,
     db: Session = DATABASE_DEPENDENCY,
 ):
-    from uuid import UUID
-
     try:
         parsed_id = UUID(upload_id)
     except ValueError as exc:
@@ -281,7 +345,7 @@ def complete_document_upload_endpoint(
     try:
         result = complete_document_upload(
             db,
-            settings=settings,
+            settings=settings_of(request.app),
             storage=storage,
             scanner=scanner,
             organization_id=principal.organization_id,
@@ -308,8 +372,6 @@ def get_document_version_segments(
     principal: TenantPrincipal = DOCUMENTS_READ_DEPENDENCY,
     db: Session = DATABASE_DEPENDENCY,
 ) -> DocumentVersionSegmentsResponse:
-    from uuid import UUID
-
     try:
         parsed_id = UUID(version_id)
     except ValueError as exc:
@@ -335,8 +397,6 @@ def retry_document_version_extraction(
     principal: TenantPrincipal = DOCUMENTS_MANAGE_DEPENDENCY,
     db: Session = DATABASE_DEPENDENCY,
 ) -> DocumentExtractionRetryResponse:
-    from uuid import UUID
-
     try:
         parsed_id = UUID(version_id)
     except ValueError as exc:
@@ -344,7 +404,7 @@ def retry_document_version_extraction(
     try:
         version, job = retry_document_extraction(
             db,
-            settings=settings,
+            settings=settings_of(request.app),
             organization_id=principal.organization_id,
             actor_user_id=principal.user_id,
             document_version_id=parsed_id,
@@ -365,8 +425,6 @@ def create_download_url(
     principal: TenantPrincipal = DOCUMENTS_READ_CSRF_DEPENDENCY,
     db: Session = DATABASE_DEPENDENCY,
 ) -> DocumentDownloadResponse:
-    from uuid import UUID
-
     try:
         parsed_id = UUID(version_id)
     except ValueError as exc:
@@ -374,7 +432,7 @@ def create_download_url(
     try:
         _, url, expires_at = create_document_download(
             db,
-            settings=settings,
+            settings=settings_of(request.app),
             storage=request.app.state.document_storage,
             organization_id=principal.organization_id,
             actor_user_id=principal.user_id,

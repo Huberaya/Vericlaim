@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.api.v1.analyses import claims_router
 from app.api.v1.analyses import router as analyses_router
@@ -31,9 +32,9 @@ from app.api.v1.review import (
     validations_router,
 )
 from app.core.config import settings
-from app.core.database import SessionLocal, create_tables
-from app.documents.scanner import build_malware_scanner
-from app.documents.storage import build_object_storage
+from app.core.database import DatabaseUnavailableError, SessionLocal, create_tables, probe_database
+from app.documents.scanner import DisabledMalwareScanner, build_malware_scanner
+from app.documents.storage import DisabledObjectStorage, build_object_storage
 from app.engine.inference_evaluator import InferenceEvaluator
 from app.engine.proof_validator import JsonCertificateRegistry, ProofValidator
 from app.identity.oidc import OidcClient
@@ -42,18 +43,18 @@ from app.identity.roles import ensure_system_roles
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    try:
-        create_tables()
-        # Alembic seeds shared databases; this keeps explicit local/test schemas
-        # equivalent without overwriting existing role permissions.
-        with SessionLocal() as db:
-            ensure_system_roles(db)
-            db.commit()
-    except Exception as exc:
-        if settings.is_production_like:
-            raise
-        import logging
-        logging.getLogger("uvicorn.error").warning("Database startup initialization deferred/failed: %s", exc)
+    # ADR-003: the schema is a deployment precondition, not a runtime
+    # best-effort. Swallowing this failure used to let the API advertise a
+    # healthy process against an absent or un-migrated database, whose requests
+    # were then transparently served by an on-request SQLite fallback. That
+    # fallback is removed: every environment fails visibly here, and Compose
+    # plus the platform restart policies own the retry.
+    create_tables()
+    # Alembic seeds shared databases; this keeps explicit local/test schemas
+    # equivalent without overwriting existing role permissions.
+    with SessionLocal() as db:
+        ensure_system_roles(db)
+        db.commit()
     yield
 
 
@@ -116,9 +117,60 @@ app.include_router(audit_router)
 app.include_router(engine_router)
 
 
+@app.exception_handler(DatabaseUnavailableError)
+def database_unavailable_handler(request: Request, exc: DatabaseUnavailableError) -> JSONResponse:
+    """Map an infrastructure outage to a tenant-safe 503, never a 2xx.
+
+    The response carries no driver text, path or credential: the underlying
+    exception is logged server-side by the ASGI error handler instead.
+    """
+    del request, exc
+    return JSONResponse(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        content={"detail": "Le service est temporairement indisponible; réessayez plus tard."},
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 @app.get("/healthz", tags=["health"])
 def healthz() -> dict[str, str]:
     return {"status": "ok", "service": "vericlaim-rule-engine"}
+
+
+@app.get("/readyz", tags=["health"])
+def readyz(request: Request) -> JSONResponse:
+    """Readiness for the document data plane: no self-report without a probe.
+
+    ``/healthz`` only proves the process answers. Compose gates both workers on
+    the API being *healthy*, and the README documents that as meaning the
+    migrations were applied, so the healthcheck must actually reach
+    PostgreSQL and the readiness view must expose whether the two mandatory
+    document-safety dependencies are wired at all. No endpoint, bucket name or
+    credential is ever returned.
+    """
+    database = "ok" if probe_database() else "unavailable"
+
+    storage = request.app.state.document_storage
+    scanner = request.app.state.document_scanner
+    # Both boundaries fail closed in the application code; the readiness view
+    # only reports whether a deployment has actually wired them, so an
+    # operator can see why `/documents` imports are refused before testing one.
+    storage_state = "disabled" if isinstance(storage, DisabledObjectStorage) else "configured"
+    scanner_state = "disabled" if isinstance(scanner, DisabledMalwareScanner) else "configured"
+    ready = database == "ok"
+    payload = {
+        "status": "ready" if ready else "unavailable",
+        "database": database,
+        "document_storage": storage_state,
+        "malware_scanner": scanner_state,
+        "document_import": "enabled" if storage_state == "configured" and scanner_state == "configured" else "refused",
+    }
+    return JSONResponse(
+        status_code=status.HTTP_200_OK if ready else status.HTTP_503_SERVICE_UNAVAILABLE,
+        content=payload,
+        headers={"Cache-Control": "no-store"},
+    )
+
 
 
 @app.get("/", tags=["health"])

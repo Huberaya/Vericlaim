@@ -82,7 +82,7 @@ class ClamAvMalwareScanner:
         # A clamd response is e.g. "stream: OK" or
         # "stream: Eicar-Test-Signature FOUND". Never return the signature to
         # callers: it is recorded only as a generic security rejection.
-        if response.startswith("stream: ") and response.endswith(" FOUND") and response[8:-6]:
+        if response.startswith("stream: ") and response.endswith(" FOUND") and response[8:-6].strip():
             return MalwareScanResult(is_clean=False, engine="clamav")
         if response == "stream: OK":
             return MalwareScanResult(is_clean=True, engine="clamav")
@@ -117,13 +117,29 @@ class ClamAvMalwareScanner:
                     raise MalwareScanError("Le verdict antivirus est mal encodé.") from exc
                 if not response or any(ord(char) < 32 or ord(char) == 127 for char in response):
                     raise MalwareScanError("Le verdict antivirus contient des caractères invalides.")
+                # Outside IDSESSION, clamd closes the connection after its single
+                # reply. TCP boundaries are arbitrary: a second frame may arrive in
+                # another recv(), not in `trailing` above. Require EOF within the
+                # same total deadline; a peer that stalls or sends more is unknown.
+                connection.settimeout(ClamAvMalwareScanner._remaining_timeout(deadline))
+                if connection.recv(1):
+                    raise MalwareScanError("Le service antivirus a retourné une réponse ambiguë.")
                 return response
         raise MalwareScanError("Le verdict antivirus dépasse la taille autorisée.")
 
 
 def build_malware_scanner(settings: Settings) -> MalwareScanner:
     if settings.document_scanner_mode == "clamav":
-        assert settings.document_clamav_host is not None
+        # Une validation par `assert` disparaîtrait sous `python -O` et laisserait
+        # construire un client sans hôte: le refus doit être une branche du programme.
+        if not settings.document_clamav_host:
+            raise MalwareScannerUnavailableError(
+                "Le mode antivirus clamav exige un hôte; aucun scan ne sera simulé."
+            )
+        if settings.document_clamav_timeout_seconds <= 0:
+            raise MalwareScannerUnavailableError(
+                "Le délai antivirus doit être strictement positif; aucun scan ne sera simulé."
+            )
         return ClamAvMalwareScanner(
             host=settings.document_clamav_host,
             port=settings.document_clamav_port,

@@ -23,6 +23,8 @@ import type {
   PersistentEvidenceRelation,
   PersistentEvidenceStatus,
   PersistentEvidenceType,
+  DocumentArchiveResult,
+  DocumentListPage,
   StoredDocumentDetail,
   EvidenceDossier,
   EvidenceItem,
@@ -64,6 +66,30 @@ import type {
   AuditChainVerification,
   AuditIntegrityCertificate,
 } from "@/lib/types";
+
+/**
+ * Plafond appliqué par le navigateur avant toute requête. Ce n'est qu'un refus
+ * anticipé, pour ne pas payer un transfert voué à l'échec : la limite qui fait
+ * foi est celle du serveur (`MAX_UPLOAD_BYTES`), renvoyée par l'instruction
+ * d'import sous `max_size_bytes` et vérifiée à son tour avant l'envoi des
+ * octets. La constante est partagée ici pour que les deux composants d'import
+ * ne puissent plus diverger l'un de l'autre ni parler au nom du serveur.
+ */
+export const DOCUMENT_IMPORT_MAX_BYTES = 15 * 1024 * 1024;
+
+// La borne fait foi quand le serveur la publie: /api/v1/auth/status est consulte
+// par le garde d'authentification a chaque ouverture de session, donc le controle
+// anticipe suit le serveur des qu'il connait sa configuration. Un serveur qui ne la
+// publie pas refuse neanmoins les octets plus bas, via l'instruction d'import.
+let serverDocumentUploadMaxBytes: number | null = null;
+
+export function noteServerDocumentUploadBound(value: number | null | undefined): void {
+  serverDocumentUploadMaxBytes = typeof value === "number" && value > 0 ? Math.floor(value) : null;
+}
+
+export function documentImportMaxBytes(): number {
+  return serverDocumentUploadMaxBytes ?? DOCUMENT_IMPORT_MAX_BYTES;
+}
 
 export const API_BASE_URL = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000").replace(/\/+$/, "");
 
@@ -239,6 +265,16 @@ export async function storeSecureDocument(
     expected_sha256: checksum,
   });
 
+  // Le serveur a déclaré sa propre borne dans l'instruction : elle est
+  // vérifiée ici, avant tout transfert d'octets, parce qu'elle peut être plus
+  // stricte que le plafond du navigateur (MAX_UPLOAD_BYTES est configurable).
+  if (file.size > instruction.max_size_bytes) {
+    const limit = Math.round(instruction.max_size_bytes / (1024 * 1024));
+    throw new Error(
+      `Le serveur refuse les fichiers au-delà de ${limit} Mo : aucun octet n'a été transféré. La pièce créée reste sans version et sera retirée par le recyclage des imports abandonnés.`,
+    );
+  }
+
   // The file part must be appended after all POST policy fields. Rewrap the
   // browser File so its multipart MIME agrees with the signed MIME condition.
   const form = new FormData();
@@ -262,6 +298,23 @@ export async function storeSecureDocument(
   }
 
   return createJson<DocumentUploadCompletion>(`/api/v1/document-uploads/${instruction.upload.id}/complete`, {});
+}
+
+export async function listSecureDocuments(params: { limit?: number; cursor?: string | null; status?: string } = {}): Promise<DocumentListPage> {
+  const query = new URLSearchParams();
+  if (params.limit !== undefined) query.set("limit", String(params.limit));
+  if (params.cursor) query.set("cursor", params.cursor);
+  if (params.status) query.set("status", params.status);
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  const response = await fetch(requestUrl(`/api/v1/documents${suffix}`), {
+    credentials: "include",
+    cache: "no-store",
+  });
+  return readJson<DocumentListPage>(response);
+}
+
+export async function archiveSecureDocument(documentId: string): Promise<DocumentArchiveResult> {
+  return createJson<DocumentArchiveResult>(`/api/v1/documents/${documentId}/archive`, {});
 }
 
 export async function createSecureDocumentDownloadUrl(versionId: string): Promise<DocumentDownload> {

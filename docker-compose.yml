@@ -144,7 +144,10 @@ services:
     ports:
       - "8000:8000"
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=2)"]
+      # /readyz actually reaches PostgreSQL, so the documented guarantee that
+      # both workers start only against a migrated, serving API is enforced by
+      # the probe itself rather than by the boot ordering alone.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=2)"]
       interval: 10s
       timeout: 3s
       retries: 8
