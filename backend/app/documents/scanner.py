@@ -123,7 +123,16 @@ class ClamAvMalwareScanner:
 
 def build_malware_scanner(settings: Settings) -> MalwareScanner:
     if settings.document_scanner_mode == "clamav":
-        assert settings.document_clamav_host is not None
+        # Une validation par `assert` disparaîtrait sous `python -O` et laisserait
+        # construire un client sans hôte: le refus doit être une branche du programme.
+        if not settings.document_clamav_host:
+            raise MalwareScannerUnavailableError(
+                "Le mode antivirus clamav exige un hôte; aucun scan ne sera simulé."
+            )
+        if settings.document_clamav_timeout_seconds <= 0:
+            raise MalwareScannerUnavailableError(
+                "Le délai antivirus doit être strictement positif; aucun scan ne sera simulé."
+            )
         return ClamAvMalwareScanner(
             host=settings.document_clamav_host,
             port=settings.document_clamav_port,
