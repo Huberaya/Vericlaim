@@ -156,7 +156,7 @@ def drain_pending_purges(db: Session) -> int:
     l'import a échoué.
     """
 
-    if db.info.get(DEFER_KEY):
+    if db.info.get(DEFER_KEY) or db.in_nested_transaction():
         # Commit intermediaire (savepoint): rien n'est encore durable, on ne touche a rien.
         return 0
     queue: list[PendingPurge] = list(db.info.get(QUEUE_KEY, ()))
@@ -211,11 +211,27 @@ def _drain_after_commit(session: Session) -> None:  # pragma: no cover - hook SQ
     drain_pending_purges(session)
 
 
-@event.listens_for(Session, "after_rollback")
-def _drop_after_rollback(session: Session) -> None:  # pragma: no cover - hook SQLAlchemy
-    # Une transaction annulée n'a jamais autorisé une suppression: la file est jetée,
-    # le marqueur n'existe pas non plus, et rien n'est détruit.
-    if session.in_transaction():
-        # Roulade d'un savepoint: la boucle appelante ajuste elle-meme la file.
-        return
-    session.info[QUEUE_KEY] = []
+@event.listens_for(Session, "after_transaction_create")
+def _remember_savepoint_queue(session: Session, transaction) -> None:
+    if transaction.nested:
+        transaction._vericlaim_purge_queue_start = pending_purge_count(session)
+
+
+@event.listens_for(Session, "after_soft_rollback")
+def _drop_after_rollback(session: Session, previous_transaction) -> None:
+    # after_rollback fires while the rolled-back root is still attached to Session.
+    # after_soft_rollback identifies exactly which transaction was cancelled.
+    if previous_transaction.parent is None:
+        session.info[QUEUE_KEY] = []
+        session.info.pop(ADAPTERS_KEY, None)
+    elif previous_transaction.nested:
+        trim_pending_purges(session, previous_transaction._vericlaim_purge_queue_start)
+
+
+@event.listens_for(Session, "after_transaction_end")
+def _discard_ended_root_queue(session: Session, transaction) -> None:
+    # close()/invalidate() also cancel a transaction, without after_soft_rollback.
+    # On a successful commit the authorized queue was already drained by after_commit.
+    if transaction.parent is None:
+        session.info[QUEUE_KEY] = []
+        session.info.pop(ADAPTERS_KEY, None)

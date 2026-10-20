@@ -15,6 +15,7 @@ from app.documents.extraction import enqueue_document_extraction
 from app.documents.purge import (
     deferred_purge_drain,
     pending_purge_count,
+    pending_purges,
     quarantine_prefix,
     schedule_upload_purge,
     trim_pending_purges,
@@ -1052,6 +1053,12 @@ def retry_retained_document_purges(
         .limit(limit)
         .with_for_update(skip_locked=True)
     )
+    # The worker sweeps and retries in the SAME transaction. Its newly scheduled
+    # markers are not durable yet, even after a flush or a released savepoint.
+    # Only after_commit may execute these actions; a later pass closes the ledger.
+    queued_upload_ids = [action.upload_id for action in pending_purges(db)]
+    if queued_upload_ids:
+        statement = statement.where(DocumentUpload.id.not_in(queued_upload_ids))
     if organization_id is not None:
         statement = statement.where(DocumentUpload.organization_id == organization_id)
 

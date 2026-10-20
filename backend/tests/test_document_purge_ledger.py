@@ -514,3 +514,67 @@ def test_retry_never_reaches_another_tenant_objects() -> None:
             )
     finally:
         app.state.document_storage, app.state.document_scanner = old_storage, old_scanner
+
+
+@pytest.mark.parametrize("nested", [False, True])
+@pytest.mark.parametrize("cancel", ["rollback", "close"])
+def test_rollback_then_reuse_session_never_releases_cancelled_purge(nested, cancel) -> None:
+    """Neither a cancelled root transaction nor a released savepoint authorizes deletion."""
+    from app.documents.purge import schedule_upload_purge
+
+    app, storage, _scanner, old_storage, old_scanner = install_document_fakes()
+    try:
+        with TestClient(app) as client:
+            identity = authenticate_client(client, role_code="analyst")
+            _, instruction = create_document_and_upload_intent(client, title="Rollback et réutilisation")
+            storage.upload_latest(payload=PDF_BYTES)
+            with SessionLocal() as db:
+                set_db_request_context(db, user_id=identity.user_id, organization_id=identity.organization_id)
+                row = db.get(DocumentUpload, uuid.UUID(instruction["upload"]["id"]))
+                if nested and db.bind.dialect.name == "sqlite":
+                    # Python sqlite legacy mode does not BEGIN on SELECT. Ensure
+                    # a real outer transaction exists before RELEASE SAVEPOINT.
+                    db.connection().exec_driver_sql("BEGIN")
+                savepoint = db.begin_nested() if nested else None
+                schedule_upload_purge(
+                    db, storage=storage, settings=settings, upload=row,
+                    organization_id=identity.organization_id, reason="abandoned",
+                    requested_at=datetime.now(timezone.utc),
+                )
+                db.flush()
+                if savepoint:
+                    savepoint.commit()
+                assert storage.prefix_deletions == [], "savepoint release is NOT a durable authorization"
+                getattr(db, cancel)()
+                db.commit()  # Reusing this Session must not resurrect the discarded action.
+                assert storage.prefix_deletions == []
+                assert db.get(DocumentUpload, row.id).purge_required is False
+    finally:
+        app.state.document_storage, app.state.document_scanner = old_storage, old_scanner
+
+
+def test_worker_sweep_then_retry_cannot_purge_its_uncommitted_marker() -> None:
+    app, storage, _scanner, old_storage, old_scanner = install_document_fakes()
+    try:
+        with TestClient(app) as client:
+            identity = authenticate_client(client, role_code="analyst")
+            _, instruction = create_document_and_upload_intent(client, title="Sweep puis reprise")
+            storage.upload_latest(payload=PDF_BYTES)
+            upload_id = uuid.UUID(instruction["upload"]["id"])
+            with SessionLocal() as db:
+                set_db_request_context(db, user_id=identity.user_id, organization_id=identity.organization_id)
+                db.get(DocumentUpload, upload_id).expires_at = datetime.now(timezone.utc) - timedelta(days=1)
+                db.commit()
+                assert sweep_expired_document_uploads(
+                    db, settings=settings, storage=storage, organization_id=identity.organization_id,
+                ) == 1
+                summary = retry_retained_document_purges(
+                    db, settings=settings, storage=storage, organization_id=identity.organization_id,
+                )
+                assert storage.prefix_deletions == [], "the worker has not committed the transition yet"
+                assert summary.examined == 0
+                db.rollback()
+                db.commit()
+                assert storage.prefix_deletions == []
+    finally:
+        app.state.document_storage, app.state.document_scanner = old_storage, old_scanner
