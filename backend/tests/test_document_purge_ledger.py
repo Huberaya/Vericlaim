@@ -97,10 +97,18 @@ def _upload_audit(db: Session, *, action: str, upload_id: uuid.UUID) -> list[dic
     return _audit_payloads(db, action=action, entity_type="document_upload", entity_id=upload_id)
 
 
-def _promote(client: TestClient, storage, instruction: dict) -> dict:
+def _promote(client: TestClient, storage, instruction: dict, *, expire_capability=True) -> dict:
     storage.upload_latest(payload=PDF_BYTES)
     completion = client.post(f"/api/v1/document-uploads/{instruction['upload']['id']}/complete")
     assert completion.status_code == 201, completion.text
+    if expire_capability:
+        # Retry fixtures model a capability past its TTL + cleanup grace. The
+        # initial completion itself must still run with an unexpired capability.
+        with SessionLocal() as db:
+            db.get(DocumentUpload, uuid.UUID(instruction["upload"]["id"])).expires_at = (
+                datetime.now(timezone.utc) - timedelta(days=1)
+            )
+            db.commit()
     return completion.json()
 
 
@@ -576,5 +584,36 @@ def test_worker_sweep_then_retry_cannot_purge_its_uncommitted_marker() -> None:
                 db.rollback()
                 db.commit()
                 assert storage.prefix_deletions == []
+    finally:
+        app.state.document_storage, app.state.document_scanner = old_storage, old_scanner
+
+
+def test_ledger_stays_open_until_presigned_upload_cannot_be_replayed():
+    app, storage, _scanner, old_storage, old_scanner = install_document_fakes()
+    try:
+        with TestClient(app) as client:
+            identity = authenticate_client(client, role_code="analyst")
+            _, instruction = create_document_and_upload_intent(client, title="POST rejouable")
+            _promote(client, storage, instruction, expire_capability=False)
+            upload_id = uuid.UUID(instruction["upload"]["id"])
+            with SessionLocal() as db:
+                set_db_request_context(db, user_id=identity.user_id, organization_id=identity.organization_id)
+                summary = retry_retained_document_purges(
+                    db, settings=settings, storage=storage, organization_id=identity.organization_id,
+                )
+                db.commit()
+                assert summary.examined == 0, "an empty prefix is not final while its POST is replayable"
+                row = db.get(DocumentUpload, upload_id)
+                assert row.purge_required is True and row.purge_attempts == 0
+                # The browser can recreate the object after initial post-commit cleanup.
+                key = storage.upload_latest(payload=PDF_BYTES)
+                row.expires_at = datetime.now(timezone.utc) - timedelta(days=1)
+                db.commit()
+                assert retry_retained_document_purges(
+                    db, settings=settings, storage=storage, organization_id=identity.organization_id,
+                ).released == 1
+                db.commit()
+                assert key not in storage.objects
+                assert row.purge_required is False
     finally:
         app.state.document_storage, app.state.document_scanner = old_storage, old_scanner

@@ -1043,10 +1043,17 @@ def retry_retained_document_purges(
     ligne ne passe a ``purge_required = false`` sans que la liste complete ait pu etre
     relue vide.
     """
+    # A presigned POST remains replayable after completion/rejection. Do not close
+    # its ledger (or exhaust its retry budget) until TTL + sweep grace has elapsed;
+    # otherwise a replay after initial cleanup recreates an untracked orphan.
+    capability_cutoff = utcnow() - timedelta(
+        seconds=UPLOAD_SWEEP_GRACE_SECONDS + settings.document_clamav_timeout_seconds
+    )
     statement = (
         select(DocumentUpload)
         .where(
             DocumentUpload.purge_required.is_(True),
+            DocumentUpload.expires_at <= capability_cutoff,
             DocumentUpload.purge_attempts < PURGE_MAX_ATTEMPTS,
         )
         .order_by(DocumentUpload.purge_requested_at.asc(), DocumentUpload.id.asc())

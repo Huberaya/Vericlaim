@@ -168,7 +168,7 @@ def test_two_concurrent_passes_never_share_a_row(runtime_engine, tenants) -> Non
 
 def test_a_pass_never_reaches_another_tenants_ledger(runtime_engine, tenants) -> None:
     """Une passe adressée au tenant A ne voit ni ne modifie les lignes ouvertes de B."""
-    started = datetime.now(timezone.utc) - timedelta(minutes=2)
+    started = datetime.now(timezone.utc) - timedelta(minutes=5)
     ids_a = _open_ledgers(runtime_engine, organization=tenants.organization_a, count=2, started=started)
     ids_b = _open_ledgers(runtime_engine, organization=tenants.organization_b, count=2, started=started)
     storage = CountingStorage()
