@@ -362,8 +362,16 @@ class S3ObjectStorage:
             if token:
                 params["ContinuationToken"] = token
             response = self._client.list_objects_v2(**params)
-            keys.extend(str(item["Key"]) for item in response.get("Contents", []) if item.get("Key"))
-            if not response.get("IsTruncated"):
+            # An indeterminate listing is not evidence of absence. Never trust
+            # a malformed SDK response, nor delete a key outside the exact prefix
+            # requested, even if an adapter/server returns it in this page.
+            if type(response.get("IsTruncated")) is not bool:
+                raise ObjectStorageError("Réponse de liste objet indéterminée.")
+            page_keys = [item["Key"] for item in response.get("Contents", [])]
+            if any(not isinstance(key, str) or not key.startswith(prefix) for key in page_keys):
+                raise ObjectStorageError("La liste objet dépasse le préfixe autorisé.")
+            keys.extend(page_keys)
+            if not response["IsTruncated"]:
                 return keys, True
             token = response.get("NextContinuationToken")
             if not token:
