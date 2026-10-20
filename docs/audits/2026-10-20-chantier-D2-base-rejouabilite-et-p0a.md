@@ -186,3 +186,32 @@ ascendance. Deux issues pour le pilote, pas pour moi : fusionner cette PR-là fa
 (comme fusionnée par contenu) ; fusionner #10 d'abord réduit cette PR à trois commits (rejouabilité
 B/G1, P0-A, ce rapport). Le choix d'ordre de fusion, comme la décision sur les rapports non suivis
 de `main` qui ne sont pas réintégrés (§3), reste au responsable.
+
+## 7. Incident CI consigné : la porte d'intégrité de blanc, manquée puis fermée
+
+La premiere poussée de la branche etait **rouge** sur le job « Backend verification » de PR #11
+(40 s), les trois autres au vert. Cause, reproduite localement faute d'acces aux journaux
+d'execution GitHub (hébergés hors des hôtes autorisés du bac à sable) :
+
+    $ git diff --check main HEAD
+    backend/app/documents/service.py:918: new blank line at EOF.
+    backend/tests/test_database_startup_safety.py:114: new blank line at EOF.
+
+Ces deux lignes blanches en fin de fichier venaient du patch de rejouabilite G1, applique avec
+`--whitespace=nowarn` parce que l'avertissement avait ete juge cosmetique (et consigne comme tel au
+chantier G1) — mais le job CI en fait une porte bloquante. Le scan de signatures de credentials sur
+la branche est vierge, et l'etape Alembic (`heads` = `e8f9a1b2c3d4 (head)`, `ENABLE/FORCE ROW LEVEL
+SECURITY` presents dans le SQL genere) n'etait pas en cause.
+
+Correction `6b9746a` (contenu applicatif et assertions intacts) :
+
+| Contrôle après correction | Résultat |
+| --- | --- |
+| `git diff --check main HEAD` | sortie vide, exit 0 |
+| `pytest -q` (PostgreSQL 16 réel) | 183 passed, 0 failed, 0 skipped en 17,40 s |
+| Copie de préservation | revérifiée après la correction : V4 applicable, V5 24 identiques / 0 divergent, V6 True |
+| CI PR #11 sur `6b9746a` | Backend verification **pass** (37 s), Frontend verification pass, PostgreSQL tenant isolation (RLS) pass, Vercel pass |
+
+Lecon consignee : un avertissement signale par un outil de preservation ne doit pas ete juge
+cosmetique quand le depot en fait une porte de fusion — le controle local a appliquer avant toute
+poussee est `git diff --check main HEAD`, pas seulement `pytest`.
