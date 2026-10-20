@@ -34,11 +34,13 @@ export default function AuthGate() {
   const [state, setState] = useState<State>({ phase: "loading" });
   const [actionError, setActionError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [devLoginAvailable, setDevLoginAvailable] = useState(false);
 
   const refresh = useCallback(async () => {
     setState({ phase: "loading" });
     try {
       const [status, session] = await Promise.all([getAuthStatus(), getCurrentSession()]);
+      setDevLoginAvailable(Boolean(status.dev_login_enabled));
       setState(session ? { phase: "authenticated", session } : { phase: "anonymous", status });
     } catch (cause) {
       setState({ phase: "error", message: cause instanceof Error ? cause.message : "La session n’a pas pu être vérifiée." });
@@ -132,14 +134,16 @@ export default function AuthGate() {
           <p>{state.message}</p>
           {actionError && <p className="auth-inline-error" role="alert">{actionError}</p>}
           <div className="flex flex-col gap-2 w-full mt-4">
-            <button
-              type="button"
-              className="button button-primary"
-              disabled={isSubmitting}
-              onClick={handleDevLogin}
-            >
-              {isSubmitting ? "Connexion…" : "🚀 Ouvrir l’espace pilote"}
-            </button>
+            {devLoginAvailable && (
+              <button
+                type="button"
+                className="button button-primary"
+                disabled={isSubmitting}
+                onClick={handleDevLogin}
+              >
+                {isSubmitting ? "Connexion…" : "🚀 Ouvrir l’espace pilote"}
+              </button>
+            )}
             <button
               type="button"
               className="text-button text-xs text-slate-500 mt-2"
@@ -165,14 +169,16 @@ export default function AuthGate() {
           {actionError && <p className="auth-inline-error" role="alert">{actionError}</p>}
 
           <div className="flex flex-col gap-2 w-full mt-3">
-            <button
-              type="button"
-              className="button button-primary auth-login-button w-full"
-              disabled={isSubmitting}
-              onClick={handleDevLogin}
-            >
-              {isSubmitting ? "Connexion…" : "🚀 Accéder à l’espace pilote"}
-            </button>
+            {state.status.dev_login_enabled && (
+              <button
+                type="button"
+                className="button button-primary auth-login-button w-full"
+                disabled={isSubmitting}
+                onClick={handleDevLogin}
+              >
+                {isSubmitting ? "Connexion…" : "🚀 Accéder à l’espace pilote"}
+              </button>
+            )}
 
             {state.status.oidc_configured && (
               <button

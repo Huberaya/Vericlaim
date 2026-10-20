@@ -504,7 +504,11 @@ def process_claimed_document_extraction(
     )
     if job is None:
         raise DocumentExtractionNotFoundError("Job d’extraction introuvable.")
-    if job.status != DocumentExtractionJobStatus.RUNNING or job.worker_id != claim.worker_id:
+    if (
+        job.status != DocumentExtractionJobStatus.RUNNING
+        or job.worker_id != claim.worker_id
+        or job.attempt_count != claim.attempt_count
+    ):
         raise DocumentExtractionConflictError("Le lease du job d’extraction n’est plus détenu par ce worker.")
     if job.lease_expires_at is None or _as_utc(job.lease_expires_at) <= utcnow():
         raise DocumentExtractionConflictError("Le lease du job d’extraction a expiré avant son traitement.")
@@ -585,11 +589,16 @@ def _publish_extraction_result(
             DocumentExtractionJob.organization_id == claim.organization_id,
             DocumentExtractionJob.id == claim.id,
         )
+        .execution_options(populate_existing=True)
         .with_for_update()
     )
     if current_job is None:
         raise DocumentExtractionNotFoundError("Job d’extraction introuvable.")
-    if current_job.status != DocumentExtractionJobStatus.RUNNING or current_job.worker_id != claim.worker_id:
+    if (
+        current_job.status != DocumentExtractionJobStatus.RUNNING
+        or current_job.worker_id != claim.worker_id
+        or current_job.attempt_count != claim.attempt_count
+    ):
         raise DocumentExtractionConflictError("Le lease du job d’extraction n’est plus détenu par ce worker.")
     if current_job.lease_expires_at is None or _as_utc(current_job.lease_expires_at) <= utcnow():
         raise DocumentExtractionConflictError("Le lease du job d’extraction a expiré avant la publication.")
@@ -723,9 +732,15 @@ def record_document_extraction_failure(
             DocumentExtractionJob.organization_id == claim.organization_id,
             DocumentExtractionJob.id == claim.id,
         )
+        .execution_options(populate_existing=True)
         .with_for_update()
     )
-    if job is None or job.status != DocumentExtractionJobStatus.RUNNING or job.worker_id != claim.worker_id:
+    if (
+        job is None
+        or job.status != DocumentExtractionJobStatus.RUNNING
+        or job.worker_id != claim.worker_id
+        or job.attempt_count != claim.attempt_count
+    ):
         return False
     version = _get_version(db, organization_id=claim.organization_id, version_id=job.document_version_id, lock=True)
     document = _get_document(db, organization_id=claim.organization_id, document_id=version.document_id, lock=True)

@@ -75,11 +75,13 @@ class FakeObjectStorage:
             raise ObjectNotFoundError("missing fake object")
         return ObjectMetadata(size_bytes=len(stored.payload), content_type=stored.content_type, etag=stored.etag)
 
-    def read_bytes(self, *, bucket: str, key: str, max_size_bytes: int) -> bytes:
+    def read_bytes(self, *, bucket: str, key: str, max_size_bytes: int, expected_etag: str | None = None) -> bytes:
         self._maybe_fail("read_bytes")
         stored = self.objects.get((bucket, key))
         if stored is None:
             raise ObjectNotFoundError("missing fake object")
+        if expected_etag is not None and stored.etag != expected_etag:
+            raise ObjectStorageError("fake object changed before read")
         if len(stored.payload) > max_size_bytes:
             raise ObjectStorageError("fake object too large")
         return stored.payload

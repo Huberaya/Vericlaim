@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.v1.presenters import present_membership, present_user
-from app.core.config import settings
+from app.core.config import Settings, settings
 from app.core.database import get_db
 from app.identity.dependencies import (
     AuthenticatedPrincipal,
@@ -55,6 +55,20 @@ from app.models.identity_schemas import (
 router = APIRouter(prefix="/api/v1/auth", tags=["authentication"])
 
 
+def dev_login_allowed(current_settings: Settings | None = None) -> bool:
+    """The pilot bypass requires an explicit opt-in and never runs deployed.
+
+    Fail closed by default: any staging/production process must never expose an
+    unauthenticated endpoint that mints an administrator session, and a local
+    process must ask for it explicitly through ``AUTH_DEV_LOGIN_ENABLED``.
+    """
+
+    active = current_settings or settings
+    if active.is_production_like:
+        return False
+    return bool(active.auth_dev_login_enabled)
+
+
 def _oidc_client_or_503(request: Request):
     client = getattr(request.app.state, "oidc_client", None)
     if client is None:
@@ -67,7 +81,10 @@ def _oidc_client_or_503(request: Request):
 
 @router.get("/status", response_model=AuthStatusResponse)
 def authentication_status(request: Request) -> AuthStatusResponse:
-    return AuthStatusResponse(oidc_configured=getattr(request.app.state, "oidc_client", None) is not None)
+    return AuthStatusResponse(
+        oidc_configured=getattr(request.app.state, "oidc_client", None) is not None,
+        dev_login_enabled=dev_login_allowed(),
+    )
 
 
 @router.get("/login", include_in_schema=False)
@@ -185,13 +202,17 @@ def switch_active_organization(
     return present_membership(membership)
 
 
-@router.post("/dev-login", response_model=AuthMeResponse)
+@router.post("/dev-login", response_model=AuthMeResponse, include_in_schema=False)
 def dev_login(
     request: Request,
     response: Response,
     db: Session = Depends(get_db),
 ) -> AuthMeResponse:
     """Allow immediate developer/pilot session creation when OIDC is not yet connected."""
+    if not dev_login_allowed():
+        # This bypass creates an administrator membership, so it must not be
+        # reachable once the application runs in a production-like environment.
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
     user = db.scalar(select(User).where(User.email == "pilote@vericlaim.ai"))
     if not user:
         user = User(

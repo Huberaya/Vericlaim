@@ -1,13 +1,26 @@
 from __future__ import annotations
 
 import os
+import secrets
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
 
 PRODUCTION_LIKE_ENVIRONMENTS = frozenset({"staging", "production"})
 KNOWN_ENVIRONMENTS = frozenset({"development", "test", *PRODUCTION_LIKE_ENVIRONMENTS})
-DEV_SESSION_SECRET = "development-only-session-secret-change-before-shared-use"
+
+
+def _ephemeral_dev_session_secret() -> str:
+    """Development/test-only fallback: fresh random secret per process.
+
+    The repository intentionally contains no shared credential. Sessions
+    issued in development do not survive a process restart. Staging and
+    production must always provide AUTH_SESSION_SECRET explicitly.
+    """
+    return secrets.token_urlsafe(48)
+
+
+DEV_SESSION_SECRET = _ephemeral_dev_session_secret()
 MAX_DOCUMENT_BYTES = 50 * 1024 * 1024
 MAX_DOCUMENT_UPLOAD_TTL_SECONDS = 60 * 60
 MAX_DOCUMENT_DOWNLOAD_TTL_SECONDS = 15 * 60
@@ -65,6 +78,9 @@ class Settings:
     document_clamav_port: int = 3310
     document_clamav_timeout_seconds: int = 30
     auth_session_secret: str = DEV_SESSION_SECRET
+    # The pilot bypass mints an administrator session without any credential.
+    # It is opt-in even locally, and always refused in production-like runs.
+    auth_dev_login_enabled: bool = False
     auth_session_ttl_seconds: int = 8 * 60 * 60
     auth_cookie_secure: bool = False
     oidc_issuer: str | None = None
@@ -299,6 +315,13 @@ def get_settings() -> Settings:
     if is_production_like and not auth_cookie_secure:
         raise RuntimeError("AUTH_COOKIE_SECURE cannot be disabled in staging/production.")
 
+    # Default-off credential-free login. Refuse the configuration outright in
+    # production-like environments instead of silently ignoring it, so a
+    # misconfigured deployment fails at startup rather than at request time.
+    auth_dev_login_enabled = _bool_from_env(os.getenv("AUTH_DEV_LOGIN_ENABLED"), default=False)
+    if is_production_like and auth_dev_login_enabled:
+        raise RuntimeError("AUTH_DEV_LOGIN_ENABLED cannot be enabled in staging/production.")
+
     max_upload_bytes = _positive_int_from_env("MAX_UPLOAD_BYTES", 15 * 1024 * 1024, 1024)
     if max_upload_bytes > MAX_DOCUMENT_BYTES:
         raise RuntimeError(f"MAX_UPLOAD_BYTES must not exceed {MAX_DOCUMENT_BYTES} bytes.")
@@ -392,6 +415,7 @@ def get_settings() -> Settings:
         document_clamav_port=document_clamav_port,
         document_clamav_timeout_seconds=document_clamav_timeout_seconds,
         auth_session_secret=auth_session_secret,
+        auth_dev_login_enabled=auth_dev_login_enabled,
         auth_session_ttl_seconds=_positive_int_from_env("AUTH_SESSION_TTL_SECONDS", 8 * 60 * 60, 300),
         auth_cookie_secure=auth_cookie_secure,
         oidc_issuer=oidc_issuer,

@@ -15,7 +15,9 @@ from app.models import domain as _domain_models  # noqa: F401 - registers metada
 config = context.config
 
 # Runtime configuration always wins over the example/default URL in alembic.ini.
-config.set_main_option("sqlalchemy.url", settings.database_url)
+# ConfigParser interpolates percent signs, including URL-encoded credentials
+# and Unix-socket query parameters. Escape for storage, not for SQLAlchemy.
+config.set_main_option("sqlalchemy.url", settings.database_url.replace("%", "%%"))
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)

@@ -1,7 +1,7 @@
 \set ON_ERROR_STOP on
 
 -- Read-only verification. Run as vericlaim_app after migrations and grants.
--- Expected output: no bypass RLS; Alembic head d3c8a6e1b409; RLS enabled + forced.
+-- Expected output: no bypass RLS; Alembic head e8f9a1b2c3d4; RLS enabled + forced.
 
 BEGIN READ ONLY;
 

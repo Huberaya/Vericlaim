@@ -8,6 +8,7 @@ protocol so no temporary shared file is needed.
 from __future__ import annotations
 
 import socket
+import time
 import struct
 from dataclasses import dataclass
 from typing import Protocol
@@ -62,41 +63,62 @@ class ClamAvMalwareScanner:
         self._timeout_seconds = timeout_seconds
 
     def scan(self, payload: bytes) -> MalwareScanResult:
+        deadline = time.monotonic() + self._timeout_seconds
         try:
             with socket.create_connection((self._host, self._port), timeout=self._timeout_seconds) as connection:
-                connection.settimeout(self._timeout_seconds)
+                connection.settimeout(self._remaining_timeout(deadline))
                 connection.sendall(b"zINSTREAM\0")
                 for start in range(0, len(payload), 64 * 1024):
                     chunk = payload[start : start + 64 * 1024]
+                    connection.settimeout(self._remaining_timeout(deadline))
                     connection.sendall(struct.pack("!I", len(chunk)))
                     connection.sendall(chunk)
+                connection.settimeout(self._remaining_timeout(deadline))
                 connection.sendall(struct.pack("!I", 0))
-                response = self._read_response(connection)
+                response = self._read_response(connection, deadline=deadline)
         except OSError as exc:
             raise MalwareScannerUnavailableError("Le service antivirus est indisponible.") from exc
 
         # A clamd response is e.g. "stream: OK" or
         # "stream: Eicar-Test-Signature FOUND". Never return the signature to
         # callers: it is recorded only as a generic security rejection.
-        if response.endswith(" FOUND"):
+        if response.startswith("stream: ") and response.endswith(" FOUND") and response[8:-6]:
             return MalwareScanResult(is_clean=False, engine="clamav")
-        if response.endswith(" OK"):
+        if response == "stream: OK":
             return MalwareScanResult(is_clean=True, engine="clamav")
         raise MalwareScanError("Le service antivirus a retourné une réponse invalide.")
 
     @staticmethod
-    def _read_response(connection: socket.socket) -> str:
+    def _remaining_timeout(deadline: float) -> float:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise socket.timeout("Antivirus scan deadline exceeded")
+        return remaining
+
+    @staticmethod
+    def _read_response(connection: socket.socket, *, deadline: float) -> str:
+        # zINSTREAM requires one NUL-terminated reply. EOF, an overlong reply,
+        # decoding errors and ambiguous frames are not a trustworthy verdict.
         payload = bytearray()
-        while len(payload) < 16 * 1024:
-            chunk = connection.recv(4096)
+        limit = 16 * 1024
+        while len(payload) < limit:
+            connection.settimeout(ClamAvMalwareScanner._remaining_timeout(deadline))
+            chunk = connection.recv(min(4096, limit - len(payload)))
             if not chunk:
-                break
+                raise MalwareScanError("Le service antivirus a interrompu son verdict.")
             payload.extend(chunk)
             if b"\0" in chunk:
-                break
-        if not payload:
-            raise MalwareScanError("Le service antivirus n’a retourné aucun verdict.")
-        return bytes(payload).split(b"\0", 1)[0].decode("utf-8", errors="replace").strip()
+                frame, _, trailing = bytes(payload).partition(b"\0")
+                if trailing:
+                    raise MalwareScanError("Le service antivirus a retourné une réponse ambiguë.")
+                try:
+                    response = frame.decode("utf-8", errors="strict")
+                except UnicodeDecodeError as exc:
+                    raise MalwareScanError("Le verdict antivirus est mal encodé.") from exc
+                if not response or any(ord(char) < 32 or ord(char) == 127 for char in response):
+                    raise MalwareScanError("Le verdict antivirus contient des caractères invalides.")
+                return response
+        raise MalwareScanError("Le verdict antivirus dépasse la taille autorisée.")
 
 
 def build_malware_scanner(settings: Settings) -> MalwareScanner:
