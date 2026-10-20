@@ -28,6 +28,7 @@ from app.documents.extraction import (
     process_claimed_document_extraction,
     record_document_extraction_failure,
 )
+from app.documents.service import sweep_expired_document_uploads
 from app.documents.storage import ObjectStorage, build_object_storage
 from app.identity.service import set_db_request_context
 from app.models.domain import Organization, OrganizationStatus
@@ -36,6 +37,10 @@ logger = logging.getLogger(__name__)
 # This value is only stored in PostgreSQL's request-local setting; it is never
 # persisted as an actor foreign key. Worker audit events correctly use NULL.
 WORKER_CONTEXT_USER_ID = UUID(int=0)
+# Minimum delay between two quarantine sweeps for the same organisation. The
+# sweep is bounded housekeeping, not a queue: it runs on passes that found no
+# extraction work, so an idle worker still ages out abandoned uploads.
+UPLOAD_SWEEP_INTERVAL_SECONDS = 60.0
 
 
 class DocumentExtractionWorker:
@@ -52,6 +57,7 @@ class DocumentExtractionWorker:
         self.session_factory = session_factory
         self.worker_id = worker_id
         self._last_organization_id: UUID | None = None
+        self._next_upload_sweep_at: dict[UUID, float] = {}
 
     def _active_organization_ids(self) -> list[UUID]:
         # Organizations are a global directory; document/job rows remain RLS
@@ -86,11 +92,49 @@ class DocumentExtractionWorker:
                     organization_id=organization_id,
                     worker_id=self.worker_id,
                 )
+                if claim is None:
+                    self._sweep_abandoned_uploads(db, organization_id=organization_id)
                 db.commit()
                 return claim
             except Exception:
                 db.rollback()
                 raise
+
+    def _sweep_abandoned_uploads(self, db: Session, *, organization_id: UUID) -> None:
+        """Release quarantine bytes of upload intents the browser never completed.
+
+        The sweep rides on the per-tenant claim pass it follows, so it needs no
+        second scheduler, no second credential and no RLS bypass: it runs in the
+        same transaction and under the same tenant context that just produced an
+        empty claim. It is best-effort housekeeping — any failure here is
+        logged and rolled back without ever delaying real extraction work, which
+        a later poll will pick up again.
+        """
+        deadline = self._next_upload_sweep_at.get(organization_id, 0.0)
+        now = time.monotonic()
+        if now < deadline:
+            return
+        self._next_upload_sweep_at[organization_id] = now + UPLOAD_SWEEP_INTERVAL_SECONDS
+        try:
+            swept = sweep_expired_document_uploads(
+                db,
+                settings=self.settings,
+                storage=self.storage,
+                organization_id=organization_id,
+            )
+        except Exception:
+            db.rollback()
+            logger.warning(
+                "Unable to sweep abandoned document uploads",
+                extra={"organization_id": str(organization_id)},
+                exc_info=True,
+            )
+            return
+        if swept:
+            logger.info(
+                "Abandoned document uploads expired",
+                extra={"organization_id": str(organization_id), "swept_count": swept},
+            )
 
     def _record_failure(self, claim: ClaimedExtractionJob, *, error_code: str, retryable: bool) -> None:
         with self.session_factory() as db:

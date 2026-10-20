@@ -444,6 +444,21 @@ a { color: inherit; }
 .catalog-disclaimer { margin: 0; padding: 10px 20px; color: #919b92; font-size: 7px; line-height: 1.5; }
 .vault-field > span em { color: #a0aaa0; font-style: normal; font-weight: 500; letter-spacing: 0; text-transform: none; }
 .vault-catalog-note { margin: 9px 0 0; color: #829080; font-size: 8px; line-height: 1.45; }
+/* Coffre : historique des pièces conservées et archivage */
+.vault-history { margin: 0 20px 18px; padding-top: 13px; border-top: 1px solid #edf0ec; }
+.vault-history-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.vault-history-header h3 { color: #40543f; font-size: 10px; font-weight: 700; letter-spacing: .01em; }
+.vault-history-actions { display: flex; align-items: center; gap: 7px; }
+.vault-history-list { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.vault-history-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid #e7ece5; border-radius: 10px; background: #fbfcfa; }
+.vault-history-row.is-focused { border-color: #bcd6ac; background: #f6faf1; }
+.vault-history-main { min-width: 0; }
+.vault-history-main strong { display: block; overflow: hidden; color: #465a4a; font-size: 9px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+.vault-history-main p { margin: 3px 0 0; overflow: hidden; color: #97a298; font: 7px ui-monospace, monospace; text-overflow: ellipsis; white-space: nowrap; }
+.vault-history-controls { display: flex; align-items: center; gap: 5px; }
+.vault-history-controls .button { min-height: 26px; padding: 0 8px; font-size: 8px; }
+.vault-history-confirm { display: flex; align-items: center; gap: 5px; color: #8a5c22; font-size: 8px; }
+.vault-history-hint { margin: 7px 0 0; color: #829080; font-size: 8px; line-height: 1.45; }
 .vault-catalog-error { margin: 9px 0 0; }
 
 @media (max-width: 1120px) {

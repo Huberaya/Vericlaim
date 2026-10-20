@@ -414,11 +414,18 @@ def claim_next_document_extraction_job(
         job.completed_at = now
         job.lease_expires_at = None
         job.worker_id = None
+        # This branch is reached when a worker committed its result and then
+        # lost the lease (crash, timeout) before releasing it. Without the same
+        # status reconciliation the other transitions perform, the logical
+        # document would stay PROCESSING forever next to a completed extraction,
+        # and the UI would advertise an in-progress treatment for finished text.
+        _set_document_status_from_latest_version(db, document=document, organization_id=organization_id)
         db.flush()
         return None
     if version.extraction_status == ExtractionStatus.FAILED and job.attempt_count >= job.max_attempts:
         job.status = DocumentExtractionJobStatus.FAILED
         job.completed_at = now
+        _set_document_status_from_latest_version(db, document=document, organization_id=organization_id)
         db.flush()
         return None
 

@@ -1144,3 +1144,15 @@ export type AuditIntegrityCertificate = {
   issuer: string;
   legal_disclaimer: string;
 };
+
+export type DocumentListPage = {
+  items: StoredDocument[];
+  next_cursor: string | null;
+};
+
+export type DocumentArchiveResult = {
+  document: StoredDocument;
+  // Le serveur répond déjà_archivé lors d'une relance: la retirement est
+  // idempotente et ne doit jamais être présentée comme un échec.
+  already_archived: boolean;
+};

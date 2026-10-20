@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
@@ -92,6 +92,129 @@ def get_document(db: Session, *, organization_id: UUID, document_id: UUID, lock:
     if document is None:
         raise DocumentNotFoundError("Document introuvable ou inaccessible.")
     return document
+
+
+@dataclass(frozen=True)
+class DocumentPage:
+    """One opaque page of the tenant vault, same cursor shape as the catalogue."""
+
+    items: list[Document]
+    next_sort_key: str | None
+    next_id: UUID | None
+
+
+def list_documents(
+    db: Session,
+    *,
+    organization_id: UUID,
+    limit: int,
+    status_filter: DocumentStatus | None = None,
+    document_type: DocumentType | None = None,
+    supplier_id: UUID | None = None,
+    product_id: UUID | None = None,
+    query: str | None = None,
+    after_sort_key: str | None = None,
+    after_id: UUID | None = None,
+) -> DocumentPage:
+    """Return one page of the tenant's document lifecycle.
+
+    The document detail endpoint is addressed by identifier, which left a tenant
+    unable to enumerate its own vault: after a page reload the whole import
+    history was invisible, and an import that died half-way (quarantined shell,
+    no promoted version) could not be found in order to be retried.
+
+    Paging follows the catalogue convention - an opaque cursor over
+    ``(lower(title), id)`` - so a page boundary stays stable while documents are
+    being imported concurrently. Retired rows stay hidden from every query
+    except an explicit ``status=archived`` one: archival is a visibility
+    transition rather than an erasure, so a tenant must still be able to prove
+    what it retired and when, while the active workflow sees only what is in
+    play.
+    """
+    conditions = [Document.organization_id == organization_id]
+    if status_filter is DocumentStatus.ARCHIVED:
+        conditions.append(Document.status == DocumentStatus.ARCHIVED)
+    else:
+        conditions.append(Document.deleted_at.is_(None))
+        if status_filter is not None:
+            conditions.append(Document.status == status_filter)
+    if document_type is not None:
+        conditions.append(Document.document_type == document_type)
+    if supplier_id is not None:
+        conditions.append(Document.supplier_id == supplier_id)
+    if product_id is not None:
+        conditions.append(Document.product_id == product_id)
+    if query:
+        pattern = f"%{query.strip().lower()}%"
+        conditions.append(func.lower(Document.title).like(pattern))
+
+    sort_key = func.lower(Document.title)
+    statement = select(Document).where(*conditions)
+    if after_sort_key is not None and after_id is not None:
+        statement = statement.where(
+            or_(
+                sort_key > after_sort_key.lower(),
+                and_(sort_key == after_sort_key.lower(), Document.id > after_id),
+            )
+        )
+    rows = list(db.scalars(statement.order_by(sort_key.asc(), Document.id.asc()).limit(limit + 1)).all())
+    has_more = len(rows) > limit
+    page = rows[:limit]
+    return DocumentPage(
+        items=page,
+        next_sort_key=page[-1].title.lower() if has_more and page else None,
+        next_id=page[-1].id if has_more and page else None,
+    )
+
+
+def archive_document(
+    db: Session,
+    *,
+    organization_id: UUID,
+    actor_user_id: UUID,
+    document_id: UUID,
+    request_id: str | None,
+) -> tuple[Document, bool]:
+    """Retire a document from the active tenant vault without destroying evidence.
+
+    Archival is the lifecycle transition the model already defined and every
+    worker already honoured (``ARCHIVED``/``DELETED`` and ``deleted_at`` are read
+    by the extraction state machine to stop touching a retired document), but no
+    endpoint could ever set it. Imports abandoned mid-flight therefore had no
+    way out of the vault.
+
+    The clean object, its derived text and every audit event are deliberately
+    left untouched: this is a visibility transition, not a purge, and no API
+    caller can trigger an irreversible storage deletion.
+    """
+    document = db.scalar(
+        select(Document).where(
+            Document.organization_id == organization_id,
+            Document.id == document_id,
+        )
+    )
+    if document is None:
+        raise DocumentNotFoundError("Document introuvable ou inaccessible.")
+    if document.deleted_at is not None:
+        # Re-archiving is a no-op, not an error: a retried request must not
+        # report a failure for a document that is already retired.
+        return document, True
+
+    document.deleted_at = utcnow()
+    document.status = DocumentStatus.ARCHIVED
+    db.flush()
+    append_audit_event(
+        db,
+        organization_id=organization_id,
+        actor_user_id=actor_user_id,
+        entity_type="document",
+        entity_id=document.id,
+        action="document.archived",
+        payload={"document_key": document.document_key, "stored_objects_retained": True},
+        request_id=request_id,
+    )
+    db.flush()
+    return document, False
 
 
 def _assert_references_belong_to_organization(
@@ -695,3 +818,101 @@ def document_detail(db: Session, *, organization_id: UUID, document_id: UUID) ->
         ).all()
     )
     return document, versions, uploads
+
+
+# A completion request can legitimately still be scanning when its link TTL is
+# reached, so an intent is only swept after the whole scan budget has elapsed.
+UPLOAD_SWEEP_GRACE_SECONDS = 90
+
+
+def sweep_expired_document_uploads(
+    db: Session,
+    *,
+    settings: Settings,
+    storage: ObjectStorage,
+    organization_id: UUID,
+    limit: int = 25,
+) -> int:
+    """Close upload intents the client abandoned and release their quarantine bytes.
+
+    The presigned POST expires by itself; nothing else did. An intent left in
+    ``PENDING_UPLOAD`` (tab closed, network drop) or in ``SCANNING`` (request
+    killed mid-scan) stayed open forever, which meant unscanned bytes were kept
+    in the quarantine bucket, the tenant was shown a document perpetually in
+    ``QUARANTINED`` with no way to tell it was dead, and the only transition out
+    of that state required the very client call that never happened.
+
+    This is housekeeping, not a verdict: it never promotes, never deletes a
+    clean object and never touches an intent that already produced a version.
+    The quarantine removal is best effort because an unreachable bucket must not
+    block closing the durable state.
+    """
+    cutoff = utcnow() - timedelta(
+        seconds=UPLOAD_SWEEP_GRACE_SECONDS + settings.document_clamav_timeout_seconds
+    )
+    candidates = list(
+        db.scalars(
+            select(DocumentUpload)
+            .where(
+                DocumentUpload.organization_id == organization_id,
+                DocumentUpload.status.in_({DocumentUploadStatus.PENDING_UPLOAD, DocumentUploadStatus.SCANNING}),
+                DocumentUpload.expires_at <= cutoff,
+            )
+            .order_by(DocumentUpload.expires_at.asc())
+            .limit(limit)
+            .with_for_update(skip_locked=True)
+        ).all()
+    )
+    if not candidates:
+        return 0
+
+    swept = 0
+    for upload in candidates:
+        upload.status = DocumentUploadStatus.EXPIRED
+        upload.scan_completed_at = utcnow()
+        upload.scan_error_code = "upload_abandoned"
+        removed = _best_effort_delete(
+            storage,
+            bucket=settings.document_quarantine_bucket,
+            key=upload.quarantine_storage_key,
+        )
+        document = db.scalar(
+            select(Document).where(
+                Document.organization_id == organization_id,
+                Document.id == upload.document_id,
+                Document.deleted_at.is_(None),
+            )
+        )
+        stranded = False
+        if document is not None and document.status == DocumentStatus.QUARANTINED:
+            version_count = db.scalar(
+                select(func.count())
+                .select_from(DocumentVersion)
+                .where(
+                    DocumentVersion.organization_id == organization_id,
+                    DocumentVersion.document_id == document.id,
+                )
+            )
+            if not version_count:
+                # No version was ever promoted, so this row is a failed import
+                # rather than a document awaiting a control.
+                document.status = DocumentStatus.FAILED
+                stranded = True
+        append_audit_event(
+            db,
+            organization_id=organization_id,
+            actor_user_id=None,
+            entity_type="document_upload",
+            entity_id=upload.id,
+            action="document.upload_swept",
+            payload={
+                "document_id": str(upload.document_id),
+                "reason": "upload_abandoned",
+                "quarantine_deleted": removed,
+                "document_marked_failed": stranded,
+            },
+        )
+        swept += 1
+    db.flush()
+    return swept
+

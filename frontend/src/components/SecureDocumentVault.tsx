@@ -3,10 +3,13 @@
 import { useEffect, useRef, useState, type ChangeEvent, type DragEvent } from "react";
 import PersistentAnalysisPanel from "@/components/PersistentAnalysisPanel";
 import {
+  DOCUMENT_IMPORT_MAX_BYTES,
+  archiveSecureDocument,
   createSecureDocumentDownloadUrl,
   getSecureDocument,
   listCatalogProducts,
   listCatalogSuppliers,
+  listSecureDocuments,
   retrySecureDocumentExtraction,
   storeSecureDocument,
 } from "@/lib/api";
@@ -14,13 +17,14 @@ import type {
   CatalogProduct,
   CatalogSupplier,
   DocumentDownload,
+  DocumentListPage,
   DocumentType,
   DocumentUploadCompletion,
   ExtractionStatus,
+  StoredDocument,
+  StoredDocumentDetail,
   StoredDocumentVersion,
 } from "@/lib/types";
-
-const MAX_FILE_BYTES = 15 * 1024 * 1024;
 
 const DOCUMENT_TYPES: Array<{ value: DocumentType; label: string }> = [
   { value: "supplier_declaration", label: "Déclaration fournisseur" },
@@ -63,6 +67,16 @@ const EXTRACTION_COPY: Record<ExtractionStatus, { label: string; detail: string;
   },
 };
 
+const DOCUMENT_STATUS_COPY: Record<StoredDocument["status"], { label: string; tone: string }> = {
+  quarantined: { label: "En quarantaine", tone: "conditional_reject" },
+  uploaded: { label: "Contrôle terminé", tone: "compliant" },
+  processing: { label: "Extraction en cours", tone: "review_required" },
+  ready: { label: "Prête à analyser", tone: "compliant" },
+  failed: { label: "Import à reprendre", tone: "non_compliant" },
+  archived: { label: "Archivée", tone: "neutral" },
+  deleted: { label: "Retirée", tone: "neutral" },
+};
+
 type Props = {
   canManage: boolean;
   canRunAnalysis: boolean;
@@ -80,7 +94,7 @@ function validateFile(file: File): string | null {
   if (!ACCEPTED_EXTENSIONS.has(extension)) return "Formats acceptés : PDF, TXT UTF-8, PNG, JPG, TIFF ou WEBP.";
   if (file.name.length > 500 || /["/\\\u0000]/.test(file.name)) return "Le nom du fichier contient un caractère non autorisé.";
   if (file.size === 0) return "Le fichier est vide.";
-  if (file.size > MAX_FILE_BYTES) return "Le fichier dépasse la limite locale de 15 Mo.";
+  if (file.size > DOCUMENT_IMPORT_MAX_BYTES) return `Le fichier dépasse le plafond de ${Math.round(DOCUMENT_IMPORT_MAX_BYTES / (1024 * 1024))} Mo appliqué par le navigateur. Le serveur applique sa propre limite et la refusera si elle est dépassée.`;
   return null;
 }
 
@@ -114,7 +128,71 @@ export default function SecureDocumentVault({ canManage, canRunAnalysis, canRead
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const [isCatalogLoading, setIsCatalogLoading] = useState(false);
 
-  const trackedVersion = completed?.version ?? null;
+  const [history, setHistory] = useState<DocumentListPage | null>(null);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [tracked, setTracked] = useState<StoredDocumentDetail | null>(null);
+  const [isTracking, setIsTracking] = useState(false);
+  const [documentIdToArchive, setDocumentIdToArchive] = useState<string | null>(null);
+  const [isArchiving, setIsArchiving] = useState(false);
+  const [archiveError, setArchiveError] = useState<string | null>(null);
+
+  const focusDocument = completed?.document ?? tracked?.document ?? null;
+  const trackedVersion = completed?.version ?? tracked?.versions[0] ?? null;
+
+  async function refreshHistory() {
+    setIsLoadingHistory(true);
+    try {
+      setHistory(await listSecureDocuments({ limit: 8 }));
+      setHistoryError(null);
+    } catch (cause) {
+      setHistoryError(cause instanceof Error ? cause.message : "Le coffre n’a pas pu être rechargé.");
+    } finally {
+      setIsLoadingHistory(false);
+    }
+  }
+
+  async function followDocument(documentId: string) {
+    setIsTracking(true);
+    setExtractionRefreshError(null);
+    setCompleted(null);
+    setDownload(null);
+    setDownloadError(null);
+    try {
+      setTracked(await getSecureDocument(documentId));
+    } catch (cause) {
+      setExtractionRefreshError(cause instanceof Error ? cause.message : "Le détail de la pièce n’a pas pu être chargé.");
+    } finally {
+      setIsTracking(false);
+    }
+  }
+
+  async function archiveDocument(documentId: string) {
+    if (isArchiving) return;
+    setIsArchiving(true);
+    setArchiveError(null);
+    try {
+      await archiveSecureDocument(documentId);
+      if (tracked?.document.id === documentId || completed?.document.id === documentId) {
+        setTracked(null);
+        setCompleted(null);
+        setDownload(null);
+      }
+      setDocumentIdToArchive(null);
+      await refreshHistory();
+    } catch (cause) {
+      setArchiveError(cause instanceof Error ? cause.message : "La pièce n’a pas pu être archivée.");
+    } finally {
+      setIsArchiving(false);
+    }
+  }
+
+  useEffect(() => {
+    void refreshHistory();
+    // Le coffre n'a pas de file d'attente côté client : on recharge la liste
+    // quand un traitement suivi passe d'un état intermédiaire à un état terminal.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canManage]);
 
   useEffect(() => {
     if (!canReadCatalog) {
@@ -146,7 +224,7 @@ export default function SecureDocumentVault({ canManage, canRunAnalysis, canRead
   }, [canReadCatalog, catalogRevision]);
 
   useEffect(() => {
-    if (!completed?.document.id || !trackedVersion || !["pending", "running"].includes(trackedVersion.extraction_status)) {
+    if (!focusDocument?.id || !trackedVersion || !["pending", "running"].includes(trackedVersion.extraction_status)) {
       return undefined;
     }
     let cancelled = false;
@@ -154,10 +232,14 @@ export default function SecureDocumentVault({ canManage, canRunAnalysis, canRead
 
     const refresh = async () => {
       try {
-        const detail = await getSecureDocument(completed.document.id);
+        const detail = await getSecureDocument(focusDocument.id);
         const freshVersion = detail.versions.find((candidate) => candidate.id === trackedVersion.id);
         if (cancelled || !freshVersion) return;
-        setCompleted((previous) => replaceTrackedVersion(previous, freshVersion, detail.document));
+        // The tracked copy must be refreshed whichever entry point produced it,
+        // otherwise a document followed from the vault history keeps showing a
+        // stale "in progress" label after the worker has finished.
+        setCompleted((previous) => (previous ? replaceTrackedVersion(previous, freshVersion, detail.document) : previous));
+        setTracked(detail);
         setExtractionRefreshError(null);
         if (["pending", "running"].includes(freshVersion.extraction_status)) {
           timer = setTimeout(() => void refresh(), 2_500);
@@ -174,7 +256,7 @@ export default function SecureDocumentVault({ canManage, canRunAnalysis, canRead
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [completed?.document.id, trackedVersion?.id, trackedVersion?.extraction_status]);
+  }, [focusDocument?.id, trackedVersion?.id, trackedVersion?.extraction_status]);
 
   function chooseFile(nextFile: File) {
     const invalidReason = validateFile(nextFile);
@@ -229,6 +311,7 @@ export default function SecureDocumentVault({ canManage, canRunAnalysis, canRead
       }
       setCompleted(result);
       setFile(null);
+      void refreshHistory();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "L’import sécurisé n’a pas pu être finalisé.");
     } finally {
@@ -354,7 +437,8 @@ export default function SecureDocumentVault({ canManage, canRunAnalysis, canRead
             <div className="vault-file-icon" aria-hidden="true">⌑</div>
             <div>
               <strong>{file ? file.name : "Déposez une pièce à conserver"}</strong>
-              <p>{file ? `${(file.size / 1024).toLocaleString("fr-FR", { maximumFractionDigits: 1 })} Ko · contrôle avant promotion` : "PDF, TXT UTF-8, PNG, JPG, TIFF ou WEBP · 15 Mo maximum"}</p>
+              <p>{file ? `${(file.size / 1024).toLocaleString("fr-FR", { maximumFractionDigits: 1 })} Ko · contrôle avant promotion`
+                  : `PDF, TXT UTF-8, PNG, JPG, TIFF ou WEBP · ${Math.round(DOCUMENT_IMPORT_MAX_BYTES / (1024 * 1024))} Mo maximum par le navigateur`}</p>
             </div>
             <button type="button" className="button button-secondary choose-file" disabled={isSubmitting} onClick={() => inputRef.current?.click()}>
               Choisir un fichier
@@ -371,12 +455,70 @@ export default function SecureDocumentVault({ canManage, canRunAnalysis, canRead
         </div>
       )}
 
-      {trackedVersion && completed && extraction && (
+      <div className="vault-history" aria-live="polite">
+        <div className="vault-history-header">
+          <h3>Votre coffre</h3>
+          <div className="vault-history-actions">
+            {isLoadingHistory ? <span className="vault-history-hint">Rechargement…</span> : (
+              <button type="button" className="button button-quiet" onClick={() => void refreshHistory()}>
+                Actualiser
+              </button>
+            )}
+          </div>
+        </div>
+        {historyError && <p className="inline-error" role="alert">{historyError}</p>}
+        {archiveError && <p className="inline-error" role="alert">{archiveError}</p>}
+        {!historyError && history && history.items.length === 0 && (
+          <p className="vault-history-hint">Aucune pièce conservée pour l’instant. Un import échoué reste visible ici jusqu’à son archivage.</p>
+        )}
+        {history && history.items.length > 0 && (
+          <>
+            <ul className="vault-history-list">
+              {history.items.map((item: StoredDocument) => {
+                const label = DOCUMENT_STATUS_COPY[item.status];
+                const isFocus = focusDocument?.id === item.id;
+                return (
+                  <li key={item.id} className={`vault-history-row${isFocus ? " is-focused" : ""}`}>
+                    <div className="vault-history-main">
+                      <strong>{item.title}</strong>
+                      <p>{item.document_key} · {DOCUMENT_TYPES.find((type) => type.value === item.document_type)?.label ?? item.document_type}</p>
+                    </div>
+                    <span className={`status-pill status-${label.tone}`}><span className="status-dot" aria-hidden="true" />{label.label}</span>
+                    <div className="vault-history-controls">
+                      <button type="button" className="button button-quiet" disabled={isTracking || isFocus} onClick={() => void followDocument(item.id)}>
+                        {isTracking && isFocus ? "Chargement…" : isFocus ? "Suivie" : "Suivre le traitement"}
+                      </button>
+                      {canManage && (documentIdToArchive === item.id ? (
+                        <span className="vault-history-confirm">
+                          Archiver ?
+                          <button type="button" className="button button-secondary" disabled={isArchiving} onClick={() => void archiveDocument(item.id)}>
+                            {isArchiving ? "…" : "Confirmer"}
+                          </button>
+                          <button type="button" className="button button-quiet" disabled={isArchiving} onClick={() => setDocumentIdToArchive(null)}>Annuler</button>
+                        </span>
+                      ) : canManage ? (
+                        <button type="button" className="button button-quiet" disabled={isArchiving} onClick={() => setDocumentIdToArchive(item.id)}>Archiver</button>
+                      ) : null)}
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+            <p className="vault-history-hint">
+            {`${history.items.length} pièce(s) affichée(s)`}
+            {history.next_cursor ? " · page suivante disponible" : ""}
+            {" · l’archivage retire la pièce du coffre actif sans supprimer la preuve ni le journal d’audit."}
+          </p>
+          </>
+        )}
+      </div>
+
+      {trackedVersion && focusDocument && extraction && (
         <div className="vault-complete" role="status">
           <span className="vault-complete-icon" aria-hidden="true">✓</span>
           <div>
             <strong>Version {trackedVersion.version_number} promue après contrôle propre</strong>
-            <p>{completed.document.document_key} · SHA-256 {trackedVersion.sha256.slice(0, 16)}… · moteur {completed.upload.scan_engine || "antivirus"}</p>
+            <p>{focusDocument.document_key} · SHA-256 {trackedVersion.sha256.slice(0, 16)}… · moteur {completed?.upload.scan_engine || "antivirus"}</p>
             <div className={`vault-extraction-status vault-extraction-${extraction.tone}`}>
               <strong>{extraction.label}</strong>
               <p>{extraction.detail}</p>
@@ -408,8 +550,8 @@ export default function SecureDocumentVault({ canManage, canRunAnalysis, canRead
               <PersistentAnalysisPanel
                 version={trackedVersion}
                 canRun={canRunAnalysis}
-                supplierId={completed.document.supplier_id}
-                productId={completed.document.product_id}
+                supplierId={focusDocument.supplier_id}
+                productId={focusDocument.product_id}
               />
             )}
           </div>
