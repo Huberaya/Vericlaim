@@ -15,7 +15,9 @@ from app.documents.storage import (
     ObjectMetadata,
     ObjectNotFoundError,
     ObjectStorageError,
+    PrefixDeletionResult,
     PresignedUpload,
+    validate_tenant_scoped_prefix,
 )
 
 
@@ -34,6 +36,8 @@ class FakeObjectStorage:
         self.put_requests: list[tuple[str, str, str]] = []
         self.download_requests: list[tuple[str, str, str, int]] = []
         self.fail_operations: set[str] = set()
+        self.prefix_deletions: list[tuple[str, str, tuple[str, ...]]] = []
+        self.fail_prefix_deletions: set[str] = set()
 
     def _maybe_fail(self, operation: str) -> None:
         if operation in self.fail_operations:
@@ -121,6 +125,37 @@ class FakeObjectStorage:
     def delete(self, *, bucket: str, key: str) -> None:
         self._maybe_fail("delete")
         self.objects.pop((bucket, key), None)
+
+    def delete_prefix(self, *, bucket: str, prefix: str) -> PrefixDeletionResult:
+        """Miroir fidele du geste S3: liste, retire, relit.
+
+        La meme garde de prefixe s'applique ici qu'a l'adaptateur reel, et le resultat
+        distingue « rien sous ce prefixe », « libere » et « encore present » - un faux
+        stockage qui pretendrait tout supprimer ne prouverait rien.
+        """
+
+        self._maybe_fail("delete_prefix")
+        validate_tenant_scoped_prefix(prefix)
+        listed = sorted(key for (bucket_name, key) in self.objects if bucket_name == bucket and key.startswith(prefix))
+        self.prefix_deletions.append((bucket, prefix, tuple(listed)))
+        deleted: list[str] = []
+        retained: list[str] = []
+        for key in listed:
+            if key in self.fail_prefix_deletions or prefix in self.fail_prefix_deletions:
+                retained.append(key)
+                continue
+            self.objects.pop((bucket, key), None)
+            deleted.append(key)
+        remaining = sorted(key for (bucket_name, key) in self.objects if bucket_name == bucket and key.startswith(prefix))
+        return PrefixDeletionResult(
+            bucket=bucket,
+            prefix=prefix,
+            deleted_keys=tuple(deleted),
+            retained_keys=tuple(sorted(set(remaining) | set(retained))),
+            listed_keys=len(listed),
+            listing_complete=True,
+            error_code=None,
+        )
 
     def create_presigned_download(
         self,

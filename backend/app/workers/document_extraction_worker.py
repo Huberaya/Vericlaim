@@ -28,7 +28,7 @@ from app.documents.extraction import (
     process_claimed_document_extraction,
     record_document_extraction_failure,
 )
-from app.documents.service import sweep_expired_document_uploads
+from app.documents.service import retry_retained_document_purges, sweep_expired_document_uploads
 from app.documents.storage import ObjectStorage, build_object_storage
 from app.identity.service import set_db_request_context
 from app.models.domain import Organization, OrganizationStatus
@@ -122,6 +122,15 @@ class DocumentExtractionWorker:
                 storage=self.storage,
                 organization_id=organization_id,
             )
+            # Le meme tempo, la meme transaction, le meme contexte tenant: rejouer les
+            # liberations que le stockage n'a pas laisse prouver ne merite ni un second
+            # demon ni un second jeu de credentials.
+            purge_summary = retry_retained_document_purges(
+                db,
+                settings=self.settings,
+                storage=self.storage,
+                organization_id=organization_id,
+            )
         except Exception:
             db.rollback()
             logger.warning(
@@ -134,6 +143,17 @@ class DocumentExtractionWorker:
             logger.info(
                 "Abandoned document uploads expired",
                 extra={"organization_id": str(organization_id), "swept_count": swept},
+            )
+        if purge_summary.changed:
+            logger.info(
+                "Document purge ledger replayed",
+                extra={
+                    "organization_id": str(organization_id),
+                    "purge_examined": purge_summary.examined,
+                    "purge_released": purge_summary.released,
+                    "purge_retained": purge_summary.retained,
+                    "purge_failed_rows": purge_summary.failed_rows,
+                },
             )
 
     def _record_failure(self, claim: ClaimedExtractionJob, *, error_code: str, retryable: bool) -> None:

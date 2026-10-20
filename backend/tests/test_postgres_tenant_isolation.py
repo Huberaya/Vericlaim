@@ -28,7 +28,7 @@ from psycopg import sql
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 BACKEND_ROOT = REPOSITORY_ROOT / "backend"
 NEON_ROOT = REPOSITORY_ROOT / "infra" / "neon"
-ALEMBIC_HEAD = "e8f9a1b2c3d4"
+ALEMBIC_HEAD = "a7d4c9e2b510"
 
 ADMIN_DSN = os.environ.get("VERICLAIM_TEST_POSTGRES_URL", "").strip()
 pytestmark = pytest.mark.skipif(

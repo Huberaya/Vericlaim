@@ -101,8 +101,8 @@ def test_staging_preflight_fails_closed_on_missing_or_mismatched_target() -> Non
 def test_neon_runbook_documents_current_alembic_head() -> None:
     text = (REPOSITORY_ROOT / "infra" / "neon" / "README.md").read_text(encoding="utf-8")
 
-    assert "--expected-revision e8f9a1b2c3d4" in text
-    assert "d3c8a6e1b409" not in text
+    assert "--expected-revision a7d4c9e2b510" in text
+    assert "e8f9a1b2c3d4" not in text
     assert "preflight_staging.py" in text
 
 
