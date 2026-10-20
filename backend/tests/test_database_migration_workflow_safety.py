@@ -104,3 +104,43 @@ def test_neon_runbook_documents_current_alembic_head() -> None:
     assert "--expected-revision e8f9a1b2c3d4" in text
     assert "d3c8a6e1b409" not in text
     assert "preflight_staging.py" in text
+
+
+def test_runtime_verification_covers_every_rls_protected_table() -> None:
+    """Every table the migration chain protects with RLS must be asserted live.
+
+    The staging verifier is the only control that proves RLS is active on the
+    deployed database, so a table missing from its expectations is a silent
+    blind spot (this test caught api_keys and legal_holds).
+    """
+    import importlib.util
+    import re
+    import sys
+
+    versions = REPOSITORY_ROOT / "backend" / "alembic" / "versions"
+    enabled: set[str] = set()
+    for path in versions.glob("*.py"):
+        enabled.update(
+            re.findall(
+                r'ALTER TABLE "([a-z_]+)" (?:ENABLE|FORCE) ROW LEVEL SECURITY',
+                path.read_text(encoding="utf-8"),
+            )
+        )
+
+    identity = versions / "7b3b4c985738_identity_and_tenant_security.py"
+    spec = importlib.util.spec_from_file_location("vericlaim_identity_migration", identity)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    enabled.update(module.TENANT_TABLES)
+    enabled.update(module.GLOBAL_OR_TENANT_RULE_TABLES)
+
+    neon_directory = str(REPOSITORY_ROOT / "infra" / "neon")
+    sys.path.insert(0, neon_directory)
+    try:
+        from verify_runtime import EXPECTED_RLS_TABLES
+    finally:
+        sys.path.remove(neon_directory)
+
+    missing = enabled - set(EXPECTED_RLS_TABLES)
+    assert not missing, f"RLS-protected tables missing from runtime verification: {sorted(missing)}"

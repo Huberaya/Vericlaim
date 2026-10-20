@@ -150,8 +150,8 @@ def test_s3_signed_capabilities_bind_server_key_size_encryption_and_source_etag(
         endpoint_url="https://internal-storage.example.test",
         public_endpoint_url="https://uploads.example.test",
         region_name="eu-west-3",
-        access_key_id="test-access-key",
-        secret_access_key="test-secret-key",
+        access_key_id="not-a-real-access-key",
+        secret_access_key="not-a-real-secret-key",
         sse_mode="aes256",
         sse_kms_key_id=None,
     )
@@ -753,3 +753,52 @@ def test_legacy_multipart_upload_is_scanned_before_document_extraction():
             assert scanner.scanned_payloads == [b"EICAR-STANDARD-ANTIVIRUS-TEST-FILE"]
     finally:
         app.state.document_scanner = original_scanner
+
+
+def test_quarantine_replacement_between_head_and_read_is_refused():
+    app, storage, scanner, old_storage, old_scanner = _install_document_fakes()
+    try:
+        with TestClient(app) as client:
+            authenticate_client(client, role_code="analyst")
+            document = _create_document(client, title="HEAD/GET race")
+            response = client.post(f"/api/v1/documents/{document['id']}/versions", json={
+                "source_filename": "fiche.pdf", "content_type": "application/pdf", "size_bytes": len(PDF_BYTES),
+            })
+            assert response.status_code == 201, response.text
+            instruction = response.json()
+            bucket, key = storage.upload_latest(payload=PDF_BYTES)
+            original = storage.objects[(bucket, key)]
+            read = storage.read_bytes
+
+            def replace_before_read(**kwargs):
+                storage.objects[(bucket, key)] = StoredObject(
+                    payload=PDF_BYTES.replace(b"secure", b"unsafe"),
+                    content_type="application/pdf", etag="replacement",
+                )
+                return read(**kwargs)
+
+            storage.read_bytes = replace_before_read
+            # Restore original before COPY: COPY's condition alone cannot
+            # bind the scanned payload to the HEAD revision.
+            scanner.on_scan = lambda _: storage.objects.__setitem__((bucket, key), original)
+            response = client.post(f"/api/v1/document-uploads/{instruction['upload']['id']}/complete")
+            assert response.status_code == 503, response.text
+            assert response.json()["upload"]["scan_error_code"] == "storage_unavailable"
+            assert storage.copy_requests == []
+            assert not scanner.scanned_payloads
+    finally:
+        app.state.document_storage = old_storage
+        app.state.document_scanner = old_scanner
+
+
+def test_s3_read_binds_scanned_bytes_to_expected_revision():
+    from io import BytesIO
+    from types import SimpleNamespace
+
+    requests = []
+    body = BytesIO(b"scanned bytes")
+    storage = object.__new__(S3ObjectStorage)
+    storage._client = SimpleNamespace(get_object=lambda **kwargs: (requests.append(kwargs) or {"Body": body}))
+    assert storage.read_bytes(bucket="quarantine", key="opaque", max_size_bytes=100, expected_etag='"revision"') == b"scanned bytes"
+    assert requests == [{"Bucket": "quarantine", "Key": "opaque", "IfMatch": '"revision"'}]
+    assert body.closed

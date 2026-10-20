@@ -82,7 +82,7 @@ def _hash(character: str = "a") -> str:
 
 def test_schema_autocreation_is_opt_in_outside_local_and_test(monkeypatch):
     monkeypatch.setenv("APP_ENV", "production")
-    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://vericlaim:secret@db/vericlaim")
+    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://vericlaim@db.invalid/vericlaim")
     monkeypatch.setenv("AUTH_SESSION_SECRET", "a" * 48)
     monkeypatch.setenv("FRONTEND_URL", "https://app.example.test")
     monkeypatch.setenv("OIDC_ISSUER", "https://idp.example.test")
@@ -141,7 +141,7 @@ def test_schema_autocreation_is_opt_in_outside_local_and_test(monkeypatch):
         assert "must use PostgreSQL" in str(exc)
     else:
         raise AssertionError("production must not permit SQLite without RLS")
-    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://vericlaim:secret@db/vericlaim")
+    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://vericlaim@db.invalid/vericlaim")
 
     monkeypatch.delenv("DATABASE_URL")
     try:
@@ -258,7 +258,7 @@ def test_shared_database_startup_fails_closed_until_alembic_is_current(tmp_path:
 def test_postgresql_offline_migration_contains_tenant_rls_policies():
     env = {
         **os.environ,
-        "DATABASE_URL": "postgresql+psycopg://vericlaim:placeholder@db.invalid:5432/vericlaim",
+        "DATABASE_URL": "postgresql+psycopg://vericlaim@db.invalid:5432/vericlaim",
         "APP_ENV": "test",
         "AUTO_CREATE_SCHEMA": "false",
     }

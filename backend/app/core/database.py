@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Iterator
 from uuid import UUID
 
-from sqlalchemy import DateTime, ForeignKey, Integer, JSON, MetaData, String, Uuid, create_engine, select
+from sqlalchemy import event, text, DateTime, ForeignKey, Integer, JSON, MetaData, String, Uuid, create_engine, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -63,6 +63,23 @@ if settings.database_url.startswith("sqlite"):
 
 engine = create_engine(settings.database_url, **_engine_kwargs)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
+
+
+@event.listens_for(Session, "after_begin")
+def _restore_transaction_request_context(session: Session, transaction, connection) -> None:
+    """SET LOCAL expires at commit/rollback; restore only this Session's context.
+
+    Never attach tenant state to a pooled connection or inherit another request.
+    Direct SQL test/admin connections without Session.info remain unscoped.
+    """
+    if connection.dialect.name != "postgresql" or "current_user_id" not in session.info:
+        return
+    connection.execute(
+        text("SELECT set_config('app.current_user_id', :user_id, true), "
+             "set_config('app.current_organization_id', :organization_id, true)"),
+        {"user_id": str(session.info["current_user_id"]),
+         "organization_id": str(session.info.get("current_organization_id") or "")},
+    )
 
 
 def _expected_alembic_revision() -> str:
@@ -184,20 +201,19 @@ def append_audit_record(
     summary: dict[str, Any],
     created_at_utc: datetime | None = None,
 ) -> tuple[str | None, str, datetime]:
-    """Append a hash-linked engine audit envelope within one organisation.
+    """Append a hash-linked envelope using append-only runtime grants.
 
-    This is tamper-evident, not notarised. ``AuditEvent`` adds actor/resource
-    context; stronger transaction serialization remains a dedicated audit
-    workstream.
+    Serialize per tenant, including an empty chain, without UPDATE privileges.
     """
-
+    if db.get_bind().dialect.name == "postgresql":
+        lock_key = int.from_bytes(hashlib.sha256(("engine-audit:" + str(organization_id)).encode()).digest()[:8], "big", signed=True)
+        db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": lock_key})
     created = created_at_utc or datetime.now(timezone.utc)
     previous = db.scalar(
         select(AuditRecord)
         .where(AuditRecord.organization_id == organization_id)
         .order_by(AuditRecord.sequence.desc())
         .limit(1)
-        .with_for_update()
     )
     previous_hash = previous.record_hash if previous else None
     material = {
