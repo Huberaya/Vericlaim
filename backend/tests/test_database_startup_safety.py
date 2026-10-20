@@ -111,5 +111,3 @@ def test_unreachable_database_returns_503_not_a_fabricated_success(
     assert readiness.json()["database"] == "unavailable"
     # Liveness keeps answering: the process is healthy, the dependency is not.
     assert client.get("/healthz").status_code == 200
-
-

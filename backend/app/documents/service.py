@@ -915,4 +915,3 @@ def sweep_expired_document_uploads(
         swept += 1
     db.flush()
     return swept
-
