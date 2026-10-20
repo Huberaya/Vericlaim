@@ -1304,7 +1304,11 @@ def process_claimed_analysis_detection(
     )
     if job is None:
         raise AnalysisNotFoundError("Job de détection introuvable.")
-    if job.status != AnalysisDetectionJobStatus.RUNNING or job.worker_id != claim.worker_id:
+    if (
+        job.status != AnalysisDetectionJobStatus.RUNNING
+        or job.worker_id != claim.worker_id
+        or job.attempt_count != claim.attempt_count
+    ):
         raise AnalysisConflictError("Le lease du job de détection n’est plus détenu par ce worker.")
     if job.lease_expires_at is None or _as_utc(job.lease_expires_at) <= utcnow():
         raise AnalysisConflictError("Le lease du job de détection a expiré avant son traitement.")
@@ -1351,11 +1355,16 @@ def _publish_claim_detection_result(
             AnalysisDetectionJob.organization_id == claim.organization_id,
             AnalysisDetectionJob.id == claim.id,
         )
+        .execution_options(populate_existing=True)
         .with_for_update()
     )
     if job is None:
         raise AnalysisNotFoundError("Job de détection introuvable.")
-    if job.status != AnalysisDetectionJobStatus.RUNNING or job.worker_id != claim.worker_id:
+    if (
+        job.status != AnalysisDetectionJobStatus.RUNNING
+        or job.worker_id != claim.worker_id
+        or job.attempt_count != claim.attempt_count
+    ):
         raise AnalysisConflictError("Le lease du job de détection n’est plus détenu par ce worker.")
     if job.lease_expires_at is None or _as_utc(job.lease_expires_at) <= utcnow():
         raise AnalysisConflictError("Le lease du job de détection a expiré avant la publication.")
@@ -1455,9 +1464,15 @@ def record_analysis_detection_failure(
             AnalysisDetectionJob.organization_id == claim.organization_id,
             AnalysisDetectionJob.id == claim.id,
         )
+        .execution_options(populate_existing=True)
         .with_for_update()
     )
-    if job is None or job.status != AnalysisDetectionJobStatus.RUNNING or job.worker_id != claim.worker_id:
+    if (
+        job is None
+        or job.status != AnalysisDetectionJobStatus.RUNNING
+        or job.worker_id != claim.worker_id
+        or job.attempt_count != claim.attempt_count
+    ):
         return False
     version = _get_analysis_version(
         db,

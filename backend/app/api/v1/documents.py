@@ -249,7 +249,7 @@ def request_document_version_upload(
         upload=_present_upload(upload_request.upload),
         upload_url=upload_request.upload_form.url,
         upload_fields=upload_request.upload_form.fields,
-        max_size_bytes=body.size_bytes,
+        max_size_bytes=settings.max_upload_bytes,
     )
 
 
