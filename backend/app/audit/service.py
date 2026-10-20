@@ -70,53 +70,19 @@ def record_audit_event(
     request_id: Optional[str] = None,
     occurred_at: Optional[datetime] = None,
 ) -> AuditEvent:
-    """Enregistre un événement métier de manière append-only et hash-chaînée par organisation."""
-    event_time = occurred_at or datetime.now(timezone.utc)
-    occurred_at_iso = normalize_iso_datetime(event_time)
+    """Compatibility writer: same hash/lock as business events.
 
-    # 1. Hachage du payload canonique
-    payload_sha256 = compute_payload_sha256(payload)
-
-    # 2. Récupération du dernier événement de la chaîne pour cette organisation
-    latest_event = db.scalar(
-        select(AuditEvent)
-        .where(AuditEvent.organization_id == organization_id)
-        .order_by(AuditEvent.occurred_at.desc(), AuditEvent.id.desc())
-        .limit(1)
+    Preserve this legacy helper's committing contract; request-local PostgreSQL
+    context is restored by the Session after_begin hook for subsequent reads.
+    """
+    from app.identity.service import append_audit_event
+    event = append_audit_event(
+        db, organization_id=organization_id, actor_user_id=actor_user_id,
+        entity_type=entity_type, entity_id=entity_id, action=action,
+        payload=payload, request_id=request_id, occurred_at=occurred_at,
     )
-
-    previous_event_hash = latest_event.event_hash if latest_event else None
-
-    # 3. Calcul de l'empreinte cryptographique de scellement
-    event_hash = compute_event_hash(
-        organization_id=organization_id,
-        entity_type=entity_type,
-        entity_id=entity_id,
-        action=action,
-        occurred_at_iso=occurred_at_iso,
-        payload_sha256=payload_sha256,
-        previous_event_hash=previous_event_hash,
-    )
-
-    audit_entry = AuditEvent(
-        id=uuid4(),
-        organization_id=organization_id,
-        actor_user_id=actor_user_id,
-        entity_type=entity_type,
-        entity_id=entity_id,
-        action=action,
-        occurred_at=event_time,
-        request_id=request_id,
-        payload_json=payload,
-        payload_sha256=payload_sha256,
-        previous_event_hash=previous_event_hash,
-        event_hash=event_hash,
-    )
-
-    db.add(audit_entry)
     db.commit()
-    db.refresh(audit_entry)
-    return audit_entry
+    return event
 
 
 def list_audit_events(
@@ -206,7 +172,24 @@ def verify_audit_chain(
             payload_sha256=ev.payload_sha256,
             previous_event_hash=ev.previous_event_hash,
         )
-        if ev.event_hash != expected_event_hash:
+        # Business events already persisted use canonical JSON with actor and
+        # request metadata. Legacy audit events used the colon-delimited hash.
+        # Verify both without rewriting historical rows or trusting a new flag.
+        from app.core.database import sha256_json
+        canonical_event_hash = sha256_json({
+            "organization_id": str(ev.organization_id),
+            "actor_user_id": str(ev.actor_user_id) if ev.actor_user_id else None,
+            "entity_type": ev.entity_type,
+            "entity_id": str(ev.entity_id) if ev.entity_id else None,
+            "action": ev.action,
+            "occurred_at": (ev.occurred_at.replace(tzinfo=timezone.utc) if ev.occurred_at.tzinfo is None
+                            else ev.occurred_at.astimezone(timezone.utc)).isoformat(),
+            "request_id": ev.request_id,
+            "payload": ev.payload_json,
+            "payload_sha256": ev.payload_sha256,
+            "previous_event_hash": ev.previous_event_hash,
+        })
+        if ev.event_hash not in {expected_event_hash, canonical_event_hash}:
             return AuditChainVerificationResponse(
                 is_valid=False,
                 organization_id=organization_id,
