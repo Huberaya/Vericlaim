@@ -168,7 +168,7 @@ def test_two_concurrent_passes_never_share_a_row(runtime_engine, tenants) -> Non
 
 def test_a_pass_never_reaches_another_tenants_ledger(runtime_engine, tenants) -> None:
     """Une passe adressée au tenant A ne voit ni ne modifie les lignes ouvertes de B."""
-    started = datetime.now(timezone.utc) - timedelta(minutes=2)
+    started = datetime.now(timezone.utc) - timedelta(minutes=5)
     ids_a = _open_ledgers(runtime_engine, organization=tenants.organization_a, count=2, started=started)
     ids_b = _open_ledgers(runtime_engine, organization=tenants.organization_b, count=2, started=started)
     storage = CountingStorage()
@@ -223,3 +223,115 @@ def _settings():
     from app.core.config import settings
 
     return settings
+
+
+@pytest.mark.parametrize("cancel", ["rollback", "close"])
+@pytest.mark.parametrize("nested", [False, True])
+def test_cancelled_purge_cannot_survive_session_reuse(runtime_engine, tenants, cancel, nested):
+    """Real PostgreSQL rollback of both state and side-effect authorization, as app role."""
+    from app.documents.purge import schedule_upload_purge
+
+    upload_id = _open_ledgers(
+        runtime_engine, organization=tenants.organization_a, count=1,
+        started=datetime.now(timezone.utc) - timedelta(minutes=5),
+    )[0]
+    storage = CountingStorage()
+    with Session(runtime_engine) as db:
+        set_db_request_context(db, user_id=uuid.UUID(int=0), organization_id=tenants.organization_a)
+        row = db.get(DocumentUpload, upload_id)
+        row.purge_required = False
+        row.purge_kind = None
+        db.commit()
+        savepoint = db.begin_nested() if nested else None
+        schedule_upload_purge(
+            db, storage=storage, settings=_settings(), upload=row,
+            organization_id=tenants.organization_a, reason="abandoned",
+            requested_at=datetime.now(timezone.utc),
+        )
+        db.flush()
+        if savepoint:
+            savepoint.commit()
+        assert storage.calls == []
+        getattr(db, cancel)()
+        db.commit()
+        assert storage.calls == []
+        assert db.get(DocumentUpload, upload_id).purge_required is False
+
+
+def test_savepoint_rollback_preserves_only_outer_purge(runtime_engine, tenants):
+    from app.documents.purge import schedule_upload_purge
+
+    ids = _open_ledgers(
+        runtime_engine, organization=tenants.organization_a, count=2,
+        started=datetime.now(timezone.utc) - timedelta(minutes=5),
+    )
+    storage = CountingStorage()
+    with Session(runtime_engine) as db:
+        set_db_request_context(db, user_id=uuid.UUID(int=0), organization_id=tenants.organization_a)
+        rows = [db.get(DocumentUpload, upload_id) for upload_id in ids]
+        for row in rows:
+            row.purge_required = False
+            row.purge_kind = None
+        db.commit()
+        # Read into this transaction before creating the inner savepoint.
+        rows = [db.get(DocumentUpload, upload_id) for upload_id in ids]
+        outer_prefix = _upload_object_prefix(rows[0])
+        def schedule(row):
+            schedule_upload_purge(
+                db, storage=storage, settings=_settings(), upload=row,
+                organization_id=tenants.organization_a, reason="abandoned",
+                requested_at=datetime.now(timezone.utc),
+            )
+        schedule(rows[0])
+        savepoint = db.begin_nested()
+        schedule(rows[1])
+        db.flush()
+        savepoint.rollback()
+        assert storage.calls == []
+        db.commit()
+        assert storage.calls == [(_settings().document_quarantine_bucket, outer_prefix)]
+        assert db.get(DocumentUpload, ids[0]).purge_required is True
+        assert db.get(DocumentUpload, ids[1]).purge_required is False
+
+
+def test_second_pass_finishes_while_first_holds_row_locks(runtime_engine, tenants):
+    """Overlap is mandatory, not merely two futures that might run sequentially."""
+    _open_ledgers(
+        runtime_engine, organization=tenants.organization_a, count=3,
+        started=datetime.now(timezone.utc) - timedelta(minutes=5),
+    )
+    entered, release = Event(), Event()
+
+    class BlockedStorage(CountingStorage):
+        def delete_prefix(self, *, bucket, prefix):
+            if self._block_first:
+                self._block_first = False
+                entered.set()
+                assert release.wait(15), "test did not release first worker"
+            return super().delete_prefix(bucket=bucket, prefix=prefix)
+
+    first_storage, second_storage = BlockedStorage(), CountingStorage()
+
+    def run(storage):
+        with Session(runtime_engine) as db:
+            set_db_request_context(db, user_id=uuid.UUID(int=0), organization_id=tenants.organization_a)
+            summary = retry_retained_document_purges(
+                db, settings=_settings(), storage=storage,
+                organization_id=tenants.organization_a, limit=2,
+            )
+            db.commit()
+            return summary
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(run, first_storage)
+        try:
+            assert entered.wait(8)
+            # First has locked two rows and cannot finish until this thread releases it.
+            second = pool.submit(run, second_storage).result(timeout=10)
+            assert second.examined == second.released == 1
+            assert not first.done()
+        finally:
+            release.set()
+        assert first.result(timeout=10).released == 2
+    calls = first_storage.calls + second_storage.calls
+    assert len(calls) == len(set(calls)) == 3
