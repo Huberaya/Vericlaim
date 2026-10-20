@@ -4,6 +4,8 @@ on:
   pull_request:
     branches:
       - main
+      # Follow-up corrections can be reviewed against PR #11 without merging it.
+      - arena/2672a0ba-vericlaim
   push:
     branches:
       - main
