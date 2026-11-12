@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from typing import List, Optional
-from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
@@ -74,7 +73,7 @@ def get_audit_integrity_certificate(
     principal: TenantPrincipal = AUDIT_READ_DEPENDENCY,
     db: Session = DATABASE_DEPENDENCY,
 ) -> AuditIntegrityCertificateResponse:
-    """Génère un certificat d'intégrité cryptographique scellé pour la piste d'audit."""
+    """Retourne un instantané interne non signé de la vérification de chaîne."""
     org_name = principal.membership_view.organization.name or "Organisation Abonnée"
     try:
         return generate_cryptographic_audit_certificate(
@@ -86,4 +85,4 @@ def get_audit_integrity_certificate(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=str(err),
-        )
+        ) from err

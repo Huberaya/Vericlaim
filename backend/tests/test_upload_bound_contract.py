@@ -20,7 +20,6 @@ configuration servie entraîne tous les lecteurs à la fois.
 
 from __future__ import annotations
 
-import dataclasses
 import uuid
 from dataclasses import replace
 from pathlib import Path

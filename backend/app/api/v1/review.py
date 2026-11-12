@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
 from app.analyses.service import AnalysisNotFoundError, get_analysis_version_by_number

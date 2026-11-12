@@ -11,10 +11,9 @@ from sqlalchemy.orm import Session
 
 from app.models.audit_schemas import (
     AuditChainVerificationResponse,
-    AuditEventResponse,
     AuditIntegrityCertificateResponse,
 )
-from app.models.domain import AuditEvent, Organization
+from app.models.domain import AuditEvent
 
 
 def normalize_iso_datetime(dt: datetime) -> str:
@@ -220,7 +219,7 @@ def generate_cryptographic_audit_certificate(
     organization_id: UUID,
     organization_name: str,
 ) -> AuditIntegrityCertificateResponse:
-    """Émet un certificat formel attestant de l'intégrité de la piste d'audit."""
+    """Retourne un instantané interne non signé de la vérification de chaîne."""
     verification = verify_audit_chain(db, organization_id)
     now = datetime.now(timezone.utc)
 
@@ -239,8 +238,8 @@ def generate_cryptographic_audit_certificate(
         chain_length=verification.total_events,
         head_event_hash=head_hash,
         merkle_digest=merkle_digest,
-        verification_status="SEALED_AND_VERIFIED",
+        verification_status="CHAIN_CONSISTENT",
         certified_at=now,
         issuer="VeriClaim Cryptographic Ledger Engine v1.0",
-        legal_disclaimer="Ce certificat atteste de la non-altération mathématique des journaux d'audit enregistrés sous isolation PostgreSQL RLS.",
+        legal_disclaimer="Instantané interne non signé, sans horodatage tiers ni ancrage externe. La cohérence des événements présents ne prouve ni leur exhaustivité ni l’absence de réécriture. Le champ merkle_digest est une empreinte de métadonnées, pas une racine de Merkle.",
     )

@@ -69,7 +69,7 @@ export function AuditTrailExplorer() {
       setCertificate(cert);
       setIsCertModalOpen(true);
     } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : "Erreur lors de l'obtention du certificat");
+      alert(err instanceof Error ? err.message : "Erreur lors de l'obtention de l’instantané");
     }
   }
 
@@ -80,10 +80,10 @@ export function AuditTrailExplorer() {
         <div>
           <h2 className="text-xl font-bold text-slate-900 dark:text-white flex items-center gap-2">
             <span className="text-indigo-600 dark:text-indigo-400">🛡️</span>
-            Journal d&apos;Audit Immuable &amp; Scellement Cryptographique (Chantier 11)
+            Journal d&apos;audit et vérification de chaîne
           </h2>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-            Piste d&apos;audit append-only scellée par hash-chaining SHA-256 avec isolation PostgreSQL RLS par organisation.
+            Chaînage SHA-256 des événements présents. Sans ancrage externe, la vérification ne prouve ni exhaustivité ni absence de réécriture.
           </p>
         </div>
 
@@ -102,7 +102,7 @@ export function AuditTrailExplorer() {
             onClick={handleOpenCertificate}
             className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-indigo-700 transition"
           >
-            <span>📜</span> Certificat d&apos;Intégrité
+            <span>📜</span> Instantané de vérification
           </button>
         </div>
       </div>
@@ -122,21 +122,21 @@ export function AuditTrailExplorer() {
                 <>
                   <span className="h-2.5 w-2.5 rounded-full bg-emerald-500 animate-pulse" />
                   <span className="font-bold text-emerald-900 dark:text-emerald-200 uppercase tracking-wide">
-                    Chaîne d&apos;Audit Scellée &amp; Mathématiquement Intègre
+                    Chaîne des événements présents cohérente
                   </span>
                 </>
               ) : (
                 <>
                   <span className="h-2.5 w-2.5 rounded-full bg-rose-500" />
                   <span className="font-bold text-rose-900 dark:text-rose-200 uppercase tracking-wide">
-                    Altération Détectée dans la Chaîne de Scellement
+                    Incohérence détectée dans la chaîne
                   </span>
                 </>
               )}
             </div>
             <p className="text-slate-600 dark:text-slate-300 text-[11px]">
               {verification.is_valid
-                ? `L'intégralité des ${verification.total_events} événements enregistrés respecte la chaîne de hachage sans rupture ni falsification.`
+                ? `${verification.total_events} événement(s) présent(s) respectent les contrôles de chaînage. Cette vérification ne prouve pas l’absence de suppression ou de réécriture.`
                 : verification.error_detail}
             </p>
           </div>
@@ -257,7 +257,7 @@ export function AuditTrailExplorer() {
           <div className="relative w-full max-w-lg rounded-xl bg-white shadow-2xl border border-slate-200 dark:bg-slate-900 dark:border-slate-800 p-6 space-y-4 text-xs">
             <div className="flex items-center justify-between border-b border-slate-200 pb-3 dark:border-slate-800">
               <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                <span>📜</span> Certificat d&apos;Intégrité Cryptographique
+                <span>📜</span> Instantané de vérification non signé
               </h3>
               <button
                 onClick={() => setIsCertModalOpen(false)}
@@ -268,14 +268,14 @@ export function AuditTrailExplorer() {
             </div>
 
             <div className="space-y-3 font-mono text-[11px] bg-slate-50 p-4 rounded-lg border border-slate-200 dark:bg-slate-800 dark:border-slate-700 text-slate-800 dark:text-slate-200">
-              <div><strong>N° CERTIFICAT :</strong> {certificate.certificate_id}</div>
+              <div><strong>IDENTIFIANT :</strong> {certificate.certificate_id}</div>
               <div><strong>ORGANISATION :</strong> {certificate.organization_name}</div>
               <div><strong>LONGUEUR DE CHAÎNE :</strong> {certificate.chain_length} événements</div>
               <div><strong>STATUT :</strong> <span className="text-emerald-600 font-bold">{certificate.verification_status}</span></div>
               <div><strong>HEAD SHA-256 :</strong> {certificate.head_event_hash}</div>
-              <div><strong>CONDENSAT MERKLE :</strong> {certificate.merkle_digest}</div>
+              <div><strong>EMPREINTE DES MÉTADONNÉES (non Merkle) :</strong> {certificate.merkle_digest}</div>
               <div><strong>ÉMIS LE :</strong> {new Date(certificate.certified_at).toLocaleString("fr-FR")}</div>
-              <div><strong>AUTORITÉ :</strong> {certificate.issuer}</div>
+              <div><strong>ÉMETTEUR LOGICIEL :</strong> {certificate.issuer}</div>
             </div>
 
             <p className="text-[10px] text-slate-500 italic leading-relaxed">

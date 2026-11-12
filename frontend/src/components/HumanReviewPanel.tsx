@@ -143,7 +143,7 @@ export function HumanReviewPanel({
           <div className="mt-2 text-2xl font-bold text-emerald-700 dark:text-emerald-400">
             {validatedCount}
           </div>
-          <p className="mt-1 text-xs text-emerald-600 dark:text-emerald-500">Preuves jugées suffisantes</p>
+          <p className="mt-1 text-xs text-emerald-600 dark:text-emerald-500">Décisions humaines enregistrées</p>
         </div>
 
         <div className="rounded-xl border border-amber-200 bg-amber-50/50 p-4 shadow-sm dark:border-amber-900/50 dark:bg-amber-950/20">
@@ -163,7 +163,7 @@ export function HumanReviewPanel({
           <div className="mt-2 text-2xl font-bold text-rose-700 dark:text-rose-400">
             {contestedCount}
           </div>
-          <p className="mt-1 text-xs text-rose-600 dark:text-rose-500">Risque de greenwashing avéré</p>
+          <p className="mt-1 text-xs text-rose-600 dark:text-rose-500">Décisions humaines de contestation</p>
         </div>
       </div>
 
@@ -174,7 +174,7 @@ export function HumanReviewPanel({
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
           </svg>
           <div className="text-xs text-indigo-950 dark:text-indigo-200 leading-relaxed">
-            <strong className="font-semibold text-indigo-900 dark:text-indigo-300">Gouvernance Human-in-the-Loop :</strong> Le moteur IA détecte et qualifie les allégations selon la directive européenne 2024/825 et la loi AGEC. Chaque décision d&apos;homologation finale ou de contestation reste sous la responsabilité exclusive d&apos;un auditeur ou juriste certifié.
+            <strong className="font-semibold text-indigo-900 dark:text-indigo-300">Gouvernance Human-in-the-Loop :</strong> Le moteur détecte des allégations sans conclure à leur conformité. Les décisions enregistrées sont celles des utilisateurs autorisés ; leurs qualifications ne sont pas vérifiées par la plateforme.
           </div>
         </div>
       </div>
@@ -279,7 +279,7 @@ export function HumanReviewPanel({
                   <td className="py-3.5 px-4 whitespace-nowrap">
                     {coverage === "verified" && (
                       <span className="inline-flex items-center gap-1 rounded bg-emerald-100 px-2 py-0.5 text-[11px] font-semibold text-emerald-800 dark:bg-emerald-950/80 dark:text-emerald-300">
-                        ● Complète ({matRow?.evidence_links.length || 0})
+                        ● Statut déclaré vérifié ({matRow?.evidence_links.length || 0})
                       </span>
                     )}
                     {coverage === "expired" && (
@@ -356,7 +356,7 @@ export function HumanReviewPanel({
 
             <div>
               <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                Décision d&apos;homologation
+                Décision de revue
               </label>
               <div className="flex gap-2">
                 <button
@@ -368,7 +368,7 @@ export function HumanReviewPanel({
                       : "bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300"
                   }`}
                 >
-                  ✓ Valider la conformité
+                  ✓ Enregistrer une validation
                 </button>
                 <button
                   type="button"

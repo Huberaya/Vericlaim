@@ -84,7 +84,7 @@ export function RuleDiffModal({ isOpen, onClose }: RuleDiffModalProps) {
                     </h3>
                   </div>
                   <span className="rounded bg-slate-200 px-2 py-0.5 text-[10px] font-semibold text-slate-700 dark:bg-slate-800 dark:text-slate-300">
-                    📅 {new Date(entry.release_date).toLocaleDateString("fr-FR")}
+                    {entry.release_date ? new Date(entry.release_date).toLocaleDateString("fr-FR") : "Date de publication non vérifiée"}
                   </span>
                 </div>
 

@@ -21,7 +21,6 @@ def test_document_events_verify_with_legacy_audit_api():
 
 def test_historical_legacy_hashes_are_readable_without_rewriting():
     from datetime import datetime, timezone
-    from uuid import uuid4
     from app.core.database import SessionLocal
     from app.audit.service import compute_payload_sha256, compute_event_hash, normalize_iso_datetime, verify_audit_chain
     from app.identity.service import append_audit_event

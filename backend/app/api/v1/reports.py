@@ -1,27 +1,24 @@
+"""Report exports.
+
+Interactive exports render the evaluation supplied by the caller. Persisted
+analysis exports fail closed until a reviewed, tenant-scoped report builder can
+reconstruct verdicts, evidence and audit material from durable rows. Never
+re-evaluate placeholder text or present null hashes as a probative report.
+"""
 from __future__ import annotations
 
-import io
-from datetime import datetime, timezone, date
-from typing import Optional
+from datetime import datetime
+from typing import NoReturn
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.analyses.service import get_analysis
 from app.core.database import get_db
-from app.engine.inference_evaluator import InferenceEvaluator
-from app.engine.risk_assessment import (
-    build_exposure_matrix,
-    derive_overall_status,
-    derive_risk_score,
-)
 from app.identity.dependencies import TenantPrincipal, require_permission
-from app.models.domain import Analysis, AnalysisVersion, Organization
-from app.models.legal_types import AuditTrail, EvidenceDossier, Verdict
-from app.models.report_schemas import DossierExportResponse, PdfExportRequest
-from app.models.schemas import AuditContext, EvaluationResponse
+from app.models.domain import Analysis, AnalysisVersion
+from app.models.report_schemas import PdfExportRequest
 from app.reports.dossier_exporter import create_regulatory_dossier_zip
 from app.reports.pdf_generator import RegulatoryPdfReportGenerator
 
@@ -29,45 +26,6 @@ router = APIRouter(prefix="/api/v1/reports", tags=["reports"])
 
 DATABASE_DEPENDENCY = Depends(get_db)
 AUDIT_READ_DEPENDENCY = Depends(require_permission("audit:read"))
-
-
-def _build_evaluation_from_text(
-    text: str,
-    context: Optional[AuditContext] = None,
-    evidence: Optional[EvidenceDossier] = None,
-) -> EvaluationResponse:
-    evaluator = InferenceEvaluator()
-    ctx = context or AuditContext()
-    dossier = evidence or EvidenceDossier()
-    claims, evaluations = evaluator.evaluate_text(text, dossier, ctx)
-    overall = derive_overall_status(evaluations, len(claims))
-    risk_score = derive_risk_score(evaluations)
-    exposure, exposure_summary = build_exposure_matrix(evaluations, dossier, ctx)
-
-    return EvaluationResponse(
-        extracted_source_text=text,
-        overall_compliance=overall,
-        risk_score=risk_score,
-        legal_exposure_estimate=exposure_summary,
-        violations_count=sum(1 for i in evaluations if i.is_legal_violation),
-        conditional_findings_count=sum(
-            1 for i in evaluations if i.verdict != Verdict.COMPLIANT
-        ),
-        detected_claims_count=len(claims),
-        evaluations=evaluations,
-        exposure_matrix=exposure,
-        audit_trail=AuditTrail(
-            audit_id="aud-persisted-export",
-            engine_version="1.0.0",
-            rulebook_version="2026.09",
-            evaluated_at_utc=datetime.now(timezone.utc),
-            as_of_date=date.today(),
-            source_sha256="0" * 64,
-            evidence_manifest_sha256="0" * 64,
-            report_sha256="0" * 64,
-            record_hash="0" * 64,
-        ),
-    )
 
 
 def _get_analysis_or_404(
@@ -78,22 +36,13 @@ def _get_analysis_or_404(
     try:
         parsed_id = UUID(analysis_id)
     except ValueError:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Identifiant d'analyse invalide.",
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Identifiant d'analyse invalide.") from None
 
     analysis = db.scalar(
-        select(Analysis).where(
-            Analysis.id == parsed_id,
-            Analysis.organization_id == organization_id,
-        )
+        select(Analysis).where(Analysis.id == parsed_id, Analysis.organization_id == organization_id)
     )
     if not analysis:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Analyse introuvable pour cette organisation.",
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Analyse introuvable pour cette organisation.")
 
     latest_version = db.scalar(
         select(AnalysisVersion)
@@ -104,12 +53,19 @@ def _get_analysis_or_404(
         .order_by(AnalysisVersion.version_number.desc())
     )
     if not latest_version:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Aucune version d'analyse disponible.",
-        )
-
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Aucune version d'analyse disponible.")
     return analysis, latest_version
+
+
+def _persisted_report_unavailable() -> NoReturn:
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=(
+            "Export réglementaire persistant non disponible : cette analyse ne contient pas de verdicts "
+            "réglementaires persistés et vérifiés. Utilisez l'export de l'évaluation interactive ou "
+            "attendez le workflow de rapport persistant revu. Aucun rapport de substitution n'est généré."
+        ),
+    )
 
 
 @router.post("/pdf", response_class=Response)
@@ -118,43 +74,34 @@ def export_pdf_report(
     principal: TenantPrincipal = AUDIT_READ_DEPENDENCY,
     db: Session = DATABASE_DEPENDENCY,
 ) -> Response:
-    """Génère et télécharge un rapport d'audit réglementaire au format PDF."""
+    """Render an interactive evaluation, without claiming a qualified signature."""
     eval_response = payload.evaluation_response
-    org_name = principal.membership_view.organization.name or "Organisation Abonnée"
-
     if eval_response is None:
         if not payload.analysis_id:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="Fournissez evaluation_response ou analysis_id pour générer le rapport.",
             )
-        analysis, version = _get_analysis_or_404(db, payload.analysis_id, principal.organization_id)
-        # Reconstitution depuis le résultat stocké
-        source_text = ""
-        if version.result_json and isinstance(version.result_json, dict):
-            source_text = version.result_json.get("extracted_source_text", "")
-        if not source_text and version.input_manifest and isinstance(version.input_manifest, dict):
-            source_text = version.input_manifest.get("source_text", "")
-        eval_response = _build_evaluation_from_text(source_text or "Texte extrait de la pièce justificative.")
+        _get_analysis_or_404(db, payload.analysis_id, principal.organization_id)
+        _persisted_report_unavailable()
 
     generator = RegulatoryPdfReportGenerator(
         report=eval_response,
-        organization_name=org_name,
+        organization_name=principal.membership_view.organization.name,
         document_title=payload.document_title,
         product_identifier=payload.product_identifier,
-        surface=payload.surface or "packaging",
+        surface=payload.surface or "non précisé",
         include_evidence_matrix=payload.include_evidence_matrix,
         include_remediation_clauses=payload.include_remediation_clauses,
     )
-    pdf_bytes = generator.generate()
-
     filename = f"rapport-pre-audit-{datetime.now().strftime('%Y%m%d-%H%M')}.pdf"
     return Response(
-        content=pdf_bytes,
+        content=generator.generate(),
         media_type="application/pdf",
         headers={
             "Content-Disposition": f'attachment; filename="{filename}"',
             "X-Report-Type": "regulatory-pre-audit-pdf",
+            "Cache-Control": "no-store",
         },
     )
 
@@ -165,31 +112,23 @@ def export_regulatory_dossier(
     principal: TenantPrincipal = AUDIT_READ_DEPENDENCY,
     db: Session = DATABASE_DEPENDENCY,
 ) -> Response:
-    """Génère l'archive ZIP complète du dossier probatoire (PDF + JSON + CSV + README)."""
+    """Export an interactive evaluation and its declared, unverified evidence metadata."""
     eval_response = payload.evaluation_response
-    org_name = principal.membership_view.organization.name or "Organisation Abonnée"
-
     if eval_response is None:
         if not payload.analysis_id:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="Fournissez evaluation_response ou analysis_id pour générer le dossier.",
             )
-        analysis, version = _get_analysis_or_404(db, payload.analysis_id, principal.organization_id)
-        source_text = ""
-        if version.result_json and isinstance(version.result_json, dict):
-            source_text = version.result_json.get("extracted_source_text", "")
-        if not source_text and version.input_manifest and isinstance(version.input_manifest, dict):
-            source_text = version.input_manifest.get("source_text", "")
-        eval_response = _build_evaluation_from_text(source_text or "Texte extrait de la pièce justificative.")
+        _get_analysis_or_404(db, payload.analysis_id, principal.organization_id)
+        _persisted_report_unavailable()
 
     zip_bytes = create_regulatory_dossier_zip(
         report=eval_response,
-        organization_name=org_name,
+        organization_name=principal.membership_view.organization.name,
         product_identifier=payload.product_identifier,
-        surface=payload.surface or "packaging",
+        surface=payload.surface or "non précisé",
     )
-
     filename = f"dossier-probatoire-{datetime.now().strftime('%Y%m%d-%H%M')}.zip"
     return Response(
         content=zip_bytes,
@@ -197,6 +136,7 @@ def export_regulatory_dossier(
         headers={
             "Content-Disposition": f'attachment; filename="{filename}"',
             "X-Dossier-Type": "regulatory-evidence-pack-zip",
+            "Cache-Control": "no-store",
         },
     )
 
@@ -207,12 +147,8 @@ def get_analysis_pdf(
     principal: TenantPrincipal = AUDIT_READ_DEPENDENCY,
     db: Session = DATABASE_DEPENDENCY,
 ) -> Response:
-    """Télécharge directement le PDF d'une analyse persistante par son identifiant."""
-    return export_pdf_report(
-        payload=PdfExportRequest(analysis_id=analysis_id),
-        principal=principal,
-        db=db,
-    )
+    _get_analysis_or_404(db, analysis_id, principal.organization_id)
+    _persisted_report_unavailable()
 
 
 @router.get("/analyses/{analysis_id}/dossier", response_class=Response)
@@ -221,9 +157,5 @@ def get_analysis_dossier(
     principal: TenantPrincipal = AUDIT_READ_DEPENDENCY,
     db: Session = DATABASE_DEPENDENCY,
 ) -> Response:
-    """Télécharge directement le pack ZIP probatoire d'une analyse persistante."""
-    return export_regulatory_dossier(
-        payload=PdfExportRequest(analysis_id=analysis_id),
-        principal=principal,
-        db=db,
-    )
+    _get_analysis_or_404(db, analysis_id, principal.organization_id)
+    _persisted_report_unavailable()

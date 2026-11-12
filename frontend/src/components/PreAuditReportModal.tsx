@@ -63,7 +63,7 @@ export function PreAuditReportModal({ isOpen, onClose }: PreAuditReportModalProp
               </span>
             </div>
             <h2 className="text-lg font-bold text-slate-900 dark:text-white mt-1">
-              Rapport Synthétique de Pré-Audit de Conformité Environnementale
+              Inventaire des allégations détectées et des décisions humaines
             </h2>
           </div>
           <button
@@ -84,7 +84,7 @@ export function PreAuditReportModal({ isOpen, onClose }: PreAuditReportModalProp
 
           {isLoading && (
             <div className="py-12 text-center text-slate-400">
-              Génération du rapport et calcul des signatures cryptographiques...
+              Génération de l&apos;inventaire et calcul de l&apos;empreinte du contenu...
             </div>
           )}
 
@@ -112,7 +112,7 @@ export function PreAuditReportModal({ isOpen, onClose }: PreAuditReportModalProp
                   <div className="font-bold text-slate-900 dark:text-white text-sm">{report.organization_name}</div>
                 </div>
                 <div>
-                  <span className="text-[10px] font-semibold text-slate-500 uppercase">Date d&apos;évaluation</span>
+                  <span className="text-[10px] font-semibold text-slate-500 uppercase">Date d&apos;inventaire</span>
                   <div className="font-bold text-slate-900 dark:text-white text-sm">
                     {new Date(report.as_of_date).toLocaleDateString("fr-FR")}
                   </div>
@@ -124,9 +124,9 @@ export function PreAuditReportModal({ isOpen, onClose }: PreAuditReportModalProp
                   </div>
                 </div>
                 <div>
-                  <span className="text-[10px] font-semibold text-slate-500 uppercase">Signature d&apos;Audit</span>
-                  <div className="font-mono text-[10px] text-emerald-600 dark:text-emerald-400 truncate">
-                    {report.audit_trail_signature.slice(0, 20)}…
+                  <span className="text-[10px] font-semibold text-slate-500 uppercase">Empreinte du contenu (non signée)</span>
+                  <div className="font-mono text-[10px] text-slate-600 dark:text-slate-400 truncate">
+                    {report.content_sha256.slice(0, 20)}…
                   </div>
                 </div>
               </div>
@@ -134,9 +134,9 @@ export function PreAuditReportModal({ isOpen, onClose }: PreAuditReportModalProp
               {/* KPI Summary Grid */}
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                 <div className="rounded-lg border border-slate-200 bg-white p-3.5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-                  <span className="text-[10px] font-semibold uppercase text-slate-500">Taux de Conformité Validé</span>
+                  <span className="text-[10px] font-semibold uppercase text-slate-500">Taux de validation humaine</span>
                   <div className="text-2xl font-bold text-indigo-600 dark:text-indigo-400 mt-1">
-                    {report.summary_kpis.global_compliance_rate_percent}%
+                    {report.summary_kpis.human_validation_rate_percent === null ? "Non calculable" : `${report.summary_kpis.human_validation_rate_percent}%`}
                   </div>
                 </div>
                 <div className="rounded-lg border border-emerald-200 bg-emerald-50/50 p-3.5 dark:border-emerald-900/40 dark:bg-emerald-950/20">
@@ -162,7 +162,7 @@ export function PreAuditReportModal({ isOpen, onClose }: PreAuditReportModalProp
               {/* Remediation Summary */}
               <div className="rounded-xl border border-indigo-100 bg-indigo-50/40 p-4 dark:border-indigo-900/50 dark:bg-indigo-950/20 space-y-2">
                 <h3 className="font-bold text-indigo-950 dark:text-indigo-200 uppercase text-xs tracking-wider flex items-center gap-2">
-                  <span>💡</span> Plan d&apos;Action &amp; Remédiations Prioritaires
+                  <span>💡</span> Prochaines actions de revue
                 </h3>
                 <ul className="list-disc list-inside text-xs text-slate-800 dark:text-slate-200 space-y-1">
                   {report.remediation_summary.map((rec, i) => (
@@ -181,9 +181,9 @@ export function PreAuditReportModal({ isOpen, onClose }: PreAuditReportModalProp
                     <thead className="border-b border-slate-200 bg-slate-50 text-slate-600 dark:border-slate-800 dark:bg-slate-800/50 dark:text-slate-400">
                       <tr>
                         <th className="py-3 px-3 font-semibold">Allégation analysée</th>
-                        <th className="py-3 px-3 font-semibold">Base légale &amp; Sévérité</th>
+                        <th className="py-3 px-3 font-semibold">Statut d&apos;évaluation</th>
                         <th className="py-3 px-3 font-semibold">Preuve &amp; Arbitrage</th>
-                        <th className="py-3 px-3 font-semibold">Conseil de remédiation</th>
+                        <th className="py-3 px-3 font-semibold">Prochaine action proposée</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-200 dark:divide-slate-800">

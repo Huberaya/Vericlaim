@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 from fastapi.testclient import TestClient
 from sqlalchemy import select
@@ -15,18 +15,7 @@ from app.models.domain import (
     AnalysisVersion,
     AuditEvent,
     Claim,
-    ClaimSource,
     ClaimStatus,
-    Document,
-    DocumentSegment,
-    DocumentVersion,
-    EvidenceRequest,
-    EvidenceRequestStatus,
-    Product,
-    SegmentType,
-    Supplier,
-    Validation,
-    ValidationDecision,
 )
 from tests.auth_support import authenticate_client
 
@@ -40,7 +29,7 @@ def test_human_validations_and_tenant_isolation():
 
     with TestClient(app) as client, TestClient(app) as foreign_client, TestClient(app) as viewer_client:
         identity = authenticate_client(client, role_code="analyst")
-        foreign_identity = authenticate_client(foreign_client, role_code="analyst")
+        authenticate_client(foreign_client, role_code="analyst")
         authenticate_client(viewer_client, role_code="viewer")
 
         analysis_id = uuid4()

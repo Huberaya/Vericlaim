@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from app.audit.service import record_audit_event, verify_audit_chain
+from app.audit.service import record_audit_event
 from app.core.database import SessionLocal, create_tables
 from app.main import app
 from app.models.domain import AuditEvent
@@ -74,7 +74,7 @@ def test_tamper_detection_on_payload_modification():
         org_id = identity.organization_id
 
         with SessionLocal() as db:
-            ev1 = record_audit_event(
+            record_audit_event(
                 db=db,
                 organization_id=org_id,
                 entity_type="document",
@@ -111,7 +111,7 @@ def test_tamper_detection_on_event_deletion():
         org_id = identity.organization_id
 
         with SessionLocal() as db:
-            ev1 = record_audit_event(
+            record_audit_event(
                 db=db,
                 organization_id=org_id,
                 entity_type="doc",
@@ -125,7 +125,7 @@ def test_tamper_detection_on_event_deletion():
                 action="step2",
                 payload={"step": 2},
             )
-            ev3 = record_audit_event(
+            record_audit_event(
                 db=db,
                 organization_id=org_id,
                 entity_type="doc",
@@ -204,6 +204,8 @@ def test_cryptographic_integrity_certificate():
         cert = res_cert.json()
         assert cert["certificate_id"].startswith("CERT-AUDIT-")
         assert cert["chain_length"] == 1
-        assert cert["verification_status"] == "SEALED_AND_VERIFIED"
+        assert cert["verification_status"] == "CHAIN_CONSISTENT"
+        assert "non signé" in cert["legal_disclaimer"]
+        assert "pas une racine de Merkle" in cert["legal_disclaimer"]
         assert len(cert["head_event_hash"]) == 64
         assert len(cert["merkle_digest"]) == 64

@@ -877,7 +877,7 @@ export type RegulatoryRuleDetail = {
 
 export type RuleBookSummaryResponse = {
   rulebook_version: string;
-  release_date: string;
+  release_date: string | null;
   sha256_fingerprint: string;
   total_rules: number;
   jurisdiction_breakdown: Record<string, number>;
@@ -903,7 +903,7 @@ export type RuleDiffItem = {
 
 export type RuleBookChangelogEntry = {
   version: string;
-  release_date: string;
+  release_date: string | null;
   title: string;
   description: string;
   diff_items: RuleDiffItem[];
@@ -928,13 +928,13 @@ export type PilotOverviewKPIs = {
   claims_validated: number;
   claims_contested: number;
   claims_pending_review: number;
-  claims_with_sufficient_evidence: number;
+  claims_with_evidence_links: number;
   claims_missing_evidence: number;
-  claims_expired_evidence: number;
+  claims_expired_evidence: number | null;
   pending_evidence_requests: number;
   overdue_evidence_requests: number;
-  global_compliance_rate_percent: number;
-  critical_risk_claims_count: number;
+  human_validation_rate_percent: number | null;
+  critical_risk_claims_count: number | null;
 };
 
 export type SupplierRiskSummary = {
@@ -945,7 +945,7 @@ export type SupplierRiskSummary = {
   claims_count: number;
   missing_evidence_count: number;
   pending_requests_count: number;
-  risk_level: "high" | "medium" | "low";
+  review_priority: "high" | "medium" | "low";
 };
 
 export type PilotOverviewResponse = {
@@ -959,6 +959,7 @@ export type PilotOverviewResponse = {
 };
 
 export type PreAuditFinding = {
+  claim_id: string;
   claim_text: string;
   category: string;
   claim_type: string;
@@ -978,11 +979,11 @@ export type PreAuditReportResponse = {
   as_of_date: string;
   jurisdiction: string;
   rulebook_version: string;
-  rulebook_sha256: string;
+  rulebook_sha256: string | null;
   summary_kpis: PilotOverviewKPIs;
   findings: PreAuditFinding[];
   remediation_summary: string[];
-  audit_trail_signature: string;
+  content_sha256: string;
   legal_disclaimer: string;
 };
 
@@ -1005,14 +1006,16 @@ export type CatalogImportResult = {
 
 export type RetentionPolicyResponse = {
   organization_id: string;
-  documents_retention_years: number;
-  audit_trail_retention_years: number;
-  evidence_archive_retention_years: number;
-  gdpr_contact_email: string;
-  encryption_standard: string;
-  storage_region: string;
+  policy_status: "not_configured";
+  documents_retention_years: number | null;
+  audit_trail_retention_years: number | null;
+  evidence_archive_retention_years: number | null;
+  gdpr_contact_email: string | null;
+  encryption_standard: string | null;
+  storage_region: string | null;
   export_formats_supported: string[];
-  last_policy_review: string;
+  last_policy_review: string | null;
+  disclaimer: string;
 };
 
 // ---------------------------------------------------------------------------
@@ -1057,12 +1060,12 @@ export type EnterpriseMetricsResponse = {
   workers_status: string;
   active_tenants_count: number;
   total_analyses_completed: number;
-  average_analysis_latency_ms: number;
-  total_api_requests: number;
-  error_rate_percent: number;
-  open_alerts_count: number;
-  memory_usage_mb: number;
-  cpu_utilization_percent: number;
+  average_analysis_latency_ms: number | null;
+  total_api_requests: number | null;
+  error_rate_percent: number | null;
+  open_alerts_count: number | null;
+  memory_usage_mb: number | null;
+  cpu_utilization_percent: number | null;
   timestamp: string;
 };
 

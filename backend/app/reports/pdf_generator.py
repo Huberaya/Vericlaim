@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import textwrap
 from datetime import datetime, timezone
-from typing import Any, List, Optional, Union
+from typing import Optional
 import fitz  # PyMuPDF
 
 from app.models.schemas import EvaluationResponse
@@ -31,7 +31,7 @@ MAX_Y = 780.0
 
 
 class RegulatoryPdfReportGenerator:
-    """Générateur de rapports d'audit réglementaires opposables et structurés au format PDF."""
+    """PDF de pré-audit non signé ; aide à la décision, sans opposabilité automatique."""
 
     def __init__(
         self,
@@ -46,8 +46,8 @@ class RegulatoryPdfReportGenerator:
         self.report = report
         self.organization_name = organization_name
         self.document_title = document_title
-        self.product_identifier = product_identifier or "SKU-PROD-001"
-        self.surface = surface
+        self.product_identifier = product_identifier or "non précisé"
+        self.surface = surface or "non précisé"
         self.include_evidence_matrix = include_evidence_matrix
         self.include_remediation_clauses = include_remediation_clauses
 
@@ -130,7 +130,7 @@ class RegulatoryPdfReportGenerator:
         # 4. Détail exhaustif des allégations et règles
         self._render_evaluations_section()
 
-        # 5. Piste d'audit cryptographique et scellement
+        # 5. Piste d'audit déclarée et empreintes non signées
         self._render_audit_trail_section()
 
         # Ajout des en-têtes et pieds de page numérotés
@@ -154,7 +154,7 @@ class RegulatoryPdfReportGenerator:
         )
         page.insert_text(
             fitz.Point(MARGIN_LEFT + 15, self.current_y + 32),
-            "Contrôle déterministe de conformité Loi AGEC (R. 541-220+) • Directive UE 2024/825 EmpCo • Normes ISO 14021",
+            f"Référentiel technique {self.report.audit_trail.rulebook_version} • sources et transposition à vérifier",
             fontsize=7.5,
             color=COLOR_TEXT_MUTED,
             fontname="helv",
@@ -169,7 +169,7 @@ class RegulatoryPdfReportGenerator:
         box_rect = fitz.Rect(MARGIN_LEFT, self.current_y, MARGIN_RIGHT, self.current_y + 65)
         page.draw_rect(box_rect, color=COLOR_BORDER, fill=COLOR_BG_CARD, width=0.8)
 
-        now_str = datetime.now(timezone.utc).strftime("%d/%m/%Y à %H:%M UTC")
+        now_str = self.report.audit_trail.evaluated_at_utc.strftime("%d/%m/%Y à %H:%M UTC")
 
         # Colonne 1
         page.insert_text(fitz.Point(MARGIN_LEFT + 12, self.current_y + 16), "ORGANISATION :", fontsize=7.5, color=COLOR_TEXT_MUTED, fontname="helv")
@@ -182,14 +182,14 @@ class RegulatoryPdfReportGenerator:
         page.insert_text(fitz.Point(MARGIN_LEFT + 95, self.current_y + 48), str(self.surface).upper(), fontsize=8, color=COLOR_PRIMARY_DARK, fontname="helv")
 
         # Colonne 2
-        page.insert_text(fitz.Point(MARGIN_LEFT + 280, self.current_y + 16), "DATE D'ANALYSE :", fontsize=7.5, color=COLOR_TEXT_MUTED, fontname="helv")
+        page.insert_text(fitz.Point(MARGIN_LEFT + 280, self.current_y + 16), "DATE D'ÉVALUATION :", fontsize=7.5, color=COLOR_TEXT_MUTED, fontname="helv")
         page.insert_text(fitz.Point(MARGIN_LEFT + 365, self.current_y + 16), now_str, fontsize=8, color=COLOR_PRIMARY_DARK, fontname="helv")
 
         page.insert_text(fitz.Point(MARGIN_LEFT + 280, self.current_y + 32), "JURIDICTION CIBLE :", fontsize=7.5, color=COLOR_TEXT_MUTED, fontname="helv")
-        page.insert_text(fitz.Point(MARGIN_LEFT + 365, self.current_y + 32), "FRANCE (FR) & UNION EUROPÉENNE (UE)", fontsize=8, color=COLOR_PRIMARY_DARK, fontname="helv")
+        page.insert_text(fitz.Point(MARGIN_LEFT + 365, self.current_y + 32), "Non précisée dans le manifeste", fontsize=8, color=COLOR_PRIMARY_DARK, fontname="helv")
 
         page.insert_text(fitz.Point(MARGIN_LEFT + 280, self.current_y + 48), "MOTEUR D'ANALYSE :", fontsize=7.5, color=COLOR_TEXT_MUTED, fontname="helv")
-        page.insert_text(fitz.Point(MARGIN_LEFT + 365, self.current_y + 48), "Rule Engine v1.0.0 (Déterministe)", fontsize=8, color=COLOR_PRIMARY_DARK, fontname="helv")
+        page.insert_text(fitz.Point(MARGIN_LEFT + 365, self.current_y + 48), f"Moteur {self.report.audit_trail.engine_version} (déterministe)", fontsize=8, color=COLOR_PRIMARY_DARK, fontname="helv")
 
         self.current_y += 75
 
@@ -393,7 +393,7 @@ class RegulatoryPdfReportGenerator:
 
         page.insert_text(
             fitz.Point(MARGIN_LEFT, self.current_y + 12),
-            "PISTE D'AUDIT CRYPTOGRAPHIQUE & INTÉGRITÉ PROBATOIRE",
+            "EMPREINTES DÉCLARÉES — NON SIGNÉES, À RAPPROCHER DU JOURNAL",
             fontsize=9,
             color=COLOR_PRIMARY_DARK,
             fontname="helv",
@@ -421,14 +421,14 @@ class RegulatoryPdfReportGenerator:
         )
         page.insert_text(
             fitz.Point(MARGIN_LEFT + 10, self.current_y + 26),
-            f"Horodatage certifié de génération : {datetime.now(timezone.utc).isoformat()}",
+            f"Horodatage système de génération (non qualifié) : {datetime.now(timezone.utc).isoformat()}",
             fontsize=7,
             color=COLOR_TEXT_MUTED,
             fontname="helv",
         )
         page.insert_text(
             fitz.Point(MARGIN_LEFT + 10, self.current_y + 38),
-            "Chaîne de scellement audit_records : Scellé au niveau de l'organisation avec RLS PostgreSQL active.",
+            "Aucune signature électronique ni preuve RLS n’est attestée par ce PDF ; vérifier le journal serveur.",
             fontsize=6.5,
             color=COLOR_TEXT_MUTED,
             fontname="helv",

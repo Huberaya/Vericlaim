@@ -16,8 +16,10 @@ def test_rulebook_overview_and_summary():
         assert res.status_code == 200, res.text
         data = res.json()
 
-        assert "2026-09-24+" in data["rulebook_version"]
+        assert data["rulebook_version"].startswith("rules-sha256-")
+        assert data["release_date"] is None
         assert len(data["sha256_fingerprint"]) == 64
+        assert data["coverage_warnings_count"] == data["total_rules"]
         assert data["total_rules"] >= 7
         assert data["jurisdiction_breakdown"]["FR"] >= 3
         assert data["jurisdiction_breakdown"]["EU"] >= 3
@@ -108,6 +110,7 @@ def test_rulebook_changelog_and_diffs():
         assert len(changelog) >= 3
         v_latest = changelog[0]
         assert v_latest["version"] == "2026-09-24"
+        assert v_latest["release_date"] is None
         assert any(item["rule_id"] == "RULE_EU_GENERIC_CLAIM" for item in v_latest["diff_items"])
 
 
@@ -127,7 +130,8 @@ def test_rule_governance_review_rbac():
         )
         assert viewer_res.status_code == 403
 
-        # 2. Admin can submit a review with CSRF
+        # An admin must not mutate global rule metadata for every tenant.
+        # A durable, tenant-scoped and legally evidenced workflow is required.
         admin_res = client.post(
             "/api/v1/regulatory/rules/RULE_AGEC_BIODEGRADABLE/review",
             json={
@@ -136,7 +140,7 @@ def test_rule_governance_review_rbac():
                 "legal_notes": "Audit de conformité semestriel validé.",
             },
         )
-        assert admin_res.status_code == 200, admin_res.text
-        data = admin_res.json()
-        assert data["governance_review"]["legal_notes"] == "Audit de conformité semestriel validé."
-        assert data["governance_review"]["review_status"] == "approved_legal"
+        assert admin_res.status_code == 409, admin_res.text
+        data = viewer_client.get("/api/v1/regulatory/rules/RULE_AGEC_BIODEGRADABLE").json()
+        assert data["governance_review"]["review_status"] == "under_review"
+        assert data["governance_review"]["reviewed_by"] is None

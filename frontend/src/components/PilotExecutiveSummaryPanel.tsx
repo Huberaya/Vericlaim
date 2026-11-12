@@ -82,10 +82,10 @@ export function PilotExecutiveSummaryPanel({ canManageCatalog = false }: PilotEx
             </span>
           </div>
           <h2 className="text-xl font-bold text-slate-900 dark:text-white mt-1 flex items-center gap-2">
-            Tableau de Bord 360° du Risque de Conformité
+            Inventaire des allégations et suivi de revue
           </h2>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-            Suivi consolidé des allégations, couverture probatoire, fournisseurs et remédiations (Chantier 8).
+            Suivi des allégations enregistrées, liens documentaires et fournisseurs ; aucune conclusion de conformité.
           </p>
         </div>
 
@@ -122,21 +122,21 @@ export function PilotExecutiveSummaryPanel({ canManageCatalog = false }: PilotEx
         <div className="rounded-xl border border-indigo-200 bg-gradient-to-br from-indigo-50/50 to-white p-5 shadow-sm dark:border-indigo-900/40 dark:from-indigo-950/20 dark:to-slate-900 flex flex-col justify-between">
           <div>
             <span className="text-xs font-semibold uppercase tracking-wider text-indigo-700 dark:text-indigo-400">
-              Score de Conformité Global
+              Taux de validation humaine
             </span>
             <div className="mt-2 text-3xl font-extrabold text-indigo-950 dark:text-indigo-200">
-              {kpis?.global_compliance_rate_percent ?? 0}%
+              {kpis?.human_validation_rate_percent == null ? "Non calculable" : `${kpis.human_validation_rate_percent}%`}
             </div>
           </div>
           <div className="mt-4">
             <div className="h-2 w-full rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden">
               <div
                 className="h-full rounded-full bg-indigo-600 transition-all duration-500"
-                style={{ width: `${kpis?.global_compliance_rate_percent ?? 0}%` }}
+                style={{ width: `${kpis?.human_validation_rate_percent ?? 0}%` }}
               />
             </div>
             <p className="mt-1.5 text-[11px] text-slate-500">
-              {kpis?.claims_validated ?? 0} validée(s) sur {kpis?.total_claims_detected ?? 0} allégation(s)
+              {kpis?.claims_validated ?? 0} décision(s) humaine(s) validée(s) sur {kpis?.total_claims_detected ?? 0} allégation(s) ; pas un score de conformité
             </p>
           </div>
         </div>
@@ -171,7 +171,7 @@ export function PilotExecutiveSummaryPanel({ canManageCatalog = false }: PilotEx
           <div className="space-y-1.5 my-2 text-xs">
             <div className="flex justify-between items-center">
               <span className="text-emerald-700 dark:text-emerald-400 font-medium">● Pièces rattachées</span>
-              <strong className="font-bold">{kpis?.claims_with_sufficient_evidence ?? 0}</strong>
+              <strong className="font-bold">{kpis?.claims_with_evidence_links ?? 0}</strong>
             </div>
             <div className="flex justify-between items-center">
               <span className="text-rose-700 dark:text-rose-400 font-medium">✕ Sans justificatif</span>
@@ -179,10 +179,10 @@ export function PilotExecutiveSummaryPanel({ canManageCatalog = false }: PilotEx
             </div>
             <div className="flex justify-between items-center">
               <span className="text-amber-700 dark:text-amber-400 font-medium">⚠ Preuves expirées</span>
-              <strong className="font-bold">{kpis?.claims_expired_evidence ?? 0}</strong>
+              <strong className="font-bold">{kpis?.claims_expired_evidence ?? "Non évalué"}</strong>
             </div>
           </div>
-          <p className="text-[10px] text-slate-400 italic">Matrice allégation ↔ preuve</p>
+          <p className="text-[10px] text-slate-400 italic">Liens déclarés, suffisance juridique non évaluée</p>
         </div>
 
         {/* Actionable Requests & Critical Alerts */}
@@ -201,7 +201,7 @@ export function PilotExecutiveSummaryPanel({ canManageCatalog = false }: PilotEx
             </div>
             <div className="flex justify-between items-center">
               <span className="text-red-700 dark:text-red-400 font-medium">🚨 Allégations critiques</span>
-              <strong className="font-bold">{kpis?.critical_risk_claims_count ?? 0}</strong>
+              <strong className="font-bold">{kpis?.critical_risk_claims_count ?? "Non évalué"}</strong>
             </div>
           </div>
           <p className="text-[10px] text-slate-400 italic">Suivi contradictoire</p>
@@ -213,10 +213,10 @@ export function PilotExecutiveSummaryPanel({ canManageCatalog = false }: PilotEx
         <div className="flex items-center justify-between">
           <div>
             <h3 className="font-bold text-slate-900 dark:text-white text-sm flex items-center gap-2">
-              <span>🏢</span> Portefeuille Fournisseurs &amp; Exposition au Risque
+              <span>🏢</span> Portefeuille Fournisseurs &amp; Priorité de revue
             </h3>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              Fournisseurs nécessitant des compléments probatoires (bilans ACV, attestations, écolabels).
+              Classement indicatif selon le nombre d’allégations sans lien documentaire, toutes versions confondues ; pas une évaluation de risque.
             </p>
           </div>
           <button
@@ -236,8 +236,8 @@ export function PilotExecutiveSummaryPanel({ canManageCatalog = false }: PilotEx
                 <th className="py-2.5 px-3 font-semibold">Pays</th>
                 <th className="py-2.5 px-3 font-semibold">Références Produits</th>
                 <th className="py-2.5 px-3 font-semibold">Allégations associées</th>
-                <th className="py-2.5 px-3 font-semibold">Preuves Manquantes</th>
-                <th className="py-2.5 px-3 font-semibold text-right">Exposition</th>
+                <th className="py-2.5 px-3 font-semibold">Allégations sans lien</th>
+                <th className="py-2.5 px-3 font-semibold text-right">Priorité de revue</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
@@ -247,7 +247,7 @@ export function PilotExecutiveSummaryPanel({ canManageCatalog = false }: PilotEx
                     {s.supplier_name}
                   </td>
                   <td className="py-2.5 px-3 uppercase text-slate-500">
-                    {s.country_code || "FR"}
+                    {s.country_code || "Non renseigné"}
                   </td>
                   <td className="py-2.5 px-3 text-slate-700 dark:text-slate-300 font-medium">
                     {s.products_count} produit(s)
@@ -261,20 +261,20 @@ export function PilotExecutiveSummaryPanel({ canManageCatalog = false }: PilotEx
                         {s.missing_evidence_count} manquante(s)
                       </span>
                     ) : (
-                      <span className="text-emerald-600 dark:text-emerald-400">✓ Dossier complet</span>
+                      <span className="text-emerald-600 dark:text-emerald-400">Aucun lien manquant détecté</span>
                     )}
                   </td>
                   <td className="py-2.5 px-3 text-right">
                     <span
                       className={`rounded px-2 py-0.5 text-[10px] font-bold uppercase ${
-                        s.risk_level === "high"
+                        s.review_priority === "high"
                           ? "bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300"
-                          : s.risk_level === "medium"
+                          : s.review_priority === "medium"
                           ? "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300"
                           : "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300"
                       }`}
                     >
-                      {s.risk_level === "high" ? "Risque Élevé" : s.risk_level === "medium" ? "Risque Moyen" : "Conforme"}
+                      {s.review_priority === "high" ? "Priorité élevée" : s.review_priority === "medium" ? "Priorité moyenne" : "Priorité faible"}
                     </span>
                   </td>
                 </tr>
@@ -299,11 +299,12 @@ export function PilotExecutiveSummaryPanel({ canManageCatalog = false }: PilotEx
               <span>🔒</span> Politique de Conservation des Données &amp; RGPD
             </h3>
             <div className="space-y-2 text-slate-700 dark:text-slate-300">
-              <p><strong>Région d&apos;hébergement :</strong> {retentionPolicy.storage_region}</p>
-              <p><strong>Standard de chiffrement :</strong> {retentionPolicy.encryption_standard}</p>
-              <p><strong>Rétention des documents &amp; preuves :</strong> {retentionPolicy.documents_retention_years} ans</p>
-              <p><strong>Rétention de la piste d&apos;audit (SHA-256) :</strong> {retentionPolicy.audit_trail_retention_years} ans</p>
-              <p><strong>Contact DPO / Droits d&apos;accès :</strong> {retentionPolicy.gdpr_contact_email}</p>
+              <p className="rounded border border-amber-300 bg-amber-50 p-2 text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">{retentionPolicy.disclaimer}</p>
+              <p><strong>Région d&apos;hébergement :</strong> {retentionPolicy.storage_region ?? "Non vérifiée"}</p>
+              <p><strong>Standard de chiffrement :</strong> {retentionPolicy.encryption_standard ?? "Non vérifié"}</p>
+              <p><strong>Rétention des documents &amp; preuves :</strong> {retentionPolicy.documents_retention_years == null ? "Non configurée" : `${retentionPolicy.documents_retention_years} ans`}</p>
+              <p><strong>Rétention de la piste d&apos;audit (SHA-256) :</strong> {retentionPolicy.audit_trail_retention_years == null ? "Non configurée" : `${retentionPolicy.audit_trail_retention_years} ans`}</p>
+              <p><strong>Contact DPO / Droits d&apos;accès :</strong> {retentionPolicy.gdpr_contact_email ?? "Non configuré"}</p>
               <p><strong>Formats d&apos;export supportés :</strong> {retentionPolicy.export_formats_supported.join(", ")}</p>
             </div>
             <div className="flex justify-end pt-2 border-t border-slate-200 dark:border-slate-800">

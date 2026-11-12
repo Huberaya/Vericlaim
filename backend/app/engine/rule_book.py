@@ -377,10 +377,22 @@ def _canonical_rule(rule: RegulatoryRule) -> dict[str, object]:
             for harbor in rule.safe_harbors
         ],
         "sanction": rule.sanction.model_dump(mode="json") if rule.sanction else None,
+        "surfaces": sorted(surface.value for surface in rule.surfaces) if rule.surfaces is not None else None,
+        "priority": rule.priority,
         "notes": list(rule.notes),
     }
 
 
-RULEBOOK_VERSION = "2026-09-24+" + hashlib.sha256(
-    json.dumps([_canonical_rule(rule) for rule in RULES], sort_keys=True, ensure_ascii=False).encode("utf-8")
-).hexdigest()[:12]
+# This identifies the executable rule content, not a legal approval or a
+# calendar release. Governance/citations have their own full-content fingerprint
+# in governance.py; neither identifier is a digital signature.
+RULEBOOK_CONTENT_SHA256 = hashlib.sha256(
+    json.dumps(
+        [_canonical_rule(rule) for rule in RULES],
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
+).hexdigest()
+RULEBOOK_VERSION = "rules-sha256-" + RULEBOOK_CONTENT_SHA256[:16]

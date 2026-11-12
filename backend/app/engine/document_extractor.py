@@ -231,13 +231,17 @@ class DocumentTextExtractor:
         try:
             with warnings.catch_warnings():
                 warnings.simplefilter("error", Image.DecompressionBombWarning)
-                probe = Image.open(BytesIO(payload))
+                # Signature checks are not a codec allowlist. Restrict Pillow
+                # itself on both passes so a polyglot cannot activate an unused
+                # decoder merely by reaching this internal extraction seam.
+                formats = ("PNG", "JPEG", "TIFF", "WEBP")
+                probe = Image.open(BytesIO(payload), formats=formats)
                 try:
                     self._assert_image_pixels(probe.width, probe.height)
                     probe.verify()
                 finally:
                     probe.close()
-                image = Image.open(BytesIO(payload))
+                image = Image.open(BytesIO(payload), formats=formats)
                 self._assert_image_pixels(image.width, image.height)
                 image.load()
                 return image

@@ -42,7 +42,6 @@ from tests.document_lifecycle_support import (
     PDF_BYTES,
     create_document_and_upload_intent,
     install_document_fakes,
-    promote_clean_version,
 )
 
 

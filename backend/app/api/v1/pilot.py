@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Request, status
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -40,7 +40,7 @@ def get_pilot_kpi_overview(
     principal: TenantPrincipal = AUDIT_READ_DEPENDENCY,
     db: Session = DATABASE_DEPENDENCY,
 ) -> PilotOverviewResponse:
-    """Returns a 360-degree KPI dashboard overview of the tenant's compliance risk, suppliers, products, and evidence coverage."""
+    """Return tenant inventory counts and human decisions, not a legal compliance score."""
     return get_pilot_overview(db, organization_id=principal.organization_id)
 
 
@@ -49,7 +49,7 @@ def get_pre_audit_synthesis(
     principal: TenantPrincipal = AUDIT_READ_DEPENDENCY,
     db: Session = DATABASE_DEPENDENCY,
 ) -> PreAuditReportResponse:
-    """Generates an internal pre-audit risk report with remediation advice and cryptographic signature."""
+    """Return a tenant inventory with a content hash, not a legal evaluation or signature."""
     return generate_pre_audit_report(db, organization_id=principal.organization_id)
 
 
@@ -75,7 +75,7 @@ def export_tenant_dossier(
     principal: TenantPrincipal = AUDIT_READ_DEPENDENCY,
     db: Session = DATABASE_DEPENDENCY,
 ) -> dict[str, Any]:
-    """Exports the entire tenant compliance dossier for archiving or portability."""
+    """Export a metadata inventory, not a complete binary/evidence archive."""
     return get_pilot_dossier_export(db, organization_id=principal.organization_id)
 
 
@@ -84,5 +84,5 @@ def get_compliance_retention_policy(
     principal: TenantPrincipal = ORG_READ_DEPENDENCY,
     db: Session = DATABASE_DEPENDENCY,
 ) -> RetentionPolicyResponse:
-    """Returns the GDPR compliance, encryption, and data retention policy for the organization."""
+    """Return policy configuration status; unknown values are never promised as deployed controls."""
     return get_retention_policy(db, organization_id=principal.organization_id)

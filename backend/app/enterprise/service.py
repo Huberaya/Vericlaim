@@ -6,18 +6,15 @@ import hashlib
 import secrets
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Any
 from uuid import UUID, uuid4
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.engine.rule_book import RULEBOOK_VERSION
 from app.identity.service import append_audit_event
 from app.models.domain import (
     Analysis,
     ApiKey,
-    AuditEvent,
     LegalHold,
     Membership,
     MembershipStatus,
@@ -95,7 +92,7 @@ def create_organization_api_key(
         payload={"name": name, "prefix": prefix, "scopes": scopes, "rate_limit": rate_limit_per_minute},
         request_id=req_id,
     )
-    db.commit()
+    db.flush()
 
     return ApiKeyCreatedResponse(
         id=api_key_obj.id,
@@ -161,7 +158,7 @@ def revoke_organization_api_key(
         payload={"prefix": key.prefix, "name": key.name},
         request_id=req_id,
     )
-    db.commit()
+    db.flush()
 
 
 # ---------------------------------------------------------------------------
@@ -176,32 +173,38 @@ def get_enterprise_metrics(
 ) -> EnterpriseMetricsResponse:
     uptime = time.time() - START_TIME
 
-    total_analyses = db.scalar(
-        select(func.count(Analysis.id)).where(Analysis.deleted_at.is_(None))
+    # Count only rows visible in this tenant context. An analysis is completed
+    # only when its status says so; merely existing is not completion.
+    total_completed = db.scalar(
+        select(func.count(Analysis.id)).where(
+            Analysis.organization_id == organization_id,
+            Analysis.status == "completed",
+            Analysis.deleted_at.is_(None),
+        )
     ) or 0
-
-    total_events = db.scalar(
-        select(func.count(AuditEvent.id))
-    ) or 0
-
     active_tenants = db.scalar(
-        select(func.count(Organization.id))
+        select(func.count(Organization.id)).where(
+            Organization.id == organization_id,
+            Organization.status == "active",
+        )
     ) or 0
 
     return EnterpriseMetricsResponse(
         uptime_seconds=round(uptime, 2),
-        service_status="healthy",
+        # This request reached PostgreSQL, but it did not probe object storage,
+        # workers or an SLO. Do not turn a successful query into a health claim.
+        service_status="responding",
         database_status="connected",
-        storage_status="operational",
-        workers_status="active",
+        storage_status="not_probed",
+        workers_status="not_probed",
         active_tenants_count=active_tenants,
-        total_analyses_completed=total_analyses,
-        average_analysis_latency_ms=142.5,
-        total_api_requests=total_events + 100,
-        error_rate_percent=0.02,
-        open_alerts_count=0,
-        memory_usage_mb=128.4,
-        cpu_utilization_percent=4.2,
+        total_analyses_completed=total_completed,
+        average_analysis_latency_ms=None,
+        total_api_requests=None,
+        error_rate_percent=None,
+        open_alerts_count=None,
+        memory_usage_mb=None,
+        cpu_utilization_percent=None,
         timestamp=datetime.now(timezone.utc),
     )
 
@@ -211,27 +214,9 @@ def list_enterprise_alerts(
     *,
     organization_id: UUID,
 ) -> list[EnterpriseAlert]:
-    # Return structured active system alerts
-    return [
-        EnterpriseAlert(
-            id="ALERT-001",
-            severity="info",
-            category="sso",
-            title="SSO OIDC / SAML Actif",
-            message="Authentification unique active avec session conforme aux exigences d'entreprise.",
-            occurred_at=datetime.now(timezone.utc),
-            is_acknowledged=True,
-        ),
-        EnterpriseAlert(
-            id="ALERT-002",
-            severity="info",
-            category="system",
-            title="Intégrité du Référentiel Rule Book",
-            message=f"Le Rule Book {RULEBOOK_VERSION[:16]} est vérifié et hash-chaîné.",
-            occurred_at=datetime.now(timezone.utc),
-            is_acknowledged=True,
-        ),
-    ]
+    # No durable alerting backend is connected in this build. An empty list
+    # means "no alerts collected", not "the system is verified healthy".
+    return []
 
 
 # ---------------------------------------------------------------------------
@@ -284,7 +269,7 @@ def scim_provision_user(
             )
             db.add(membership)
 
-    db.commit()
+    db.flush()
 
     return ScimUserResponse(
         id=str(existing_user.id),
@@ -339,7 +324,7 @@ def create_organization_legal_hold(
         payload={"case_reference": case_reference, "reason": reason},
         request_id=req_id,
     )
-    db.commit()
+    db.flush()
 
     return LegalHoldResponse(
         id=hold.id,

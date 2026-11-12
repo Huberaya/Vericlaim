@@ -33,6 +33,7 @@ from app.documents.scanner import (
     ClamAvMalwareScanner,
     MalwareScanError,
     MalwareScannerUnavailableError,
+    MalwareScanResult,
     build_malware_scanner,
 )
 from app.identity.service import set_db_request_context
@@ -125,8 +126,6 @@ def test_test_mode_scanner_is_refused_outside_the_test_environment() -> None:
     with pytest.raises(MalwareScannerUnavailableError):
         build_malware_scanner(misconfigured)
 
-
-from app.documents.scanner import MalwareScanResult
 
 
 class ExplodingScanner:

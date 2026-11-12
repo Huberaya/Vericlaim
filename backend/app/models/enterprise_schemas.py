@@ -54,12 +54,13 @@ class EnterpriseMetricsResponse(BaseModel):
     workers_status: str
     active_tenants_count: int
     total_analyses_completed: int
-    average_analysis_latency_ms: float
-    total_api_requests: int
-    error_rate_percent: float
-    open_alerts_count: int
-    memory_usage_mb: float
-    cpu_utilization_percent: float
+    # Nullable means "not measured by this build", never zero or a demo value.
+    average_analysis_latency_ms: float | None = None
+    total_api_requests: int | None = None
+    error_rate_percent: float | None = None
+    open_alerts_count: int | None = None
+    memory_usage_mb: float | None = None
+    cpu_utilization_percent: float | None = None
     timestamp: datetime
 
 

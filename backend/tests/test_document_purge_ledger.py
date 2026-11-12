@@ -135,7 +135,6 @@ def test_marker_is_committed_with_the_transition_and_release_runs_after() -> Non
             body = _promote(client, storage, instruction)
             assert observed == ["version_promue"], observed
             assert storage.prefix_deletions, "la libération a bien été tentée, après commit"
-            upload_id = uuid.UUID(instruction["upload"]["id"])
             with SessionLocal() as db:
                 set_db_request_context(db, user_id=uuid.UUID(int=0), organization_id=identity.organization_id)
                 cleaned = _audit_payloads(
@@ -199,12 +198,11 @@ def test_storage_failure_keeps_the_ledger_open_then_recovers() -> None:
             identity = authenticate_client(client, role_code="analyst")
             _document, instruction = create_document_and_upload_intent(client, title="Stockage en panne")
             storage.fail_operations = {"delete_prefix"}
-            body = _promote(client, storage, instruction)
+            _promote(client, storage, instruction)
             upload_id = uuid.UUID(instruction["upload"]["id"])
             row = _upload_row(str(upload_id))
             assert row.purge_required is True, "un échec de stockage doit rester rejouable"
             assert row.purge_attempts == 0
-            document_id = uuid.UUID(body["document"]["id"])
             with SessionLocal() as db:
                 set_db_request_context(db, user_id=identity.user_id, organization_id=identity.organization_id)
                 assert _upload_audit(db, action="document.upload_purge_released", upload_id=upload_id) == []

@@ -1,0 +1,21 @@
+# Correctness gate for the backend. Stylistic modernization is tracked separately
+# rather than hidden behind a blanket ignore or mixed into security fixes.
+target-version = "py311"
+line-length = 120
+
+[lint]
+select = ["E4", "E7", "E9", "F", "B"]
+
+[lint.flake8-bugbear]
+# FastAPI's dependency markers are immutable declarative defaults. The project's
+# permission factory likewise returns a dependency closure without mutating state.
+extend-immutable-calls = [
+  "fastapi.Depends",
+  "fastapi.Query",
+  "fastapi.Header",
+  "fastapi.Path",
+  "fastapi.Body",
+  "fastapi.File",
+  "fastapi.Form",
+  "app.identity.dependencies.require_permission",
+]
