@@ -7,6 +7,7 @@ Reusable, disposable tooling that proves the VeriClaim data plane works with
 # from the repository root, in a Python 3.11+ environment
 pip install -r backend/requirements.txt "pgserver>=0.1.4" "moto[server]>=5.0"
 python -m tools.recette.run            # full journey, writes .recette/last-run.json
+python tools/recette/restore.py        # backup/restore round-trip on an isolated target
 ```
 
 | Module | Role | Real? |
@@ -16,9 +17,14 @@ python -m tools.recette.run            # full journey, writes .recette/last-run.
 | `oidc_stub.py` | OpenID Provider the real `OidcClient` performs discovery/JWKS/PKCE against | simulated IdP |
 | `clamd_stub.py` | clamd INSTREAM wire protocol | **not an antivirus engine** |
 | `e2e_recette.py` | Uvicorn-served application, two tenants, workers as real OS processes | **real application** |
+| `restore.py` | `pg_dump` → restore into a **separate** empty database, then verify revision, data, RLS and the recomputed audit chain | **real restore** |
 
 Nothing here contacts Neon, Vercel, Clerk or any production resource. Everything
 lives under the git-ignored `.recette/` tree and is disposable.
+
+`restore.py` proves that data, roles and the audit chain survive a logical
+export/import. It does **not** prove anything about Neon: no Neon backup, no PITR,
+no production volume. See `docs/infrastructure/10-sauvegardes-restauration.md` §3.4.
 
 **Never cite a `clamd_stub` verdict as an antivirus proof.** The module docstring
 and `docs/infrastructure/06-antivirus-et-fichiers.md` say exactly what it cannot do.
