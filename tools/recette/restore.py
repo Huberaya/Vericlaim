@@ -37,11 +37,17 @@ REPORT = REPO_ROOT / ".recette" / "restore-report.json"
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(BACKEND_ROOT))
 
-import pgserver  # noqa: E402
-import psycopg  # noqa: E402
-from psycopg import sql  # noqa: E402
-
-from stack import APP_ROLE, MIGRATOR_ROLE, _run_psql, ephemeral_password, start_postgres  # noqa: E402
+import pgserver
+import psycopg
+from psycopg import sql
+from stack import (
+    APP_ROLE,
+    MIGRATOR_ROLE,
+    PostgresCluster,
+    _run_psql,
+    ephemeral_password,
+    start_postgres,
+)
 
 
 def _bin(name: str) -> str:
@@ -62,8 +68,6 @@ def _seed(cluster) -> dict[str, int]:
             "AUTH_SESSION_SECRET": uuid.uuid4().hex + uuid.uuid4().hex,
         }
     )
-    from sqlalchemy.orm import Session
-
     from app.core.database import SessionLocal
     from app.identity.roles import ensure_system_roles
     from app.identity.service import append_audit_event, set_db_request_context
@@ -226,7 +230,7 @@ def run() -> dict[str, object]:
     with psycopg.connect(source.admin_dsn, autocommit=True) as admin:
         admin.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(target_database)))
 
-    target = start_postgres.__globals__["PostgresCluster"](
+    target = PostgresCluster(
         admin_dsn=source.admin_dsn,
         database=target_database,
         migrator_dsn="",

@@ -177,6 +177,13 @@ jobs:
           set -euo pipefail
           python -m tools.recette.run --json-out .recette/last-run.json
 
+      - name: Prove a backup can actually be restored
+        env:
+          PYTHONPATH: .
+        run: |
+          set -euo pipefail
+          python tools/recette/restore.py
+
       - name: Publish the qualification transcript
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -184,6 +191,7 @@ jobs:
           name: recette-transcript
           path: |
             .recette/last-run.json
+            .recette/restore-report.json
             .recette/artifacts/*.log
           if-no-files-found: warn
 
