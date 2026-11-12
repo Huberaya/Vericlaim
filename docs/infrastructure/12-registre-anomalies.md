@@ -24,6 +24,7 @@ base d'un raisonnement : elle est close sur une observation.
 | A-09 | Aucun monitoring proactif (métriques, alertes) | P1 | **ouvert** |
 | A-10 | `vericlaim` : TLS PostgreSQL non vérifiable, `verify_runtime.py` jamais exécuté avec succès | P1 | **ouvert** |
 | A-11 | Import d'un PDF volumineux refusé par la limite par défaut (2 Mo) | P2 | **atténué** |
+| A-12 | Le job CI de recette ne pouvait pas s'installer (python 3.13 vs wheels `pgserver`) | P1 | **corrigé** |
 
 ---
 
@@ -116,6 +117,11 @@ Trois causes cumulées :
 **Résultat.** **267 passed, 2 skipped** avec PostgreSQL, contre 255 avant — et les
 2 restants sont explicitement justifiés (chemin `pytesseract` et un cas de
 signature qui exige un binaire absent).
+
+**Validation en intégration continue.** Run `43325846167` sur la PR #14 : les
+4 jobs sont `success`, y compris le parcours complet et la restauration exercée
+sur un runner propre. Les preuves de ce dossier ne sont donc plus seulement
+locales.
 
 ---
 
@@ -297,6 +303,51 @@ dépôt. Le harnais relève la limite à 8 Mo pour ses fixtures.
 (téléphone, 300 dpi) et l'afficher dans l'interface.
 
 ---
+
+---
+
+## A-12 — Le job CI de recette ne pouvait pas s'installer
+
+**Sévérité : P1 (la preuve n'était pas reproductible en intégration continue).**
+**Statut : corrigé.**
+
+**Observation.** Premier run de `recette-qualification` sur la PR #14 : **échec**
+à l'étape « Install the application and the recette harness », donc *avant* tout
+test. Les étapes suivantes ont été `skipped` et l'artefact n'a pas été produit.
+
+**Accès aux logs.** L'API GitHub ne m'a **pas** rendu les logs de ce run
+(`EOF` sur les trois endpoints de téléchargement). Je n'ai donc pas lu le message
+d'erreur. La cause a été établie autrement, et de façon certaine, à partir de
+l'index PyPI :
+
+```
+pgserver 0.1.4 → wheels cp39, cp310, cp311, cp312 (16 fichiers)
+                 aucune source distribution
+job CI        → python-version: "3.13"
+```
+
+Il n'existe **aucun** fichier installable pour cp313 : la résolution échoue, par
+construction, quel que soit l'état du code applicatif. La même requête montre que
+`tesserocr` publie bien du cp313 — le problème est propre à `pgserver`.
+
+**Correction.**
+1. `python-version: "3.12"` pour ce job — c'est aussi la version du conteneur
+   backend, donc le job teste désormais l'interpréteur réellement déployé ;
+2. une étape « Verify the harness dependencies really imported » qui importe
+   `pgserver` et `moto.server` explicitement : un échec de résolution est
+   rapporté avec un message clair au lieu de faire tomber toutes les étapes
+   suivantes sur un `ImportError` indistinct.
+
+**Preuve.** Run `43325846167` : les 4 jobs sont `success`, et pour le job de
+recette les étapes 5 (« Verify the harness dependencies… »),
+6 (« Run the end-to-end recette journey ») et 7 (« Prove a backup can actually
+be restored ») sont **toutes `success`**.
+
+**Ce que cela change dans ce dossier.** Jusqu'à ce run, « 54/54 » et la
+restauration étaient des preuves **locales**. Elles sont maintenant exécutées
+aussi en intégration continue, sur un runner propre. C'est exactement la raison
+d'être de ce job — et il a immédiatement trouvé un défaut, dans le harnais
+lui-même.
 
 ## Ce qui n'a pas été testé du tout
 

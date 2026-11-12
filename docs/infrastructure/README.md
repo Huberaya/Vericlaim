@@ -54,7 +54,8 @@ parcours complet. Le compte rendu machine est écrit dans
 | Tables protégées par RLS (forcé) | **26** sur 26 | `03` |
 | Politiques RLS | **26** | `03` |
 | Restauration sur cible isolée | **réussie**, chaîne d'audit revalidée | `10` |
-| Défauts réels trouvés / corrigés | **5 / 5** | `12` |
+| Défauts réels trouvés / corrigés | **6 / 6** | `12` |
+| Intégration continue | **4 / 4 jobs `success`** (run `43325846167`) | `12` |
 | Conditions bloquantes restantes | **6** | `13` |
 
 > **Statut proposé : QUALIFIÉ POUR LA CI ET LA RECETTE TECHNIQUE — NON QUALIFIÉ POUR
