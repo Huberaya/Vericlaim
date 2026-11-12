@@ -25,6 +25,18 @@ if str(HERE) not in sys.path:
 from e2e_recette import RUNTIME_DIR, RecetteRun, build_full_stack  # noqa: E402
 
 
+def _annotation(kind: str, title: str, message: str) -> None:
+    """Emit a GitHub Actions annotation that actually survives parsing.
+
+    Workflow commands are line-oriented: a newline inside the message truncates
+    the command and the annotation silently disappears. Test details and
+    tracebacks are full of newlines, so they are flattened first.
+    """
+
+    flattened = " | ".join(line.strip() for line in message.splitlines() if line.strip())
+    print(f"::{kind} title={title}::{flattened[:900]}", flush=True)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -53,6 +65,14 @@ def main(argv: list[str] | None = None) -> int:
             report = run.execute()
         else:
             report = {"steps": [], "note": f"stage {args.only} not implemented as a standalone run"}
+    except Exception as exc:  # noqa: BLE001 - the harness must report, never mask
+        # A crash outside a checked step would otherwise only leave "exit code 1"
+        # in CI. Name it, so the failure is diagnosable from the annotation.
+        import traceback
+
+        _annotation("error", "Recette interrompue", f"{type(exc).__name__}: {exc}")
+        traceback.print_exc()
+        return 1
     finally:
         stack.scanner.stop()
         stack.idp.stop()
@@ -67,10 +87,7 @@ def main(argv: list[str] | None = None) -> int:
         # failing step is echoed in a GitHub Actions annotation as well.
         for step in report["steps"]:
             if step["status"] == "FAIL":
-                print(
-                    f"::error title=Étape en échec::{step['name']} — {step['detail'][:400]}",
-                    flush=True,
-                )
+                _annotation("error", "Étape en échec", f"{step['name']} — {step['detail']}")
     return 1 if report["failures"] else 0
 
 
