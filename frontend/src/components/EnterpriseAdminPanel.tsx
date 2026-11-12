@@ -68,7 +68,7 @@ export function EnterpriseAdminPanel({ canManage = false }: EnterpriseAdminPanel
   }, []);
 
   async function handleRevokeKey(keyId: string) {
-    if (!confirm("Êtes-vous sûr de vouloir révoquer cette clé d'API ? Les requêtes avec cette clé seront immédiatement rejetées.")) return;
+    if (!confirm("Êtes-vous sûr de vouloir révoquer cette clé d'API ? Cet enregistrement sera marqué révoqué ; l’authentification machine-to-machine n’est pas encore raccordée.")) return;
     try {
       await revokeApiKey(keyId);
       await loadData();
@@ -108,7 +108,7 @@ export function EnterpriseAdminPanel({ canManage = false }: EnterpriseAdminPanel
             Administration Entreprise &amp; Gouvernance (Chantier 9)
           </h2>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-            Gestion des clés d&apos;API partenaires, observabilité temps réel, E-Discovery et synchronisation SSO / SCIM 2.0.
+            Enregistrements de clés, mesures disponibles et registre de gels légaux. Les intégrations non vérifiées sont signalées ci-dessous.
           </p>
         </div>
 
@@ -132,7 +132,7 @@ export function EnterpriseAdminPanel({ canManage = false }: EnterpriseAdminPanel
               : "text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200"
           }`}
         >
-          <span>🔑</span> Clés d&apos;API &amp; Quotas ({apiKeys.length})
+          <span>🔑</span> Clés d&apos;API · configuration ({apiKeys.length})
         </button>
 
         <button
@@ -172,6 +172,10 @@ export function EnterpriseAdminPanel({ canManage = false }: EnterpriseAdminPanel
       {/* Tab 1: API Keys */}
       {activeTab === "apikeys" && (
         <div className="space-y-4">
+          <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900" role="note">
+            Les clés et limites sont enregistrées, mais aucun middleware d’API ne consomme encore ces clés.
+            Ne pas les utiliser comme accès partenaire en production.
+          </p>
           <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
             <table className="w-full text-left text-xs">
               <thead className="border-b border-slate-200 bg-slate-50 text-slate-600 dark:border-slate-800 dark:bg-slate-800/50 dark:text-slate-400">
@@ -254,14 +258,14 @@ export function EnterpriseAdminPanel({ canManage = false }: EnterpriseAdminPanel
                 {Math.floor(metrics.uptime_seconds / 3600)}h {Math.floor((metrics.uptime_seconds % 3600) / 60)}m
               </div>
               <span className="inline-block mt-1 text-[10px] font-bold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded">
-                ● 99.98% SLA
+                Durée du processus · aucun SLA mesuré
               </span>
             </div>
 
             <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900 shadow-sm">
               <span className="text-[10px] font-semibold text-slate-500 uppercase">Latence Moyenne Analyse</span>
               <div className="text-xl font-bold text-indigo-600 dark:text-indigo-400 mt-1">
-                {metrics.average_analysis_latency_ms} ms
+                {metrics.average_analysis_latency_ms === null ? "Non mesurée" : `${metrics.average_analysis_latency_ms} ms`}
               </div>
               <span className="text-[10px] text-slate-400">Worker déterministe</span>
             </div>
@@ -269,17 +273,17 @@ export function EnterpriseAdminPanel({ canManage = false }: EnterpriseAdminPanel
             <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900 shadow-sm">
               <span className="text-[10px] font-semibold text-slate-500 uppercase">Requêtes Traitées</span>
               <div className="text-xl font-bold text-slate-900 dark:text-white mt-1">
-                {metrics.total_api_requests.toLocaleString("fr-FR")}
+                {metrics.total_api_requests?.toLocaleString("fr-FR") ?? "Non mesuré"}
               </div>
-              <span className="text-[10px] text-emerald-600">Erreurs : {metrics.error_rate_percent}%</span>
+              <span className="text-[10px] text-emerald-600">Erreurs : {metrics.error_rate_percent === null ? "non mesuré" : `${metrics.error_rate_percent}%`}</span>
             </div>
 
             <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900 shadow-sm">
               <span className="text-[10px] font-semibold text-slate-500 uppercase">Empreinte Mémoire / CPU</span>
               <div className="text-xl font-bold text-slate-900 dark:text-white mt-1">
-                {metrics.memory_usage_mb} MB
+                {metrics.memory_usage_mb === null ? "Non mesurée" : `${metrics.memory_usage_mb} MB`}
               </div>
-              <span className="text-[10px] text-slate-500">CPU : {metrics.cpu_utilization_percent}%</span>
+              <span className="text-[10px] text-slate-500">CPU : {metrics.cpu_utilization_percent === null ? "non mesuré" : `${metrics.cpu_utilization_percent}%`}</span>
             </div>
           </div>
 
@@ -289,6 +293,7 @@ export function EnterpriseAdminPanel({ canManage = false }: EnterpriseAdminPanel
               <span>🔔</span> Alertes Système &amp; Sécurité ({alerts.length})
             </h3>
             <div className="space-y-2">
+              {alerts.length === 0 && <p className="text-xs text-slate-500">Aucune alerte collectée ; la supervision externe n’est pas raccordée.</p>}
               {alerts.map((al) => (
                 <div
                   key={al.id}
@@ -322,7 +327,7 @@ export function EnterpriseAdminPanel({ canManage = false }: EnterpriseAdminPanel
                 <span>🔒</span> Poser un Gel Légal (Legal Hold Lock)
               </h3>
               <p className="text-slate-500 text-[11px]">
-                Empêche toute suppression ou purge de données pour une organisation en cas d&apos;audit externe ou de contentieux.
+                Enregistre une intention de conservation. Ce registre ne pilote pas encore les purges métier : ne pas le considérer comme un gel technique opposable.
               </p>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <input
@@ -385,7 +390,7 @@ export function EnterpriseAdminPanel({ canManage = false }: EnterpriseAdminPanel
                 {legalHolds.length === 0 && (
                   <tr>
                     <td colSpan={4} className="py-6 text-center text-slate-400">
-                      Aucun gel légal actif. Les politiques de rétention standard s&apos;appliquent.
+                      Aucun enregistrement de gel. Aucune politique de rétention métier n’est vérifiée par cet écran.
                     </td>
                   </tr>
                 )}
@@ -399,20 +404,20 @@ export function EnterpriseAdminPanel({ canManage = false }: EnterpriseAdminPanel
       {activeTab === "sso" && (
         <div className="rounded-xl border border-slate-200 bg-white p-6 dark:border-slate-800 dark:bg-slate-900 shadow-sm space-y-4 text-xs">
           <div className="flex items-center gap-2">
-            <span className="h-3 w-3 rounded-full bg-emerald-500 animate-pulse" />
+            <span className="h-3 w-3 rounded-full bg-amber-500" />
             <h3 className="font-bold text-slate-900 dark:text-white text-sm">
               Fédération d&apos;Identité d&apos;Entreprise &amp; SCIM 2.0
             </h3>
           </div>
 
           <p className="text-slate-600 dark:text-slate-300 leading-relaxed">
-            VeriClaim AI supporte l&apos;authentification unique (SSO OIDC / SAML) et le provisionnement automatique d&apos;utilisateurs via le protocole standard <strong>SCIM 2.0 (RFC 7644)</strong>.
+            Le SSO OIDC est configurable. SAML et le provisionnement SCIM 2.0 conformes RFC 7644 ne sont pas implémentés dans cette version.
           </p>
 
           <div className="space-y-2 font-mono text-[11px] bg-slate-50 p-4 rounded-lg border border-slate-200 dark:bg-slate-800 dark:border-slate-700 text-slate-800 dark:text-slate-200">
             <div><strong>Endpoint SCIM Utilisateurs :</strong> /api/v1/enterprise/scim/v2/Users</div>
-            <div><strong>Authentification SCIM :</strong> Bearer Token / Clé d&apos;API avec scope admin</div>
-            <div><strong>Mappage de rôles :</strong> Automatique (analyst / viewer / admin)</div>
+            <div><strong>Authentification actuelle :</strong> session navigateur + CSRF ; pas de Bearer machine-to-machine</div>
+            <div><strong>Limite :</strong> création locale uniquement ; pas de synchronisation IdP complète</div>
           </div>
         </div>
       )}

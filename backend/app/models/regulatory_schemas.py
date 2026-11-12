@@ -7,7 +7,7 @@ from enum import Enum
 from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.models.legal_types import ClaimType, LegalForce, SanctionProfile, Severity
+from app.models.legal_types import LegalForce, SanctionProfile, Severity
 
 
 class Jurisdiction(str, Enum):
@@ -62,7 +62,7 @@ class RuleGovernanceReview(BaseModel):
     review_status: ReviewStatus
     reviewed_by: str | None = None
     reviewed_at: datetime | None = None
-    confidence_level: ConfidenceLevel = ConfidenceLevel.HIGH
+    confidence_level: ConfidenceLevel = ConfidenceLevel.LOW
     legal_notes: str | None = None
 
 
@@ -123,7 +123,7 @@ class RuleBookSummaryResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     rulebook_version: str
-    release_date: str
+    release_date: str | None = None
     sha256_fingerprint: str
     total_rules: int
     jurisdiction_breakdown: dict[str, int]
@@ -155,7 +155,7 @@ class RuleBookChangelogEntry(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     version: str
-    release_date: str
+    release_date: str | None = None
     title: str
     description: str
     diff_items: list[RuleDiffItem]

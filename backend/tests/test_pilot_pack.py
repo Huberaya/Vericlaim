@@ -27,7 +27,7 @@ def _hash(char: str = "c") -> str:
 def test_pilot_overview_and_kpis():
     with TestClient(app) as client, TestClient(app) as foreign_client:
         identity = authenticate_client(client, role_code="analyst")
-        foreign_identity = authenticate_client(foreign_client, role_code="analyst")
+        authenticate_client(foreign_client, role_code="analyst")
 
         with SessionLocal() as db:
             # Seed suppliers, products, and claims
@@ -81,8 +81,9 @@ def test_pilot_overview_and_kpis():
         assert data["kpis"]["total_suppliers"] >= 1
         assert data["kpis"]["total_products"] >= 1
         assert data["kpis"]["total_claims_detected"] >= 1
-        assert data["kpis"]["critical_risk_claims_count"] >= 1
-        assert "aide à la décision" in data["disclaimer"]
+        assert data["kpis"]["critical_risk_claims_count"] is None
+        assert data["kpis"]["human_validation_rate_percent"] == 0.0
+        assert "aucun taux de conformité" in data["disclaimer"].lower()
 
         # 2. Foreign tenant has empty KPIs
         foreign_res = foreign_client.get("/api/v1/pilot/overview")
@@ -129,13 +130,15 @@ def test_pre_audit_report_generation():
         assert res.status_code == 200, res.text
         report = res.json()
 
-        assert report["report_id"].startswith("PREAUDIT-")
+        assert report["report_id"].startswith("INVENTORY-")
         assert len(report["findings"]) >= 1
         finding = [f for f in report["findings"] if f["claim_text"] == "Livraison neutre en carbone par compensation"][0]
-        assert finding["severity"] == "HIGH"
-        assert "Directive 2024/825" in finding["legal_basis"]
-        assert len(report["audit_trail_signature"]) == 64
-        assert "PRÉ-AUDIT CONFORMITÉ" in report["legal_disclaimer"]
+        assert finding["severity"] == "not_evaluated"
+        assert finding["coverage_status"] == "missing"
+        assert "Non évalué" in finding["legal_basis"]
+        assert len(report["content_sha256"]) == 64
+        assert "audit_trail_signature" not in report
+        assert "INVENTAIRE INTERNE" in report["legal_disclaimer"]
 
 
 def test_catalog_batch_import():
@@ -201,7 +204,9 @@ def test_dossier_export_and_retention_policy():
         ret_res = client.get("/api/v1/pilot/retention-policy")
         assert ret_res.status_code == 200, ret_res.text
         ret_data = ret_res.json()
-        assert ret_data["documents_retention_years"] == 5
-        assert ret_data["audit_trail_retention_years"] == 10
-        assert "dpo@vericlaim.ai" in ret_data["gdpr_contact_email"]
-        assert "AES-256" in ret_data["encryption_standard"]
+        assert ret_data["policy_status"] == "not_configured"
+        assert ret_data["documents_retention_years"] is None
+        assert ret_data["audit_trail_retention_years"] is None
+        assert ret_data["gdpr_contact_email"] is None
+        assert ret_data["encryption_standard"] is None
+        assert ret_data["export_formats_supported"] == ["JSON"]

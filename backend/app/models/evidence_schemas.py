@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import json
-import math
-import re
 from datetime import date, datetime
 from typing import Any
 from uuid import UUID
@@ -12,7 +9,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.models.analysis_schemas import ClaimResponse
-from app.models.catalog_schemas import _normalise_metadata, _normalise_optional, _normalise_required
+from app.models.catalog_schemas import _normalise_metadata, _normalise_optional
 from app.models.domain import EvidenceRelation, EvidenceStatus, EvidenceType
 
 

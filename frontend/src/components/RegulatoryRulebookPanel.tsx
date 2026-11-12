@@ -138,13 +138,13 @@ export function RegulatoryRulebookPanel({ canManage = false }: RegulatoryRuleboo
       {/* Governance & Integrity Statement */}
       <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-3 text-xs">
         <div className="flex items-center gap-2 text-slate-700 dark:text-slate-300">
-          <span className="text-emerald-600 font-bold">🔒 Intégrité cryptographique :</span>
+          <span className="text-slate-600 font-bold">Empreinte technique du contenu (non signée) :</span>
           <span className="font-mono bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded text-[11px] text-slate-600 dark:text-slate-400">
             SHA-256 : {summary?.sha256_fingerprint.slice(0, 24)}…
           </span>
         </div>
         <div className="text-[11px] text-slate-500 italic">
-          Dernière homologation du Rule Book : {summary?.release_date || "2026-09-24"}
+          {summary?.governance_statement ?? "Validation juridique externe non vérifiée."}
         </div>
       </div>
 

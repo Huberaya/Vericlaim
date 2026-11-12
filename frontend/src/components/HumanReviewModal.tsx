@@ -32,7 +32,7 @@ export function HumanReviewModal({
               <span className="text-indigo-600 dark:text-indigo-400">⚖</span> Arbitrage Humain &amp; Validations (Chantier 6.3)
             </h2>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              Revue contradictoire des allégations, décisions d&apos;homologation juridique et demandes de justificatifs fournisseurs.
+              Revue des allégations, décisions humaines enregistrées et demandes de justificatifs fournisseurs.
             </p>
           </div>
           <button

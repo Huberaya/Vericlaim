@@ -9,21 +9,16 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from app.catalog.service import get_product, get_supplier
-from app.core.database import sha256_json
 from app.identity.service import append_audit_event
 from app.models.domain import (
-    Analysis,
     AnalysisVersion,
     Claim,
     EvidenceRequest,
     EvidenceRequestStatus,
-    Product,
-    Supplier,
-    User,
     Validation,
     ValidationDecision,
 )

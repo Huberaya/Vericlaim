@@ -10,7 +10,7 @@ from app.analyses.service import (
     process_claimed_analysis_detection, record_analysis_detection_failure,
 )
 from app.core.config import settings
-from app.models.domain import AnalysisDetectionJob, AnalysisDetectionJobStatus, AnalysisVersion, AuditEvent
+from app.models.domain import AnalysisDetectionJob, AnalysisDetectionJobStatus, AnalysisVersion
 from app.identity.service import set_db_request_context
 from tests.auth_support import authenticate_client
 from tests.test_secure_documents import _install_document_fakes, _create_document, _request_upload

@@ -12,7 +12,8 @@ from sqlalchemy.orm import Session
 from app.identity.service import set_db_request_context
 from app.models.domain import Document, DocumentVersion, DocumentExtractionJob
 from tests.test_postgres_tenant_isolation import (
-    ADMIN_DSN, APP_ROLE, APP_PASSWORD, _sqlalchemy_url, cluster, tenants,
+    ADMIN_DSN, APP_ROLE, APP_PASSWORD, _sqlalchemy_url,
+    cluster as cluster, tenants as tenants,
 )
 
 pytestmark = pytest.mark.skipif(not ADMIN_DSN, reason="Disposable PostgreSQL URL not configured")

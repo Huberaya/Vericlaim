@@ -10,8 +10,8 @@ from tests.auth_support import authenticate_client
 
 def test_api_key_lifecycle_and_tenant_isolation():
     with TestClient(app) as client, TestClient(app) as foreign_client:
-        identity = authenticate_client(client, role_code="owner")
-        foreign_identity = authenticate_client(foreign_client, role_code="owner")
+        authenticate_client(client, role_code="owner")
+        authenticate_client(foreign_client, role_code="owner")
 
         # 1. Create API Key
         res = client.post(
@@ -60,17 +60,17 @@ def test_enterprise_metrics_and_alerts():
         res = client.get("/api/v1/enterprise/metrics")
         assert res.status_code == 200, res.text
         data = res.json()
-        assert data["service_status"] == "healthy"
+        assert data["service_status"] == "responding"
         assert data["database_status"] == "connected"
         assert data["uptime_seconds"] > 0
-        assert data["memory_usage_mb"] > 0
+        assert data["storage_status"] == "not_probed"
+        assert data["workers_status"] == "not_probed"
+        assert data["memory_usage_mb"] is None
 
-        # Alerts
+        # No alerting backend is connected: do not fabricate SSO/security alerts.
         alert_res = client.get("/api/v1/enterprise/alerts")
         assert alert_res.status_code == 200, alert_res.text
-        alerts = alert_res.json()
-        assert len(alerts) >= 2
-        assert any("SSO" in a["title"] for a in alerts)
+        assert alert_res.json() == []
 
 
 def test_scim_user_provisioning():

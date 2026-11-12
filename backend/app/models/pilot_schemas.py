@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Any
 from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -19,13 +18,13 @@ class PilotOverviewKPIs(BaseModel):
     claims_validated: int
     claims_contested: int
     claims_pending_review: int
-    claims_with_sufficient_evidence: int
+    claims_with_evidence_links: int
     claims_missing_evidence: int
-    claims_expired_evidence: int
+    claims_expired_evidence: int | None
     pending_evidence_requests: int
     overdue_evidence_requests: int
-    global_compliance_rate_percent: float
-    critical_risk_claims_count: int
+    human_validation_rate_percent: float | None
+    critical_risk_claims_count: int | None
 
 
 class SupplierRiskSummary(BaseModel):
@@ -38,7 +37,7 @@ class SupplierRiskSummary(BaseModel):
     claims_count: int
     missing_evidence_count: int
     pending_requests_count: int
-    risk_level: str  # "high" | "medium" | "low"
+    review_priority: str  # Heuristic based on missing links, not a legal risk verdict.
 
 
 class PilotOverviewResponse(BaseModel):
@@ -51,14 +50,17 @@ class PilotOverviewResponse(BaseModel):
     rulebook_version: str
     generated_at: datetime
     disclaimer: str = (
-        "Tableau de bord de pilotage du risque de conformité environnementale (B2B SaaS). "
-        "Outil interne d'aide à la décision sans valeur de certification officielle."
+        "Inventaire de pilotage : décisions humaines et liens probatoires déclarés. "
+        "Un lien ne prouve pas la suffisance juridique ; aucun taux de conformité légale n'est calculé."
     )
 
 
 class PreAuditFinding(BaseModel):
+    """Detected claim inventory entry; deliberately contains no inferred verdict."""
+
     model_config = ConfigDict(extra="forbid")
 
+    claim_id: UUID
     claim_text: str
     category: str
     claim_type: str
@@ -80,15 +82,16 @@ class PreAuditReportResponse(BaseModel):
     as_of_date: date
     jurisdiction: str
     rulebook_version: str
-    rulebook_sha256: str
+    rulebook_sha256: str | None
     summary_kpis: PilotOverviewKPIs
     findings: list[PreAuditFinding]
     remediation_summary: list[str]
-    audit_trail_signature: str
+    content_sha256: str
     legal_disclaimer: str = (
-        "DOCUMENT INTERNE DE GESTION DU RISQUE — PRÉ-AUDIT CONFORMITÉ ALLÉGATIONS ENVIRONNEMENTALES. "
-        "Ce rapport est un outil interne de remédiation et de gouvernance. "
-        "Il ne constitue ni un avis juridique opposable, ni une certification officielle, ni un constat de la DGCCRF."
+        "INVENTAIRE INTERNE DES ALLÉGATIONS DÉTECTÉES ET DES DÉCISIONS HUMAINES. "
+        "Aucune évaluation réglementaire n'est rejouée par cet export. L'empreinte SHA-256 porte sur le contenu, "
+        "sans signature électronique ni horodatage qualifié. Ce document n'est ni un avis juridique, "
+        "ni une certification, ni un constat de la DGCCRF."
     )
 
 
@@ -120,14 +123,25 @@ class CatalogImportResult(BaseModel):
 
 
 class RetentionPolicyResponse(BaseModel):
+    """No approved retention/privacy policy is persisted in this version.
+
+    Unknown is not a promise of encryption, region, retention or DPO availability.
+    A future policy must be configured, reviewed and audited before publication.
+    """
+
     model_config = ConfigDict(extra="forbid")
 
     organization_id: UUID
-    documents_retention_years: int = 5
-    audit_trail_retention_years: int = 10
-    evidence_archive_retention_years: int = 5
-    gdpr_contact_email: str
-    encryption_standard: str = "AES-256 / TLS 1.3"
-    storage_region: str = "EU (Paris / Frankfurt)"
-    export_formats_supported: list[str] = Field(default_factory=lambda: ["JSON", "CSV", "AUDIT_ZIP"])
-    last_policy_review: str = "2026-09-24"
+    policy_status: str = "not_configured"
+    documents_retention_years: int | None = None
+    audit_trail_retention_years: int | None = None
+    evidence_archive_retention_years: int | None = None
+    gdpr_contact_email: str | None = None
+    encryption_standard: str | None = None
+    storage_region: str | None = None
+    export_formats_supported: list[str] = Field(default_factory=lambda: ["JSON"])
+    last_policy_review: str | None = None
+    disclaimer: str = (
+        "Politique non configurée et non vérifiée. Les durées, le chiffrement, la région et le contact RGPD "
+        "ne sont pas attestés par cet écran. L'export disponible est un inventaire JSON, sans binaires."
+    )

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import io
 import zipfile
-from uuid import uuid4
 import fitz
 import pytest
 from fastapi.testclient import TestClient
@@ -20,7 +19,7 @@ def setup_database():
 
 def test_pdf_generation_from_evaluation_response():
     with TestClient(app) as client:
-        identity = authenticate_client(client, role_code="analyst")
+        authenticate_client(client, role_code="analyst")
 
         eval_payload = {
             "evaluation_response": {
@@ -89,7 +88,7 @@ def test_pdf_generation_from_evaluation_response():
 
 def test_dossier_zip_pack_generation():
     with TestClient(app) as client:
-        identity = authenticate_client(client, role_code="analyst")
+        authenticate_client(client, role_code="analyst")
 
         eval_payload = {
             "evaluation_response": {
@@ -125,7 +124,8 @@ def test_dossier_zip_pack_generation():
         zip_file = zipfile.ZipFile(io.BytesIO(response.content))
         file_list = zip_file.namelist()
         assert "rapport_pre_audit.pdf" in file_list
-        assert "manifeste_audit_scelle.json" in file_list
+        assert "manifeste_audit.json" in file_list
+        assert "manifeste_audit_scelle.json" not in file_list
         assert "matrice_probatoire.csv" in file_list
         assert "README_DOSSIER_AUDIT.txt" in file_list
 
@@ -137,7 +137,7 @@ def test_dossier_zip_pack_generation():
 def test_analysis_pdf_and_dossier_tenant_isolation():
     with TestClient(app) as client_a, TestClient(app) as client_b:
         identity_a = authenticate_client(client_a, role_code="analyst")
-        identity_b = authenticate_client(client_b, role_code="analyst")
+        authenticate_client(client_b, role_code="analyst")
 
         with SessionLocal() as db:
             analysis_a = Analysis(
@@ -167,14 +167,14 @@ def test_analysis_pdf_and_dossier_tenant_isolation():
 
             analysis_id = str(analysis_a.id)
 
-        # Org Alpha peut télécharger son PDF et son dossier
+        # C5 persists detections, not reviewed regulatory verdicts. The owner
+        # must receive an explicit conflict, never a re-evaluated placeholder PDF.
         res_pdf_a = client_a.get(f"/api/v1/reports/analyses/{analysis_id}/pdf")
-        assert res_pdf_a.status_code == 200, res_pdf_a.text
-        assert res_pdf_a.content.startswith(b"%PDF-")
+        assert res_pdf_a.status_code == 409, res_pdf_a.text
+        assert not res_pdf_a.content.startswith(b"%PDF-")
 
         res_dossier_a = client_a.get(f"/api/v1/reports/analyses/{analysis_id}/dossier")
-        assert res_dossier_a.status_code == 200, res_dossier_a.text
-        assert res_dossier_a.headers["content-type"] == "application/zip"
+        assert res_dossier_a.status_code == 409, res_dossier_a.text
 
         # Org Beta ne peut pas accéder à l'analyse d'Org Alpha (404 / isolation tenant)
         res_pdf_b = client_b.get(f"/api/v1/reports/analyses/{analysis_id}/pdf")

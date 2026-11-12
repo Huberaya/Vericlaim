@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import date
-from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
 from app.analyses.service import get_claim
@@ -360,7 +358,7 @@ def get_analysis_matrix(
         expired_evidence = 0
         out_of_scope_evidence = 0
 
-        for claim_obj, eval_item in zip(all_claims, evaluations):
+        for claim_obj, eval_item in zip(all_claims, evaluations, strict=True):
             presented_claim = _present_claim(claim_obj, segment=seg_map.get(claim_obj.document_segment_id))
             presented_links = [_present_evidence_link(lnk) for lnk in eval_item.links]
 

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
@@ -11,11 +10,9 @@ from app.engine.governance import (
     get_rulebook_changelog,
     get_rulebook_summary,
     list_rules,
-    update_rule_governance_review,
 )
 from app.identity.dependencies import (
     TenantPrincipal,
-    request_id_from_request,
     require_permission,
 )
 from app.models.regulatory_schemas import (
@@ -96,16 +93,17 @@ def record_rule_review(
     request: Request,
     principal: TenantPrincipal = RULES_MANAGE_DEPENDENCY,
 ) -> RegulatoryRuleDetail:
-    """Records a formal compliance / legal review sign-off for a specific regulatory rule."""
-    try:
-        user_name = str(principal.user_id)
-        return update_rule_governance_review(
-            rule_id=rule_id,
-            reviewer_user_id=str(principal.user_id),
-            reviewer_name=user_name,
-            review_status=body.review_status,
-            confidence_level=body.confidence_level,
-            legal_notes=body.legal_notes,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    """Fail closed until reviews are durable, tenant-scoped and legally evidenced.
+
+    The previous implementation mutated a process-global dictionary: one
+    tenant's administrator could change every tenant's rule metadata, with no
+    durable audit record and no effect after restart. Do not replace that with
+    another implicit global approval.
+    """
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=(
+            "La validation juridique nécessite un workflow persisté, isolé par organisation et appuyé "
+            "sur des preuves vérifiées. Aucune approbation globale n'a été appliquée."
+        ),
+    )

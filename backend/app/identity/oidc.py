@@ -6,7 +6,7 @@ import hmac
 import secrets
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 import httpx
 import jwt
@@ -90,6 +90,12 @@ class OidcClient:
         if payload["issuer"].rstrip("/") != str(self._settings.oidc_issuer).rstrip("/"):
             raise OidcProtocolError("L’émetteur annoncé par le fournisseur SSO est inattendu.")
 
+        # Discovery is trusted for endpoint locations, not for weakening transport
+        # security. A signed ID token cannot protect a code/client secret already
+        # sent to a cleartext token endpoint.
+        for field in ("authorization_endpoint", "token_endpoint", "jwks_uri"):
+            self._validate_endpoint(field, payload[field])
+
         self._metadata = OidcMetadata(
             issuer=payload["issuer"].rstrip("/"),
             authorization_endpoint=payload["authorization_endpoint"],
@@ -97,6 +103,19 @@ class OidcClient:
             jwks_uri=payload["jwks_uri"],
         )
         return self._metadata
+
+    def _validate_endpoint(self, field: str, value: str) -> None:
+        parsed = urlparse(value)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.netloc
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.fragment
+        ):
+            raise OidcProtocolError(f"Le point d’entrée OIDC {field} est invalide.")
+        if self._settings.is_production_like and parsed.scheme != "https":
+            raise OidcProtocolError(f"Le point d’entrée OIDC {field} doit utiliser HTTPS en staging/production.")
 
     def authorization_url(self, transaction: OidcLoginTransaction) -> str:
         metadata = self.metadata()

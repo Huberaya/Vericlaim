@@ -31,8 +31,8 @@ from tests.test_postgres_tenant_isolation import (
     APP_ROLE,
     ADMIN_DSN,
     _sqlalchemy_url,
-    cluster,
-    tenants,
+    cluster as cluster,
+    tenants as tenants,
 )
 
 pytestmark = pytest.mark.skipif(not ADMIN_DSN, reason="Disposable PostgreSQL URL not configured")

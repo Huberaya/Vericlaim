@@ -11,8 +11,16 @@ from app.models.schemas import EvaluationResponse
 from app.reports.pdf_generator import RegulatoryPdfReportGenerator
 
 
+def _csv_cell(value: object) -> str:
+    """Keep declared text inert when opened in Excel/LibreOffice."""
+    text = str(value)
+    if text.lstrip().startswith(("=", "+", "-", "@")) or text.startswith(("\t", "\r", "\n")):
+        return "'" + text
+    return text
+
+
 def build_evidence_csv(report: EvaluationResponse) -> str:
-    """Génère la matrice probatoire au format CSV opposable."""
+    """Matrice CSV déclarative ; ne constitue pas une preuve opposable."""
     output = io.StringIO()
     writer = csv.writer(output, delimiter=";")
     writer.writerow([
@@ -35,7 +43,7 @@ def build_evidence_csv(report: EvaluationResponse) -> str:
             else ""
         )
         verdict_val = item.verdict.value if hasattr(item.verdict, "value") else str(item.verdict)
-        writer.writerow([
+        writer.writerow([_csv_cell(value) for value in (
             item.claim_id,
             item.claim_text,
             item.rule_id,
@@ -45,12 +53,12 @@ def build_evidence_csv(report: EvaluationResponse) -> str:
             "OUI" if item.is_legal_violation else "NON",
             req_proofs,
             remediation_text,
-        ])
+        )])
 
     return output.getvalue()
 
 
-def build_readme_dossier(organization_name: str, product_sku: str) -> str:
+def build_readme_dossier(organization_name: str, product_sku: str, engine_version: str) -> str:
     """Rédige la notice de pré-audit accompagnant le dossier probatoire."""
     return f"""================================================================================
 VERICLAIM AI — DOSSIER DE PRÉ-AUDIT RÉGLEMENTAIRE & REGISTRE PROBATOIRE
@@ -58,8 +66,8 @@ VERICLAIM AI — DOSSIER DE PRÉ-AUDIT RÉGLEMENTAIRE & REGISTRE PROBATOIRE
 
 Organisation : {organization_name}
 Référence SKU : {product_sku}
-Date de scellement : {datetime.now(timezone.utc).strftime("%d/%m/%Y à %H:%M UTC")}
-Moteur réglementaire : VeriClaim Rule Engine v1.0.0
+Date de génération (non qualifiée) : {datetime.now(timezone.utc).strftime("%d/%m/%Y à %H:%M UTC")}
+Moteur déclaré : {engine_version}
 
 --------------------------------------------------------------------------------
 CONTENU DE L'ARCHIVE :
@@ -69,9 +77,9 @@ CONTENU DE L'ARCHIVE :
    des allégations détectées, fondements légaux (AGEC, EmpCo, ISO 14021) et clauses
    de remédiation proposées.
 
-2. `manifeste_audit_scelle.json`
+2. `manifeste_audit.json` (empreintes non signées)
    Empreinte machine-readable du rapport, incluant les offsets exacts de détection,
-   les condensats cryptographiques SHA-256 et la piste d'audit append-only.
+   les condensats cryptographiques SHA-256 et la piste d'audit déclarée. Aucun horodatage qualifié ni signature électronique.
 
 3. `matrice_probatoire.csv`
    Matrice tabulaire de couverture probatoire pour exploitation dans vos ERP,
@@ -83,7 +91,7 @@ AVERTISSEMENT JURIDIQUE :
 Ce dossier est un outil technique d'aide à la décision et de gestion des risques.
 Il ne constitue ni un avis juridique formel dispensé par un professionnel du droit,
 ni un certificat officiel émis par une autorité de contrôle (DGCCRF, Commission Européenne).
-Les informations fournies sont basées sur les règles en vigueur à la date d'analyse.
+Les informations reposent sur le référentiel technique déclaré ; leur validité juridique et leur applicabilité doivent être vérifiées.
 ================================================================================
 """
 
@@ -94,15 +102,15 @@ def create_regulatory_dossier_zip(
     product_identifier: Optional[str] = None,
     surface: str = "packaging",
 ) -> bytes:
-    """Génère l'archive ZIP scellée contenant l'ensemble du pack probatoire."""
-    sku = product_identifier or "SKU-EXPORT"
+    """Archive de pré-audit avec empreintes déclarées, sans signature qualifiée."""
+    sku = product_identifier or "non précisé"
 
     # 1. Génération du PDF
     pdf_gen = RegulatoryPdfReportGenerator(
         report=report,
         organization_name=organization_name,
         product_identifier=sku,
-        surface=surface,
+        surface=surface or "non précisé",
     )
     pdf_bytes = pdf_gen.generate()
 
@@ -115,14 +123,14 @@ def create_regulatory_dossier_zip(
     csv_bytes = csv_text.encode("utf-8-sig")  # BOM pour Excel
 
     # 4. Notice README
-    readme_text = build_readme_dossier(organization_name, sku)
+    readme_text = build_readme_dossier(organization_name, sku, report.audit_trail.engine_version)
     readme_bytes = readme_text.encode("utf-8")
 
     # 5. Assemblage du ZIP
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("rapport_pre_audit.pdf", pdf_bytes)
-        zf.writestr("manifeste_audit_scelle.json", manifest_bytes)
+        zf.writestr("manifeste_audit.json", manifest_bytes)
         zf.writestr("matrice_probatoire.csv", csv_bytes)
         zf.writestr("README_DOSSIER_AUDIT.txt", readme_bytes)
 

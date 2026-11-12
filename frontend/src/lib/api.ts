@@ -973,7 +973,7 @@ export async function listLegalHolds(): Promise<LegalHoldResponse[]> {
 }
 
 // ---------------------------------------------------------------------------
-// Chantier 10 — Regulatory PDF Reporting & Opposable Dossier
+// Chantier 10 — exports de pré-audit non signés
 // ---------------------------------------------------------------------------
 
 export async function downloadPdfReport(
@@ -986,7 +986,7 @@ export async function downloadPdfReport(
     body: JSON.stringify({
       evaluation_response: report,
       document_title: options?.document_title || "Rapport d'Audit Pré-Réglementaire Allégations",
-      product_identifier: options?.product_identifier || "SKU-PROD-001",
+      product_identifier: options?.product_identifier || null,
       surface: options?.surface || "packaging",
       include_evidence_matrix: options?.include_evidence_matrix ?? true,
       include_remediation_clauses: options?.include_remediation_clauses ?? true,
@@ -1018,7 +1018,7 @@ export async function downloadDossierPack(
     body: JSON.stringify({
       evaluation_response: report,
       document_title: options?.document_title || "Dossier Probatoire Réglementaire",
-      product_identifier: options?.product_identifier || "SKU-PROD-001",
+      product_identifier: options?.product_identifier || null,
       surface: options?.surface || "packaging",
     }),
     credentials: "include",

@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import date, datetime, timezone
+from datetime import date, datetime
+from enum import Enum
 from typing import Any
 
-from app.engine.rule_book import RULE_BY_ID, RULEBOOK_VERSION, RULES, RegulatoryRule
+from app.engine.rule_book import RULE_BY_ID, RULEBOOK_VERSION, RULES, RegulatoryRule, _canonical_rule
 from app.models.regulatory_schemas import (
     ConfidenceLevel,
     Jurisdiction,
@@ -195,89 +196,89 @@ RULE_METADATA_EXT: dict[str, dict[str, Any]] = {
     "RULE_AGEC_BIODEGRADABLE": {
         "jurisdiction": Jurisdiction.FR,
         "legal_status": LegalStatus.IN_FORCE,
-        "confidence_level": ConfidenceLevel.HIGH,
-        "review_status": ReviewStatus.APPROVED_LEGAL,
+        "confidence_level": ConfidenceLevel.LOW,
+        "review_status": ReviewStatus.UNDER_REVIEW,
         "transposition_deadline": None,
         "incomplete_coverage_warning": None,
-        "reviewed_by": "Direction Juridique & Conformité Réglementaire",
-        "reviewed_at": datetime(2026, 9, 20, 10, 0, tzinfo=timezone.utc),
+        "reviewed_by": None,
+        "reviewed_at": None,
         "legal_notes": "Interdiction absolue en droit français. Aucune dérogation technique possible.",
     },
     "RULE_AGEC_NATURE_FRIENDLY": {
         "jurisdiction": Jurisdiction.FR,
         "legal_status": LegalStatus.IN_FORCE,
-        "confidence_level": ConfidenceLevel.HIGH,
-        "review_status": ReviewStatus.APPROVED_LEGAL,
+        "confidence_level": ConfidenceLevel.LOW,
+        "review_status": ReviewStatus.UNDER_REVIEW,
         "transposition_deadline": None,
         "incomplete_coverage_warning": None,
-        "reviewed_by": "Direction Juridique & Conformité Réglementaire",
-        "reviewed_at": datetime(2026, 9, 20, 10, 0, tzinfo=timezone.utc),
+        "reviewed_by": None,
+        "reviewed_at": None,
         "legal_notes": "Application stricte sur emballages et étiquetage produit. Analyse contextuelle requise pour supports publicitaires hors produit.",
     },
     "RULE_EU_GENERIC_CLAIM": {
         "jurisdiction": Jurisdiction.EU,
         "legal_status": LegalStatus.IN_FORCE,
-        "confidence_level": ConfidenceLevel.HIGH,
-        "review_status": ReviewStatus.APPROVED_LEGAL,
+        "confidence_level": ConfidenceLevel.LOW,
+        "review_status": ReviewStatus.UNDER_REVIEW,
         "transposition_deadline": date(2026, 3, 27),
         "incomplete_coverage_warning": "Date d'application directive au 27 septembre 2026. La transposition en droit interne français doit être vérifiée.",
-        "reviewed_by": "Direction Juridique & Conformité Réglementaire",
-        "reviewed_at": datetime(2026, 9, 24, 14, 0, tzinfo=timezone.utc),
+        "reviewed_by": None,
+        "reviewed_at": None,
         "legal_notes": "Exige une preuve d'excellence environnementale officielle (Ecolabel UE ou ISO 14024 Type I).",
     },
     "RULE_EU_CARBON_NEUTRAL_COMPENSATION": {
         "jurisdiction": Jurisdiction.EU,
         "legal_status": LegalStatus.IN_FORCE,
-        "confidence_level": ConfidenceLevel.HIGH,
-        "review_status": ReviewStatus.APPROVED_LEGAL,
+        "confidence_level": ConfidenceLevel.LOW,
+        "review_status": ReviewStatus.UNDER_REVIEW,
         "transposition_deadline": date(2026, 3, 27),
         "incomplete_coverage_warning": "Application directe au 27 septembre 2026. Avant cette date, application du régime de l'article L. 229-68 du Code de l'environnement.",
-        "reviewed_by": "Direction Juridique & Conformité Réglementaire",
-        "reviewed_at": datetime(2026, 9, 24, 14, 0, tzinfo=timezone.utc),
+        "reviewed_by": None,
+        "reviewed_at": None,
         "legal_notes": "Interdiction stricte des allégations produit neutre fondées sur des compensations hors chaîne de valeur.",
     },
     "RULE_FR_CARBON_NEUTRAL_DISCLOSURE": {
         "jurisdiction": Jurisdiction.FR,
         "legal_status": LegalStatus.IN_FORCE,
-        "confidence_level": ConfidenceLevel.HIGH,
-        "review_status": ReviewStatus.APPROVED_LEGAL,
+        "confidence_level": ConfidenceLevel.LOW,
+        "review_status": ReviewStatus.UNDER_REVIEW,
         "transposition_deadline": None,
         "incomplete_coverage_warning": None,
-        "reviewed_by": "Direction Juridique & Conformité Réglementaire",
-        "reviewed_at": datetime(2026, 9, 20, 10, 0, tzinfo=timezone.utc),
+        "reviewed_by": None,
+        "reviewed_at": None,
         "legal_notes": "Exige la mise à disposition publique d'un bilan d'émissions complet, d'une trajectoire et d'un plan de compensation.",
     },
     "RULE_EU_COMPARATIVE_LCA": {
         "jurisdiction": Jurisdiction.EU,
         "legal_status": LegalStatus.PROPOSAL,
-        "confidence_level": ConfidenceLevel.MEDIUM,
-        "review_status": ReviewStatus.APPROVED_LEGAL,
+        "confidence_level": ConfidenceLevel.LOW,
+        "review_status": ReviewStatus.UNDER_REVIEW,
         "transposition_deadline": None,
         "incomplete_coverage_warning": "Proposition de directive COM(2023) 166 non adoptée comme droit contraignant. Règle consultative (advisory evidence gate).",
-        "reviewed_by": "Direction Juridique & Conformité Réglementaire",
-        "reviewed_at": datetime(2026, 9, 22, 11, 0, tzinfo=timezone.utc),
+        "reviewed_by": None,
+        "reviewed_at": None,
         "legal_notes": "Recommandation méthodologique pour éviter le risque de pratique commerciale trompeuse sur allégations comparatives.",
     },
     "RULE_ISO_RECYCLABLE_PERCENTAGE": {
         "jurisdiction": Jurisdiction.INTERNATIONAL,
         "legal_status": LegalStatus.IN_FORCE,
-        "confidence_level": ConfidenceLevel.MEDIUM,
-        "review_status": ReviewStatus.APPROVED_LEGAL,
+        "confidence_level": ConfidenceLevel.LOW,
+        "review_status": ReviewStatus.UNDER_REVIEW,
         "transposition_deadline": None,
         "incomplete_coverage_warning": "Norme d'auto-déclaration volontaire. Doit être articulée avec les critères spécifiques de recyclabilité de la loi AGEC.",
-        "reviewed_by": "Direction Juridique & Conformité Réglementaire",
-        "reviewed_at": datetime(2026, 9, 20, 10, 0, tzinfo=timezone.utc),
+        "reviewed_by": None,
+        "reviewed_at": None,
         "legal_notes": "ISO 14021:2016 remplacée par ISO 14021:2026. Vérification requise de l'existence effective d'une filière locale.",
     },
     "RULE_EVIDENCE_QUANTIFIED_CLAIM": {
         "jurisdiction": Jurisdiction.INTERNATIONAL,
         "legal_status": LegalStatus.IN_FORCE,
-        "confidence_level": ConfidenceLevel.HIGH,
-        "review_status": ReviewStatus.APPROVED_LEGAL,
+        "confidence_level": ConfidenceLevel.LOW,
+        "review_status": ReviewStatus.UNDER_REVIEW,
         "transposition_deadline": None,
         "incomplete_coverage_warning": "Garde-fou probatoire interne pour prévenir le risque de qualification de tromperie au sens du Code de la consommation.",
-        "reviewed_by": "Direction Juridique & Conformité Réglementaire",
-        "reviewed_at": datetime(2026, 9, 20, 10, 0, tzinfo=timezone.utc),
+        "reviewed_by": None,
+        "reviewed_at": None,
         "legal_notes": "Exige une ACV ISO 14044 et des métadonnées vérifiées pour toute allégation chiffrée (ex. -30% CO2).",
     },
 }
@@ -289,7 +290,7 @@ RULE_METADATA_EXT: dict[str, dict[str, Any]] = {
 RULEBOOK_CHANGELOG: list[RuleBookChangelogEntry] = [
     RuleBookChangelogEntry(
         version="2026-09-24",
-        release_date="2026-09-24",
+        release_date=None,
         title="Édition Septembre 2026 — Directive (UE) 2024/825 EmpCo & Révision ISO 14021:2026",
         description=(
             "Activation du verrouillage temporel pour la directive européenne 2024/825 (EmpCo), "
@@ -329,7 +330,7 @@ RULEBOOK_CHANGELOG: list[RuleBookChangelogEntry] = [
     ),
     RuleBookChangelogEntry(
         version="2026-07-10",
-        release_date="2026-07-10",
+        release_date=None,
         title="Édition Juillet 2026 — Harmonisation des sanctions AGEC",
         description="Ajustement des bases légales de sanctions administratives consécutif à l'ordonnance de simplification.",
         diff_items=[
@@ -346,7 +347,7 @@ RULEBOOK_CHANGELOG: list[RuleBookChangelogEntry] = [
     ),
     RuleBookChangelogEntry(
         version="2026-01-15",
-        release_date="2026-01-15",
+        release_date=None,
         title="Édition Initiale — Socle Fondateur AGEC & Climat-Résilience",
         description="Création du référentiel initial comprenant les 8 règles fondamentales.",
         diff_items=[
@@ -360,6 +361,47 @@ RULEBOOK_CHANGELOG: list[RuleBookChangelogEntry] = [
 # ---------------------------------------------------------------------------
 # Governance Services & Accessors
 # ---------------------------------------------------------------------------
+
+
+def _canonical_value(value: Any) -> Any:
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    if isinstance(value, (set, frozenset)):
+        return sorted((_canonical_value(item) for item in value), key=str)
+    raise TypeError(f"Unsupported rulebook value: {type(value).__name__}")
+
+
+def get_rulebook_fingerprint() -> str:
+    """Hash all published rule, governance and citation content, without truncation.
+
+    This is a reproducible technical identifier, not a signature, a legal
+    sign-off, or a hash of merely the version label. Historical changelog prose
+    is excluded because it does not change the active rulebook.
+    """
+    manifest = {
+        "schema": "vericlaim-rulebook-content-v1",
+        "rules": [_canonical_rule(rule) for rule in sorted(RULES, key=lambda item: item.rule_id)],
+        "governance": {
+            rule_id: RULE_METADATA_EXT[rule_id]
+            for rule_id in sorted(RULE_METADATA_EXT)
+        },
+        "citations": {
+            rule_id: [citation.model_dump(mode="json") for citation in citations]
+            for rule_id, citations in sorted(OFFICIAL_CITATIONS.items())
+        },
+    }
+    canonical = json.dumps(
+        manifest,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+        default=_canonical_value,
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
 
 def get_rule_summary(rule: RegulatoryRule) -> RegulatoryRuleSummary:
     meta = RULE_METADATA_EXT.get(rule.rule_id, {})
@@ -375,11 +417,11 @@ def get_rule_summary(rule: RegulatoryRule) -> RegulatoryRuleSummary:
         claim_types=[ct.value for ct in rule.claim_types],
         effective_from=rule.effective_from,
         transposition_deadline=meta.get("transposition_deadline"),
-        confidence_level=meta.get("confidence_level", ConfidenceLevel.HIGH),
-        review_status=meta.get("review_status", ReviewStatus.APPROVED_LEGAL),
+        confidence_level=meta.get("confidence_level", ConfidenceLevel.LOW),
+        review_status=meta.get("review_status", ReviewStatus.UNDER_REVIEW),
         has_safe_harbors=len(rule.safe_harbors) > 0,
         has_sanctions=rule.sanction is not None,
-        incomplete_coverage_warning=meta.get("incomplete_coverage_warning"),
+        incomplete_coverage_warning=meta.get("incomplete_coverage_warning") or "Validation juridique externe non vérifiée ; contrôler les sources officielles avant usage commercial.",
     )
 
 
@@ -401,10 +443,10 @@ def get_rule_detail(rule_id: str) -> RegulatoryRuleDetail | None:
     ]
 
     gov_review = RuleGovernanceReview(
-        review_status=meta.get("review_status", ReviewStatus.APPROVED_LEGAL),
+        review_status=meta.get("review_status", ReviewStatus.UNDER_REVIEW),
         reviewed_by=meta.get("reviewed_by"),
         reviewed_at=meta.get("reviewed_at"),
-        confidence_level=meta.get("confidence_level", ConfidenceLevel.HIGH),
+        confidence_level=meta.get("confidence_level", ConfidenceLevel.LOW),
         legal_notes=meta.get("legal_notes"),
     )
 
@@ -431,7 +473,7 @@ def get_rule_detail(rule_id: str) -> RegulatoryRuleDetail | None:
         priority=rule.priority,
         notes=list(rule.notes),
         governance_review=gov_review,
-        incomplete_coverage_warning=meta.get("incomplete_coverage_warning"),
+        incomplete_coverage_warning=meta.get("incomplete_coverage_warning") or "Validation juridique externe non vérifiée ; contrôler les sources officielles avant usage commercial.",
     )
 
 
@@ -480,22 +522,22 @@ def get_rulebook_summary() -> RuleBookSummaryResponse:
         s = meta.get("legal_status", LegalStatus.IN_FORCE).value
         statuses[s] = statuses.get(s, 0) + 1
 
-        if meta.get("incomplete_coverage_warning"):
-            warnings_count += 1
-
-    fingerprint = hashlib.sha256(RULEBOOK_VERSION.encode("utf-8")).hexdigest()
+        # Every shipped rule still lacks an evidenced external legal sign-off.
+        warnings_count += 1
 
     return RuleBookSummaryResponse(
         rulebook_version=RULEBOOK_VERSION,
-        release_date="2026-09-24",
-        sha256_fingerprint=fingerprint,
+        # No evidenced publication/homologation date exists for this technical
+        # snapshot. Do not substitute a hardcoded calendar date.
+        release_date=None,
+        sha256_fingerprint=get_rulebook_fingerprint(),
         total_rules=len(RULES),
         jurisdiction_breakdown=jurisdictions,
         legal_status_breakdown=statuses,
         coverage_warnings_count=warnings_count,
         governance_statement=(
-            "Référentiel réglementaire audité et maintenu sous gouvernance d'experts juridiques. "
-            "Toutes les citations sont sourcées sur Légifrance et EUR-Lex. Version immuable et hashée."
+            "Référentiel technique versionné ; validation juridique externe non vérifiée. "
+            "Les liens officiels sont fournis pour contrôle, mais aucune approbation juridique n’est acquise par défaut."
         ),
         disclaimer=(
             "VeriClaim est un système de pré-audit et d'aide à la décision. "
@@ -506,29 +548,3 @@ def get_rulebook_summary() -> RuleBookSummaryResponse:
 
 def get_rulebook_changelog() -> list[RuleBookChangelogEntry]:
     return RULEBOOK_CHANGELOG
-
-
-def update_rule_governance_review(
-    rule_id: str,
-    reviewer_user_id: str,
-    reviewer_name: str,
-    review_status: ReviewStatus,
-    confidence_level: ConfidenceLevel,
-    legal_notes: str | None = None,
-) -> RegulatoryRuleDetail:
-    rule = RULE_BY_ID.get(rule_id)
-    if not rule:
-        raise ValueError(f"Règle inconnue: {rule_id}")
-
-    meta = RULE_METADATA_EXT.setdefault(rule_id, {})
-    meta["review_status"] = review_status
-    meta["confidence_level"] = confidence_level
-    meta["reviewed_by"] = reviewer_name or reviewer_user_id
-    meta["reviewed_at"] = datetime.now(timezone.utc)
-    if legal_notes:
-        meta["legal_notes"] = legal_notes
-
-    detail = get_rule_detail(rule_id)
-    if detail is None:
-        raise ValueError(f"Règle introuvable: {rule_id}")
-    return detail

@@ -4,6 +4,8 @@ Prototype exécutable d'un moteur d'audit des allégations environnementales. Le
 
 > **Important — aide à la conformité, pas avis juridique.** Un verdict de l'outil n'est ni une décision administrative, ni une certification, ni une preuve judiciaire automatiquement opposable. Les textes, supports réels, pièces, juridiction et transposition nationale doivent être contrôlés par une personne compétente avant diffusion.
 
+Pour le verdict de commercialisation et les limites actuelles, voir [le rapport P0](docs/commercialisation/00-verdict-p0.md).
+
 ## Démarrage rapide
 
 À la racine du dépôt :
@@ -35,13 +37,13 @@ Après connexion SSO et sélection d’une organisation active, les fichiers tex
 cd backend
 python -m venv .venv
 . .venv/bin/activate
-pip install -r requirements.txt
+pip install --require-hashes -r requirements.lock.txt
 pytest -v
 ```
 
 Le fichier `backend/pytest.ini` résout automatiquement le `PYTHONPATH`. Pour les tests isolés, utilisez explicitement `DATABASE_URL=sqlite:///:memory:` et `AUTO_CREATE_SCHEMA=true`. Une indisponibilité PostgreSQL ne déclenche jamais de bascule silencieuse vers SQLite.
 
-Résultat validé dans le workspace : **55 tests passants (100 % de réussite)**. La suite couvre le parcours de quarantaine/promotion, les rejets antivirus, l’expiration, l’isolation tenant/RBAC/CSRF, l’anti-TOCTOU par ETag, les policies S3 présignées, le multipart historique scanné, les queues PostgreSQL, les leases/retries, les workers, les hashes, les segments citables, les analyses versionnées déterministes et le catalogue fournisseurs/produits idempotent. Un avertissement de dépréciation provenant de `starlette.testclient`/httpx reste à traiter lors d’une prochaine mise à niveau compatible.
+Résultat de la vérification P0 locale : **264 tests passants, dont les suites PostgreSQL, sans tests ignorés**. Ce résultat ne valide pas un déploiement ni les intégrations externes (S3, ClamAV, OCR). La suite couvre le parcours de quarantaine/promotion, les rejets antivirus, l’expiration, l’isolation tenant/RBAC/CSRF, l’anti-TOCTOU par ETag, les policies S3 présignées, le multipart historique scanné, les queues PostgreSQL, les leases/retries, les workers, les hashes, les segments citables, les analyses versionnées déterministes et le catalogue fournisseurs/produits idempotent. Un avertissement de dépréciation provenant de `starlette.testclient`/httpx reste à traiter lors d’une prochaine mise à niveau compatible.
 
 ### Migrations de base de données
 
