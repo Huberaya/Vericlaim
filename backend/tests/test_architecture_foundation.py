@@ -395,22 +395,26 @@ def test_core_dossier_graph_persists_with_explicit_tenant_ownership():
             event_hash=_hash("h"),
         )
 
-        session.add_all(
-            [
-                organization,
-                supplier,
-                product,
-                document,
-                document_version,
-                segment,
-                analysis,
-                analysis_version,
-                claim,
-                evidence,
-                evidence_link,
-                event,
-            ]
-        )
+        # Flush in dependency order: these rows carry real foreign keys, and the
+        # suite enforces them in SQLite exactly as PostgreSQL does. A single
+        # ``add_all`` let the ORM order inserts arbitrarily and only passed while
+        # SQLite silently ignored referential integrity.
+        for row in (
+            organization,      # parent of every tenant-scoped row
+            supplier,          # referenced by products, documents and analyses
+            product,           # referenced by documents, analyses and evidence
+            document,          # referenced by document_versions
+            analysis,          # referenced by analysis_versions
+            event,             # references analysis
+            document_version,  # referenced by segments
+            evidence,          # references product
+            segment,           # references document_version
+            analysis_version,  # references analysis
+            claim,             # references analysis_version and segment
+            evidence_link,     # references claim and evidence
+        ):
+            session.add(row)
+            session.flush()
         session.commit()
 
         assert session.get(domain.AnalysisVersion, analysis_version_id).organization_id == organization_id
