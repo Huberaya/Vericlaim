@@ -39,3 +39,16 @@ Exécution reproductible et conditions : [validation](07-validation-et-limites.m
 ## Livrables
 
 [Positionnement](01-positionnement.md) · [Capacités et limites](02-capacites-et-limites.md) · [Pilote](03-pilote.md) · [Sécurité et opérations](04-securite-et-operations.md) · [Données et juridique](05-donnees-et-juridique.md) · [Offre et facturation](06-offre-et-facturation.md) · [Validation](07-validation-et-limites.md) · [Plan de levée des risques](08-plan-de-lancement.md).
+
+
+## Addendum du 12 novembre 2026 — qualification staging/CI
+
+La qualification PostgreSQL/RLS et Neon staging a depuis été exécutée et documentée dans [09-qualification-recette-neon-preview.md](09-qualification-recette-neon-preview.md).
+
+- CI distante sur le SHA candidat `115c1863ce02496180b8b31a2c3a7ff4844ef163` : cinq jobs réussis, dont le job PostgreSQL 16 d'isolation multi-tenant avec le rôle runtime.
+- Neon staging : workflow de migration et de vérification read-only terminé avec succès ; tête Alembic `a7d4c9e2b510`, contrôle RLS et privilèges runtime réussi.
+- Vercel Preview : déploiement READY au SHA candidat.
+- Limite restante : le parcours navigateur E2E (SSO/OIDC, création et changement d'organisation, upload avec services réels) n'est pas validé ; la Preview est protégée par Vercel SSO. Cette limite ne remet pas en cause les tests RLS PostgreSQL et la qualification Neon ci-dessus.
+- Production non qualifiée et non modifiée ; PR #13 reste ouverte et non fusionnée.
+
+La qualification PostgreSQL/RLS + Neon staging est clôturée pour le SHA référencé. Voir le document de preuve pour les déclencheurs précis de requalification.
