@@ -56,13 +56,26 @@ class Transcript:
     def __init__(self) -> None:
         self.steps: list[Step] = []
         self.failures = 0
+        #: Timestamped progress markers. When a run dies *between* two checks,
+        #: the job log alone cannot say where; these markers can, and they are
+        #: what the traceback hook prints.
+        self.marks: list[tuple[float, str]] = []
+
+    def mark(self, label: str) -> None:
+        self.marks.append((time.time(), label))
+        del self.marks[:-12]  # keep the trail short enough to publish in a check
+        print(f"  [MARK] {label}", flush=True)
+
+    def trail(self) -> str:
+        return " > ".join(label for _, label in self.marks)
 
     def check(self, name: str, condition: bool, detail: str, **evidence: Any) -> bool:
+        self.mark(name)
         self.steps.append(Step(name, "PASS" if condition else "FAIL", detail, evidence))
         if not condition:
             self.failures += 1
         marker = "PASS" if condition else "FAIL"
-        print(f"  [{marker}] {name}: {detail}")
+        print(f"  [{marker}] {name}: {detail}", flush=True)
         return condition
 
     def info(self, name: str, detail: str, **evidence: Any) -> None:
@@ -360,6 +373,7 @@ class RecetteRun:
         t = self.transcript
         stack = self.stack
         self.make_fixtures()
+        t.mark("fixtures generated")
 
         # -- boot ---------------------------------------------------------------------
         self.server = ApiServer(self.api_env()).start()
@@ -737,6 +751,7 @@ class RecetteRun:
             t.check("extraction du document de B", bob_extraction["ok"], bob_extraction["detail"])
 
         # -- persistence across a full restart -----------------------------------------
+        t.mark("documents, extraction, download, analysis and reports done")
         self.server.stop()
         self.server = ApiServer(self.api_env(), port=self.server.port).start()
         print(f"API server restarted on {self.server.base_url}")

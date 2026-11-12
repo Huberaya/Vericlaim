@@ -67,10 +67,15 @@ def main(argv: list[str] | None = None) -> int:
             report = {"steps": [], "note": f"stage {args.only} not implemented as a standalone run"}
     except Exception as exc:  # noqa: BLE001 - the harness must report, never mask
         # A crash outside a checked step would otherwise only leave "exit code 1"
-        # in CI. Name it, so the failure is diagnosable from the annotation.
+        # in CI. The type, the message and the last progress markers are enough
+        # to locate it; the full traceback still goes to the console.
         import traceback
 
-        _annotation("error", "Recette interrompue", f"{type(exc).__name__}: {exc}")
+        _annotation(
+            "error",
+            "Recette interrompue",
+            f"{type(exc).__name__}: {exc} | dernière progression: {run.transcript.trail()}",
+        )
         traceback.print_exc()
         return 1
     finally:
