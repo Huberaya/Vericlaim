@@ -194,12 +194,24 @@ jobs:
           print(f"moto {getattr(moto, '__version__', 'unknown')}")
           PY
 
+      # The console output is echoed back as a check annotation when the journey
+      # fails. Job logs are not always retrievable (signed artifact URLs are
+      # blocked from some operator environments), and a failure nobody can read is
+      # worthless. ``tee`` + a tail keeps the diagnosis in the check itself.
       - name: Run the end-to-end recette journey
         env:
           PYTHONPATH: .
         run: |
-          set -euo pipefail
-          python -m tools.recette.run --json-out .recette/last-run.json
+          set -uo pipefail
+          mkdir -p .recette
+          python -m tools.recette.run --json-out .recette/last-run.json 2>&1 | tee .recette/console.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            echo "--- tail of .recette/console.log ---"
+            tail -n 40 .recette/console.log
+            tail -n 40 .recette/console.log | sed 's/^/::error title=Recette console::/'
+            exit "$status"
+          fi
 
       - name: Prove a backup can actually be restored
         env:
