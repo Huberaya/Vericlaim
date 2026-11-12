@@ -62,6 +62,15 @@ def main(argv: list[str] | None = None) -> int:
     print("-" * 78)
     print(f"Résultat : {report['total'] - report['failures']}/{report['total']} étapes en succès")
     print(f"Transcription : {args.json_out}")
+    if report["failures"]:
+        # CI logs are not always reachable from an operator's machine, so every
+        # failing step is echoed in a GitHub Actions annotation as well.
+        for step in report["steps"]:
+            if step["status"] == "FAIL":
+                print(
+                    f"::error title=Étape en échec::{step['name']} — {step['detail'][:400]}",
+                    flush=True,
+                )
     return 1 if report["failures"] else 0
 
 
