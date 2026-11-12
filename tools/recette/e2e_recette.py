@@ -841,7 +841,9 @@ class RecetteRun:
     def _worker_env(self) -> dict[str, str]:
         return {**os.environ, **self.api_env()}
 
-    def _run_worker(self, module: str, *, until: Callable[[], bool], timeout: float = 60.0) -> tuple[bool, str]:
+    def _run_worker(
+        self, module: str, *, until: Callable[[], bool], timeout: float = 60.0
+    ) -> tuple[bool, str, str]:
         """Run the real worker process until the durable state reaches the target.
 
         The worker's only entry point is ``run_forever``; it is started as a
@@ -861,13 +863,19 @@ class RecetteRun:
                 stderr=subprocess.STDOUT,
             )
             reached = False
+            exit_note = "worker still running at the deadline"
             deadline = time.monotonic() + timeout
             try:
                 while time.monotonic() < deadline:
-                    if process.poll() is not None:
+                    code = process.poll()
+                    if code is not None:
+                        # A worker that dies before draining the queue is a much
+                        # stronger signal than "the state never changed": say so.
+                        exit_note = f"worker exited early with code {code}"
                         break
                     if until():
                         reached = True
+                        exit_note = "state reached, worker stopped by the harness"
                         break
                     time.sleep(0.5)
             finally:
@@ -876,7 +884,7 @@ class RecetteRun:
                     process.wait(timeout=15)
                 except subprocess.TimeoutExpired:
                     process.kill()
-        return reached, log_path.read_text(errors="replace")[-1200:]
+        return reached, log_path.read_text(errors="replace")[-1200:], exit_note
 
     def _run_extraction_worker_until(
         self, version_id: str | None, organization_id: str | None, *, label: str, expect_work: bool = True
@@ -886,7 +894,7 @@ class RecetteRun:
         if not version_id:
             return {"ok": False, "detail": "aucune version à extraire"}
         if expect_work:
-            reached, log = self._run_worker(
+            reached, log, exit_note = self._run_worker(
                 "app.workers.document_extraction_worker",
                 until=lambda: self._job_state(version_id, organization_id).get("extraction_status")
                 in {"completed", "requires_review", "failed"},
@@ -895,6 +903,7 @@ class RecetteRun:
         else:
             # No worker process at all: prove the queue does not advance by itself.
             log = "worker not started (by design)"
+            exit_note = "no worker process was started"
             time.sleep(3)
         state = self._job_state(version_id, organization_id)
         if not expect_work:
@@ -905,10 +914,22 @@ class RecetteRun:
             }
         if expect_work:
             ok = state.get("extraction_status") in {"completed", "requires_review"} and state.get("segment_count", 0) > 0
+            detail = (
+                f"statut={state.get('extraction_status')} segments={state.get('segment_count')} "
+                f"job={state.get('job_status')}"
+            )
+            if not ok:
+                # Make an unexplained failure explain itself in the next run: the
+                # reason, the worker's own last lines and why it stopped all go
+                # into the transcript (and therefore into the CI annotation).
+                detail += (
+                    f" | {exit_note} | code={state.get('extraction_error_code')}"
+                    f" | log={log[-320:]}"
+                )
             return {
                 "ok": ok,
-                "detail": f"statut={state.get('extraction_status')} segments={state.get('segment_count')} job={state.get('job_status')}",
-                "evidence": {**state, "worker_log_tail": log[-600:]},
+                "detail": detail,
+                "evidence": {**state, "worker_exit_note": exit_note, "worker_log_tail": log[-600:]},
             }
         ok = state.get("extraction_status") == "pending" and state.get("job_status") == "queued"
         return {
@@ -920,7 +941,7 @@ class RecetteRun:
     def _run_analysis_worker_until(self, analysis_id: str | None, organization_id: str | None) -> dict[str, Any]:
         if not analysis_id:
             return {"ok": False, "detail": "aucune analyse"}
-        reached, log = self._run_worker(
+        reached, log, exit_note = self._run_worker(
             "app.workers.analysis_detection_worker",
             until=lambda: self._analysis_state(analysis_id, organization_id).get("job_status")
             in {"completed", "failed"},
@@ -928,10 +949,13 @@ class RecetteRun:
         )
         state = self._analysis_state(analysis_id, organization_id)
         ok = state.get("job_status") == "completed" and state.get("claim_count", 0) > 0
+        detail = f"job={state.get('job_status')} claims={state.get('claim_count')} statut={state.get('status')}"
+        if not ok:
+            detail += f" | {exit_note} | log={log[-320:]}"
         return {
             "ok": ok,
-            "detail": f"job={state.get('job_status')} claims={state.get('claim_count')} statut={state.get('status')}",
-            "evidence": {**state, "worker_log_tail": log[-600:]},
+            "detail": detail,
+            "evidence": {**state, "worker_exit_note": exit_note, "worker_log_tail": log[-600:]},
         }
 
     def _queue_without_worker(self, browser: Browser, document_id: str) -> str | None:
