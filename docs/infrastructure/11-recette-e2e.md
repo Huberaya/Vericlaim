@@ -119,6 +119,27 @@ pilote dangereux.
 | Charge / performance / latence | hors périmètre | `13` |
 | Neon et Vercel réels | réseau bloqué | `03`, `04` |
 
+## 4 bis. Exécution en intégration continue (et son défaut)
+
+Ce parcours ne tourne pas seulement sur une machine de développement : le job
+`recette-qualification` l'exécute à chaque push (workflow
+`.github/workflows/continuous-integration.yml`).
+
+| Fait observé | Valeur |
+|---|---|
+| Runs verts de bout en bout | `43325846167`, `43326500112`, `43327153607`, `43327851678`, `43328688825` |
+| Runs en échec à l'étape 6 | `43326090494` (9 s), `43326928526` (7 s) |
+| Durée d'un parcours réussi | 17–19 s |
+
+Les deux échecs s'arrêtent **trop tôt** pour être des expirations de délai : ce
+sont des exceptions levées hors étape. Non expliqués à ce jour, ils sont suivis
+comme **A-13** dans le registre. Le parcours local, lui, donne 54/54 de façon
+reproductible (dont deux exécutions sous charge).
+
+**Ne pas lire « CI verte » comme « parcours fiable à 100 % ».** Le harnais
+publie désormais, en cas d'échec, le type d'exception et la dernière progression,
+ce qui rendra le prochain incident diagnosticable sans accès aux logs.
+
 ## 5. Reproducibilité
 
 Le parcours crée une base et des buckets **neufs à chaque exécution** dans

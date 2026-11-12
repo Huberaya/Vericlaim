@@ -25,6 +25,7 @@ base d'un raisonnement : elle est close sur une observation.
 | A-10 | `vericlaim` : TLS PostgreSQL non vérifiable, `verify_runtime.py` jamais exécuté avec succès | P1 | **ouvert** |
 | A-11 | Import d'un PDF volumineux refusé par la limite par défaut (2 Mo) | P2 | **atténué** |
 | A-12 | Le job CI de recette ne pouvait pas s'installer (python 3.13 vs wheels `pgserver`) | P1 | **corrigé** |
+| A-13 | Échec CI intermittent du parcours de recette (~1 run sur 3), non expliqué à ce jour | P1 | **ouvert, instrumenté** |
 
 ---
 
@@ -348,6 +349,68 @@ restauration étaient des preuves **locales**. Elles sont maintenant exécutées
 aussi en intégration continue, sur un runner propre. C'est exactement la raison
 d'être de ce job — et il a immédiatement trouvé un défaut, dans le harnais
 lui-même.
+
+---
+
+## A-13 — Échec CI intermittent du parcours de recette
+
+**Sévérité : P1 (une CI qui échoue au hasard ne prouve rien).**
+**Statut : OUVERT — instrumenté, pas encore expliqué.**
+
+**Observation.** Sur six runs du job `recette-qualification` au même commit
+applicatif, **deux ont échoué** et quatre ont réussi. Les deux échecs se
+produisent à l'étape « Run the end-to-end recette journey ».
+
+**Ce que les horodatages prouvent.** En comparant les étapes :
+
+| Run | Étape 6 (parcours) | Résultat |
+|---|---|---|
+| `43327153607` | 23:15:19 → 23:15:38 (**19 s**) | success |
+| `43326500112` | 23:10:47 → 23:11:04 (**17 s**) | success |
+| `43326928526` | 23:13:37 → 23:13:44 (**7 s**) | **failure** |
+| `43326090494` | 23:08:06 → 23:08:15 (**9 s**) | **failure** |
+
+Un parcours complet dure 17–19 s. Les échecs s'arrêtent après 7–9 s : ce n'est
+donc **pas** une expiration de délai, c'est une **exception levée tôt** — et le
+harnais n'en publiait que « exit code 1 ».
+
+**Ce qui est exclu par l'observation.**
+- Ce n'est pas le code applicatif : les runs verts et rouges portent des SHA
+  dont les seules différences sont documentaires, et trois exécutions locales
+  consécutives donnent 54/54.
+- Ce n'est pas la contention CPU : deux exécutions locales avec deux boucles
+  occupant les deux cœurs donnent 54/54.
+- Ce n'est pas le défaut A-12 (installation) : l'installation réussit dans tous
+  les runs concernés, et l'étape 5 de contrôle d'import passe.
+- Ce n'est pas un manque de moteur OCR : le parcours accepte explicitement
+  l'échec contrôlé de l'étape 31.
+
+**Ce que je ne peux pas faire.** Lire les logs : les URL signées des blobs
+GitHub Actions sont refusées depuis mon environnement (`EOF`), et `gh run
+rerun` / `workflow_dispatch` sont à 403. Je ne peux donc pas voir la trace
+Python de l'échec.
+
+**Ce qui a été fait à la place** — rendre le prochain échec explicite :
+1. le parcours dépose des **marqueurs horodatés** à chaque étape et à chaque
+   phase non vérifiée ;
+2. une exception hors étape est nommée (type + message) **et** localisée par la
+   dernière progression, en annotation ;
+3. la console est capturée (`tee`) et sa fin réémise en annotations ;
+4. les étapes en échec sont répétées en annotations.
+
+Vérification de l'instrumentation par injection volontaire d'une exception :
+`RuntimeError: connexion réinitialisée par le pair | dernière progression:
+fixtures generated > healthz répond`.
+
+**Conséquence sur nos affirmations.** Tant que A-13 n'est pas expliqué, je ne dis
+pas « la CI est verte » : je dis « la CI a été verte sur les runs cités, et elle
+échoue encore de façon intermittente sur le job de recette ». Les documents
+`11` et `13` portent cette nuance.
+
+**Prochaines étapes.** Le prochain échec produira une annotation contenant le
+type d'exception et l'étape exacte ; c'est ce qui tranchera entre un port pris
+entre la réservation et l'écoute, un échec du serveur S3 local au démarrage, et
+une réponse transitoire du serveur d'API.
 
 ## Ce qui n'a pas été testé du tout
 

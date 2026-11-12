@@ -55,7 +55,7 @@ parcours complet. Le compte rendu machine est écrit dans
 | Politiques RLS | **26** | `03` |
 | Restauration sur cible isolée | **réussie**, chaîne d'audit revalidée | `10` |
 | Défauts réels trouvés / corrigés | **6 / 6** | `12` |
-| Intégration continue | **4 / 4 jobs `success`** (run `43325846167`) | `12` |
+| Intégration continue | **4 / 4 jobs `success`** sur 5 runs — mais **2 échecs intermittents** suivis (A-13) | `12` |
 | Conditions bloquantes restantes | **6** | `13` |
 
 > **Statut proposé : QUALIFIÉ POUR LA CI ET LA RECETTE TECHNIQUE — NON QUALIFIÉ POUR
