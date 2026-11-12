@@ -1,9 +1,9 @@
 # Qualification définitive — PostgreSQL/RLS, Neon staging et Preview
 
-**État : QUALIFIÉ POUR LE PÉRIMÈTRE CI + BASE STAGING ; E2E NAVIGATEUR NON QUALIFIÉ.**  
-**Dernière vérification : 12 novembre 2026.**  
-**Branche candidate :** `arena/c5488624-vericlaim`  
-**SHA candidat vérifié :** `115c1863ce02496180b8b31a2c3a7ff4844ef163`  
+**État : QUALIFIÉ POUR LE PÉRIMÈTRE CI + BASE STAGING ; E2E NAVIGATEUR NON QUALIFIÉ.**
+**Dernière vérification : 12 novembre 2026.**
+**Branche candidate :** `arena/c5488624-vericlaim`
+**SHA candidat vérifié :** `115c1863ce02496180b8b31a2c3a7ff4844ef163`
 **PR :** [#13](https://github.com/Huberaya/Vericlaim/pull/13) — ouverte, non fusionnée.
 
 Ce document est le point de reprise de référence. Ne pas refaire cette qualification tant que les déclencheurs de requalification listés plus bas ne sont pas intervenus.
