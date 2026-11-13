@@ -77,6 +77,46 @@ robustesse, indépendant de la recette.
 parfois. Les hypothèses restantes (course entre deux requêtes sur la même
 session, effet de cache d'identité, ordre de transaction) ne sont pas départagées.
 
+## 2.5 Un fait plus grave, établi au dernier run (`43344842829`)
+
+L'annotation dit :
+
+```
+RecetteStateError: version ac97355b-… does not exist at all
+(no row even for the admin role): the upload was never committed
+```
+
+et la progression la situe **juste après « segments consultables via l'API »**,
+c'est-à-dire après un import qui a répondu **HTTP 201** à l'étape 23.
+
+Autrement dit : **la complétion d'import a renvoyé un succès avec un identifiant
+de version, puis aucune ligne n'existe en base — pas même pour le rôle admin, qui
+contourne le RLS.**
+
+Ce que cela exclut :
+- une erreur de contexte tenant (l'admin ne voit pas davantage) ;
+- une erreur d'identifiant côté harnais (le corps 201 provient du serveur) ;
+- une lenteur de commit (la lecture a lieu plusieurs étapes plus tard).
+
+Ce que cela implique : l'écriture de cette requête n'a pas été validée, alors que
+le client a reçu un 201. La transaction est validée par `get_db`
+(`yield db; db.commit()`), donc un 201 *devrait* impliquer un commit réussi. Le
+fait que ce ne soit pas le cas est un **écart sérieux entre le succès annoncé et
+l'état durable**.
+
+**Je ne pousse pas plus loin l'instrumentation.** La suite exigerait de modifier
+du code applicatif et de relancer des parcours jusqu'à reproduire l'incident, ce
+qui dépasse l'autorisation de cette mission (aucune modification de production,
+aucune migration) et le temps imparti. Le fait est consigné, l'anomalie reste
+ouverte.
+
+**Conséquence pour la décision de fusion.** Ce n'est plus seulement « la recette
+est instable » : c'est « un succès d'import n'est pas toujours durable, au moins
+dans cet environnement ». Si ce comportement existe en production, un utilisateur
+verrait un document créé puis introuvable. Cela **doit** être tranché par le
+propriétaire avant toute fusion, et je recommande de ne pas fusionner en l'état
+tant que ce point n'est pas élucidé.
+
 ## 3. Ce que je n'ai pas pu faire
 
 | Tentative | Résultat |
