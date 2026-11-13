@@ -743,10 +743,12 @@ class RecetteRun:
         t.check("création organisation B", org_b.status_code == 201, f"HTTP {org_b.status_code}")
         org_b_id = org_b.json()["organization"]["id"]
 
+        bob_document_probe = bob.get(f"/api/v1/documents/{document_id}")
         t.check(
             "B ne voit pas le document de A (404)",
-            bob.get(f"/api/v1/documents/{document_id}").status_code == 404,
-            f"HTTP {bob.get(f'/api/v1/documents/{document_id}').status_code}",
+            bob_document_probe.status_code == 404,
+            f"HTTP {bob_document_probe.status_code}"
+            + ("" if bob_document_probe.status_code == 404 else f" — {self._describe_bob(bob)}"),
         )
         t.check(
             "B ne peut pas télécharger la version de A",
@@ -1024,6 +1026,24 @@ class RecetteRun:
         outcome = self._upload(browser, document_id, self.generated["clean_txt"], self.generated["clean_txt"].name, "text/plain")
         self._queue_upload_outcome = outcome
         return outcome.get("version_id")
+
+    def _describe_bob(self, bob: "Browser") -> str:
+        """Explain why tenant B could not even resolve a principal.
+
+        A 409 on a read that must be 404 means B had no usable active membership,
+        not that isolation failed. The distinction matters: one is the product
+        losing a tenant context, the other is the harness racing its own setup.
+        """
+
+        status = bob.get("/api/v1/auth/status")
+        me = bob.get("/api/v1/auth/me")
+        detail = f"auth/status={status.status_code} me={me.status_code}"
+        try:
+            body = me.json()
+            detail += f" active_organization={body.get('active_organization')!r}"
+        except Exception:  # noqa: BLE001 - the body is only a hint
+            pass
+        return detail + " (a 409 here means no active membership, not a leak)"
 
     def _explain_missing_version(self, version_id: str, organization_id: str) -> str:
         """Why can the runtime role not see this version? Answer in the message.

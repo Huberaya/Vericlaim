@@ -298,6 +298,16 @@ class S3Store:
     quarantine_bucket: str
     clean_bucket: str
     backend: str
+    #: The in-process Moto server, so the run can shut it down. Left running, it
+    #: keeps the port and the buckets alive and makes a later run collide.
+    server: object | None = None
+
+    def stop(self) -> None:
+        if self.server is not None:
+            try:
+                self.server.stop()
+            finally:
+                self.server = None
 
 
 def start_s3_store(*, workdir: Path | None = None) -> S3Store:
@@ -322,8 +332,13 @@ def start_s3_store(*, workdir: Path | None = None) -> S3Store:
     endpoint = f"http://127.0.0.1:{port}"
     access_key = "recette-access-key"
     secret_key = ephemeral_password("s3secret")
-    quarantine = "vericlaim-quarantine"
-    clean = "vericlaim-documents"
+    # Bucket names carry a per-run suffix. Fixed names collide as soon as a
+    # previous Moto server is still alive — ``BucketAlreadyOwnedByYou`` — or once
+    # several runs share a server, which makes a re-run fail for a reason that has
+    # nothing to do with the product.
+    run_suffix = uuid.uuid4().hex[:10]
+    quarantine = f"vericlaim-quarantine-{run_suffix}"
+    clean = f"vericlaim-documents-{run_suffix}"
 
     import boto3
 
@@ -343,7 +358,7 @@ def start_s3_store(*, workdir: Path | None = None) -> S3Store:
         except Exception:
             pass  # S3 raises NoSuchBucketPolicy: the expected private default.
 
-    return S3Store(
+    store = S3Store(
         endpoint_url=endpoint,
         access_key=access_key,
         secret_key=secret_key,
@@ -351,4 +366,6 @@ def start_s3_store(*, workdir: Path | None = None) -> S3Store:
         quarantine_bucket=quarantine,
         clean_bucket=clean,
         backend="moto-local-s3",
+        server=server,
     )
+    return store

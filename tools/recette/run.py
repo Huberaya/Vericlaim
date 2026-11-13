@@ -86,6 +86,9 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         stack.scanner.stop()
         stack.idp.stop()
+        # The Moto S3 server is an in-process thread holding a port and buckets.
+        # Stopping it is part of not carrying state into the next run.
+        stack.storage.stop()
 
     Path(args.json_out).parent.mkdir(parents=True, exist_ok=True)
     Path(args.json_out).write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
