@@ -1,7 +1,7 @@
 # 14 — A-13 : diagnostic de l'intermittence (13 novembre)
 
-**Statut : cause partiellement identifiée — un défaut de conception du produit
-est mis en évidence, l'intermittence n'est pas close.**
+**Statut : NON RÉSOLUE. Mode de défaillance et deux défauts d'hygiène corrigés ;
+cause première non élucidée.**
 **Aucune décision de fusion ne peut reposer sur ce document seul.**
 
 ## 1. Ce qui a changé dans la méthode
@@ -154,3 +154,29 @@ Une décision explicite du propriétaire est requise : soit accepter A-13 comme
 dette technique non bloquante pour la fusion de cette PR (la recette E2E n'est pas
 un composant de production), soit exiger sa résolution préalable — auquel cas il
 faut un accès aux logs CI, que je n'ai pas.
+
+## 6. État final de la CI sur le SHA candidat `c8d8756`
+
+| Contrôle | Résultat |
+|---|---|
+| Backend verification | **success** |
+| PostgreSQL tenant isolation (RLS) | **success** |
+| Frontend verification | **success** |
+| Recette qualification (real data plane) | **success** |
+| Vercel | **failure — « Deployment rate limited — retry in 24 hours »** |
+
+Le job de recette est donc passé sur ce SHA. Cela **ne résout pas A-13** : le
+même arbre a échoué sur les deux runs précédents, et la fréquence observée reste
+d'environ **un échec sur trois**.
+
+Le contrôle Vercel est bloqué pour une raison externe : **quota de déploiements
+du compte** (offre gratuite), pas un défaut du code. Aucun contournement n'est
+tenté.
+
+### Ce que cela implique pour la fusion
+
+1. **A-13 n'est pas résolue** → condition de fusion non satisfaite en l'état, sauf
+   acceptation explicite de dette par le propriétaire.
+2. **Le check Vercel est en échec sur le SHA candidat** → condition 4 (« tous les
+   contrôles obligatoires sont verts ») non satisfaite, pour une raison externe.
+3. Les quatre jobs GitHub sont verts **sur ce SHA précis**.
