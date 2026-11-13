@@ -27,6 +27,7 @@ observé**.
 | 11 | [Tests E2E](11-recette-e2e.md) | Le parcours complet fonctionne-t-il de bout en bout ? |
 | 12 | [Registre d'anomalies](12-registre-anomalies.md) | Qu'est-ce qui est cassé, corrigé, ou bloquant ? |
 | 13 | [Verdict](13-verdict-recette-exploitable.md) | Peut-on lancer un pilote ? À quelles conditions ? |
+| 14 | [Diagnostic A-13](14-diagnostic-a13.md) | Pourquoi la recette CI échoue-t-elle parfois ? |
 
 ## Le harnais
 
