@@ -96,6 +96,14 @@ class Transcript:
 
 
 # --------------------------------------------------------------------------- HTTP helpers
+class RecetteStateError(RuntimeError):
+    """The harness could not observe the state it expected.
+
+    Distinct from an assertion failure: this means the *observation* was
+    impossible, not that the product behaved wrongly.
+    """
+
+
 def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
         probe.bind(("127.0.0.1", 0))
@@ -1017,6 +1025,40 @@ class RecetteRun:
         self._queue_upload_outcome = outcome
         return outcome.get("version_id")
 
+    def _explain_missing_version(self, version_id: str, organization_id: str) -> str:
+        """Why can the runtime role not see this version? Answer in the message.
+
+        Reads the same row as the **admin** connection (which bypasses RLS) so the
+        two possibilities are told apart: the version belongs to another tenant, or
+        it does not exist at all.
+        """
+
+        import psycopg
+
+        # ``admin_dsn`` names the cluster, not the per-run database, so the admin
+        # read has to target ``database`` explicitly — otherwise the tables are
+        # simply "not found" and the diagnosis contradicts itself.
+        import psycopg.conninfo
+
+        admin_dsn = psycopg.conninfo.make_conninfo(
+            self.stack.postgres.admin_dsn, dbname=self.stack.postgres.database
+        )
+        with psycopg.connect(admin_dsn) as admin:
+            row = admin.execute(
+                "SELECT organization_id, extraction_status FROM document_versions WHERE id = %s",
+                (version_id,),
+            ).fetchone()
+        if row is None:
+            return (
+                f"version {version_id} does not exist at all (no row even for the admin role): "
+                "the upload was never committed"
+            )
+        return (
+            f"version {version_id} belongs to organisation {row[0]}, not to {organization_id} "
+            f"(extraction_status={row[1]}): the tenant context does not match, "
+            "so row-level security hides it"
+        )
+
     def _job_state(self, version_id: str, organization_id: str) -> dict[str, Any]:
         """Read the durable rows as the runtime role under a tenant context.
 
@@ -1041,6 +1083,12 @@ class RecetteRun:
                 "FROM document_versions v WHERE v.id = %s",
                 (version_id,),
             ).fetchone()
+        if row is None:
+            # Under RLS an invisible row and a missing row look the same: this used
+            # to surface as "TypeError: 'NoneType' object is not subscriptable",
+            # which names neither the version nor the organisation. Diagnose it
+            # instead — a tenant mismatch and a lost write are different bugs.
+            raise RecetteStateError(self._explain_missing_version(version_id, organization_id))
         return {
             "extraction_status": row[0],
             "segment_count": int(row[2]),

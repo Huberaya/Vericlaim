@@ -76,6 +76,11 @@ def main(argv: list[str] | None = None) -> int:
             "Recette interrompue",
             f"{type(exc).__name__}: {exc} | dernière progression: {run.transcript.trail()}",
         )
+        for step in run.transcript.steps:
+            if step.status == "FAIL":
+                _annotation("error", "Étape en échec", f"{step.name} — {step.detail}")
+        # A crash may land after some checks already failed; publishing them keeps
+        # the diagnosis complete instead of showing only the exception.
         traceback.print_exc()
         return 1
     finally:
