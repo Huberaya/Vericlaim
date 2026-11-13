@@ -735,6 +735,14 @@ def complete_document_upload(
         extraction_status=ExtractionStatus.PENDING,
     )
     db.add(version)
+    # Le flush est obligatoire ici, pas cosmetique. ``document_uploads`` porte une
+    # cle etrangere vers ``document_versions`` et les deux entites ne sont liees par
+    # aucune relation ORM : sans dependance declaree, SQLAlchemy ordonne l'UPDATE de
+    # l'upload avant l'INSERT de la version. SQLite ne verifie pas la contrainte par
+    # defaut, PostgreSQL si -- et la seule base autorisee hors developpement est
+    # PostgreSQL (ADR-002). L'import documentaire echouait donc en 500 sur la base
+    # de recette alors que toute la suite SQLite restait verte.
+    db.flush()
     upload.status = DocumentUploadStatus.CLEAN
     upload.finalized_document_version_id = version.id
     upload.scan_error_code = None

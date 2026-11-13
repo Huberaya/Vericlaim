@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.analyses.service import get_analysis
-from app.core.database import get_db
+from app.core.database import get_db, sha256_json
 from app.engine.inference_evaluator import InferenceEvaluator
 from app.engine.risk_assessment import (
     build_exposure_matrix,
@@ -68,6 +68,31 @@ def _build_evaluation_from_text(
             record_hash="0" * 64,
         ),
     )
+
+
+def _persisted_source_text(version: AnalysisVersion) -> str:
+    """Texte source réellement persisté pour une version d'analyse.
+
+    ``AnalysisVersion`` n'a pas d'attribut ``input_manifest``: le manifeste est
+    stocké dans ``result_json['input_manifest']`` et son intégrité est vérifiée
+    par son empreinte ``input_manifest_sha256`` (même règle que le worker de
+    détection). Lire un attribut inexistant levait un ``AttributeError`` — donc
+    un 500 — dès qu'un rapport était demandé pour une analyse persistée.
+    """
+
+    result = version.result_json if isinstance(version.result_json, dict) else {}
+
+    # Les segments extraits sont la source durable et versionnée du texte.
+    text = result.get("extracted_source_text")
+    if isinstance(text, str) and text.strip():
+        return text
+
+    manifest = result.get("input_manifest")
+    if isinstance(manifest, dict) and sha256_json(manifest) == version.input_manifest_sha256:
+        candidate = manifest.get("source_text")
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate
+    return ""
 
 
 def _get_analysis_or_404(
@@ -129,12 +154,7 @@ def export_pdf_report(
                 detail="Fournissez evaluation_response ou analysis_id pour générer le rapport.",
             )
         analysis, version = _get_analysis_or_404(db, payload.analysis_id, principal.organization_id)
-        # Reconstitution depuis le résultat stocké
-        source_text = ""
-        if version.result_json and isinstance(version.result_json, dict):
-            source_text = version.result_json.get("extracted_source_text", "")
-        if not source_text and version.input_manifest and isinstance(version.input_manifest, dict):
-            source_text = version.input_manifest.get("source_text", "")
+        source_text = _persisted_source_text(version)
         eval_response = _build_evaluation_from_text(source_text or "Texte extrait de la pièce justificative.")
 
     generator = RegulatoryPdfReportGenerator(
@@ -176,11 +196,7 @@ def export_regulatory_dossier(
                 detail="Fournissez evaluation_response ou analysis_id pour générer le dossier.",
             )
         analysis, version = _get_analysis_or_404(db, payload.analysis_id, principal.organization_id)
-        source_text = ""
-        if version.result_json and isinstance(version.result_json, dict):
-            source_text = version.result_json.get("extracted_source_text", "")
-        if not source_text and version.input_manifest and isinstance(version.input_manifest, dict):
-            source_text = version.input_manifest.get("source_text", "")
+        source_text = _persisted_source_text(version)
         eval_response = _build_evaluation_from_text(source_text or "Texte extrait de la pièce justificative.")
 
     zip_bytes = create_regulatory_dossier_zip(
