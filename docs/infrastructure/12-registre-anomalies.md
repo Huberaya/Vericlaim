@@ -25,7 +25,8 @@ base d'un raisonnement : elle est close sur une observation.
 | A-10 | `vericlaim` : TLS PostgreSQL non vérifiable, `verify_runtime.py` jamais exécuté avec succès | P1 | **ouvert** |
 | A-11 | Import d'un PDF volumineux refusé par la limite par défaut (2 Mo) | P2 | **atténué** |
 | A-12 | Le job CI de recette ne pouvait pas s'installer (python 3.13 vs wheels `pgserver`) | P1 | **corrigé** |
-| A-13 | Échec CI intermittent du parcours de recette (~1 run sur 3), non expliqué à ce jour | P1 | **ouvert, instrumenté** |
+| A-14 | Le harnais laissait un serveur Uvicorn orphelin après toute exception | P1 | **corrigé** |
+| A-13 | Échec CI intermittent du parcours de recette (~1 run sur 3) | P1 | **ouvert — cause candidate corrigée, non confirmée** |
 
 ---
 
@@ -115,7 +116,7 @@ Trois causes cumulées :
 - 9 tests OCR contre un **vrai** moteur Tesseract ;
 - parcours E2E de 54 étapes, exécuté en CI (`recette-qualification`).
 
-**Résultat.** **267 passed, 2 skipped** avec PostgreSQL, contre 255 avant — et les
+**Résultat.** **269 passed, 2 skipped** avec PostgreSQL, contre 255 avant — et les
 2 restants sont explicitement justifiés (chemin `pytesseract` et un cas de
 signature qui exige un binaire absent).
 
@@ -332,8 +333,11 @@ construction, quel que soit l'état du code applicatif. La même requête montre
 `tesserocr` publie bien du cp313 — le problème est propre à `pgserver`.
 
 **Correction.**
-1. `python-version: "3.12"` pour ce job — c'est aussi la version du conteneur
-   backend, donc le job teste désormais l'interpréteur réellement déployé ;
+1. `python-version: "3.12"` pour ce job — **vérifié cohérent avec
+   `backend/Dockerfile` (`FROM python:3.12-slim`)** : le job teste donc exactement
+   l'interpréteur du runtime déployé. Les deux autres jobs restent en 3.13, ce qui
+   est sans risque : ils n'installent pas `pgserver` (vérifié — seule l'étape de
+   recette l'ajoute) ;
 2. une étape « Verify the harness dependencies really imported » qui importe
    `pgserver` et `moto.server` explicitement : un échec de résolution est
    rapporté avec un message clair au lieu de faire tomber toutes les étapes
@@ -407,10 +411,77 @@ pas « la CI est verte » : je dis « la CI a été verte sur les runs cités, e
 échoue encore de façon intermittente sur le job de recette ». Les documents
 `11` et `13` portent cette nuance.
 
+**Analyse complémentaire (13 novembre) — corrélation temporelle.** Une exécution
+locale instrumentée situe les phases du parcours :
+
+| Phase | Fenêtre locale |
+|---|---|
+| démarrage de la pile, fixtures, serveur d'API | T+0 → T+5,2 s |
+| imports (dont EICAR, 9 Mo refusés) | T+5,2 → T+5,5 s |
+| **worker d'extraction (étape 29)** | **T+5,5 → T+7,0 s** |
+| segments, **puis PDF scanné / OCR (étape 31)** | T+7,0 → **T+8,7 s** |
+| téléchargements, analyse, rapports | T+8,7 → T+13 s |
+| redémarrage et contrôle final | T+13 → T+16,8 s |
+
+Les deux échecs CI s'arrêtent à **7 s** et **9 s**, c'est-à-dire **exactement**
+sur ces deux phases-là, et sur aucune autre. La corrélation est donc forte :
+l'échec se produit au moment où un processus worker est lancé puis arrêté, et à
+l'étape qui dépend du moteur OCR.
+
+Deux précisions honnêtes :
+- le runner GitHub n'a probablement **pas** de binaire `tesseract` (aucune étape
+  ne l'installe), donc l'étape 31 doit passer par la branche « échec contrôlé ».
+  Le harnais **accepte explicitement** cet échec, donc il ne devrait pas lever ;
+- une corrélation n'est pas une cause : rien ici n'explique encore *pourquoi* ces
+  deux phases lèveraient.
+
 **Prochaines étapes.** Le prochain échec produira une annotation contenant le
-type d'exception et l'étape exacte ; c'est ce qui tranchera entre un port pris
-entre la réservation et l'écoute, un échec du serveur S3 local au démarrage, et
-une réponse transitoire du serveur d'API.
+type d'exception et l'étape exacte (instrumentation vérifiée par injection), ce
+qui tranchera entre : port pris entre réservation et écoute, worker sorti en
+erreur, ou exception dans `_job_state` (accès base pendant la transition).
+
+---
+
+## A-14 — Le harnais laissait un serveur orphelin après toute exception
+
+**Sévérité : P1 (état reporté d'un run à l'autre).**
+**Statut : corrigé, avec preuve.**
+
+**Observation.** Sur quatre exécutions locales, un processus `uvicorn` restait
+vivant après chacune. Mesure après nettoyage : **zéro** orphelin pour deux
+exécutions successives ; avant correctif, exactement **un par exécution**.
+
+**Cause vérifiée.** `RecetteRun.execute` n'avait **aucun `try/finally`** autour du
+serveur : `self.server.stop()` n'était appelé que sur le chemin heureux. Une
+exception — dans une étape, dans un worker, dans un rendu de rapport — laissait
+donc le serveur en vie, avec sa connexion PostgreSQL ouverte et son port occupé.
+`ApiServer.stop()` ne fermait pas non plus le descripteur du journal.
+
+**Pourquoi c'est grave.** C'est exactement la classe d'état qui fait échouer un
+run **ultérieur** de façon apparemment aléatoire : port occupé par un processus
+d'un run précédent, connexions résiduelles, files de jobs partagées.
+
+**Corrections.**
+1. `try/finally` dans `execute()` : serveur arrêté et navigateurs fermés quelle
+   que soit la sortie ;
+2. `stop()` ferme le descripteur du journal ;
+3. `stop()` **attend la libération effective du port** et échoue sinon, au lieu de
+   supposer que `terminate()` suffit ;
+4. `running()` expose l'état du processus.
+
+**Preuves.**
+- `backend/tests/test_recette_harness_hygiene.py` (2 tests). Le plus important
+  injecte une exception en milieu de parcours après avoir démarré un vrai serveur,
+  puis vérifie que le processus est arrêté **et** que le port est re-libérable.
+  **Vérifié en échec sans le `finally`** (assertion sur `run.server is None`), vert
+  avec.
+- 10 parcours consécutifs : **54/54** à chaque fois, **0 orphelin**.
+
+**Lien avec A-13, énoncé sans le surestimer.** Ce défaut est un **mécanisme
+plausible** de l'intermittence : un orphelin d'un run peut gêner le suivant. Il est
+désormais impossible, et 10 runs consécutifs passent. Cela ne **prouve** pas que
+A-13 était causée par là — les échecs CI observés étaient sur des runners neufs,
+où aucun orphelin préalable n'existe. A-13 reste donc ouverte.
 
 ## Ce qui n'a pas été testé du tout
 

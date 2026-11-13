@@ -49,12 +49,12 @@ parcours complet. Le compte rendu machine est écrit dans
 
 | Mesure | Valeur | Document |
 |---|---|---|
-| Parcours E2E | **54 / 54 PASS**, 0 échec | `11` |
-| Suite backend (avec PostgreSQL) | **267 passed, 2 skipped** | `01` |
+| Parcours E2E | **54 / 54 PASS**, 10 exécutions consécutives locales | `11` |
+| Suite backend (avec PostgreSQL) | **269 passed, 2 skipped** | `01` |
 | Tables protégées par RLS (forcé) | **26** sur 26 | `03` |
 | Politiques RLS | **26** | `03` |
 | Restauration sur cible isolée | **réussie**, chaîne d'audit revalidée | `10` |
-| Défauts réels trouvés / corrigés | **6 / 6** | `12` |
+| Défauts réels trouvés / corrigés | **7 trouvés — 6 corrigés, 1 ouvert (A-13)** | `12` |
 | Intégration continue | **4 / 4 jobs `success`** sur 5 runs — mais **2 échecs intermittents** suivis (A-13) | `12` |
 | Conditions bloquantes restantes | **6** | `13` |
 
