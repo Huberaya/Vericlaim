@@ -60,7 +60,11 @@ parcours complet. Le compte rendu machine est écrit dans
 | Conditions bloquantes restantes | **6** | `13` |
 
 > **Statut proposé : QUALIFIÉ POUR LA CI ET LA RECETTE TECHNIQUE — NON QUALIFIÉ POUR
-> UN PILOTE AVEC DONNÉES RÉELLES.** Motif principal : pas de worker sur Vercel, pas
+> UN PILOTE AVEC DONNÉES RÉELLES.**
+>
+> **Fusion de la PR #14 : BLOQUÉE par décision du propriétaire** (13/11/2026) —
+> A-13 n'est pas élucidée, et un import a déjà répondu 201 sans écriture durable.
+> Voir `14-diagnostic-a13.md` §7. Motif principal : pas de worker sur Vercel, pas
 > d'antivirus réel exécuté, pas de sauvegarde, et quatre preuves inaccessibles
 > depuis cet environnement (Neon, Vercel à l'exécution, navigateur, ClamAV).
 

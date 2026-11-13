@@ -26,7 +26,7 @@ base d'un raisonnement : elle est close sur une observation.
 | A-11 | Import d'un PDF volumineux refusé par la limite par défaut (2 Mo) | P2 | **atténué** |
 | A-12 | Le job CI de recette ne pouvait pas s'installer (python 3.13 vs wheels `pgserver`) | P1 | **corrigé** |
 | A-14 | Le harnais laissait un serveur Uvicorn orphelin après toute exception | P1 | **corrigé** |
-| A-13 | Échec CI intermittent du parcours de recette (~1 run sur 3) | P1 | **ouvert — cause candidate corrigée, non confirmée** |
+| A-13 | Échec CI intermittent du parcours de recette (~1 run sur 3), avec un cas établi de **succès d'import non durable** | **P0 (décision propriétaire)** | **OUVERTE — BLOQUANTE : ne pas fusionner** |
 
 ---
 
@@ -408,7 +408,12 @@ fixtures generated > healthz répond`.
 
 **Conséquence sur nos affirmations.** Tant que A-13 n'est pas expliqué, je ne dis
 pas « la CI est verte » : je dis « la CI a été verte sur les runs cités, et elle
-échoue encore de façon intermittente sur le job de recette ». Les documents
+échoue encore de façon intermittente sur le job de recette ».
+
+**Décision du propriétaire (13 novembre 2026) : NE PAS FUSIONNER.** A-13 passe
+en **P0** : au-delà de l'instabilité du test, un import a répondu **HTTP 201
+sans écriture durable** (run `43344842829`, aucune ligne même pour le rôle admin).
+Détail et voies de déblocage : `14-diagnostic-a13.md` §7. Les documents
 `11` et `13` portent cette nuance.
 
 **Analyse complémentaire (13 novembre) — corrélation temporelle.** Une exécution

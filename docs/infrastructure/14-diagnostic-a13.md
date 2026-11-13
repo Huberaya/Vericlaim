@@ -180,3 +180,46 @@ tenté.
 2. **Le check Vercel est en échec sur le SHA candidat** → condition 4 (« tous les
    contrôles obligatoires sont verts ») non satisfaite, pour une raison externe.
 3. Les quatre jobs GitHub sont verts **sur ce SHA précis**.
+
+## 7. Décision du propriétaire du projet (13 novembre 2026)
+
+> **Décision : NE PAS FUSIONNER tant que A-13 n'est pas élucidée.**
+
+Motif retenu : un import qui répond **HTTP 201 sans écriture durable** touche
+directement l'utilisateur (document créé puis introuvable). L'instabilité de la
+recette n'est donc pas une simple dette de test.
+
+**Conséquence immédiate** : la PR #14 reste en **brouillon**, et le verdict de ce
+chantier est **BLOCKED** — indépendamment des quatre jobs GitHub verts.
+
+### 7.1 Comment lever le blocage
+
+Trois voies, par ordre de coût croissant.
+
+| Voie | Ce qu'il faut | Ce que cela permettrait |
+|---|---|---|
+| **V1 — logs CI** | accès aux journaux du job `recette-qualification` (téléchargement des artefacts ou export du log) | lire la trace Python exacte de l'échec, donc l'instruction SQL et le chemin de code. **C'est la voie la moins coûteuse** : aucun code à modifier. |
+| **V2 — autorisation d'instrumenter** | accord explicite pour modifier temporairement `app/core/database.py` (`get_db`) et `app/documents/service.py` (`complete_document_upload`), puis révoquer | capturer l'exception réelle ou la preuve qu'aucune instruction n'est émise pour cette écriture, en reproduisant sous charge |
+| **V3 — reproduction forcée** | accord pour ajouter un mode de test injectant une contention/concurrence sur la session | rendre l'intermittence déterministe et la corriger par un test de non-régression |
+
+**Ce qui est bloquant pour V1** : `gh run view --log`, `gh run download` et
+l'API interne des blobs renvoient `EOF` depuis cet environnement ; `gh run rerun`
+et `workflow_dispatch` renvoient **403**. Sans ces accès, l'annotation (déjà en
+place) reste la seule source, et elle ne contient pas de trace Python.
+
+### 7.2 Ce qui est déjà acquis, et qui ne sera pas perdu
+
+- mode de défaillance nommé (perte de l'organisation active / 409 au lieu de 404) ;
+- un défaut de conception réel documenté : `resolve_active_membership` **écrit**
+  (`active_organization_id = None` + `flush`) à la suite d'une **lecture**
+  infructueuse ;
+- deux défauts d'hygiène du harnais corrigés et couverts par un test
+  (A-14, A-15) ;
+- instrumentation CI qui rendra le prochain échec lisible (annotations,
+  marqueurs, diagnostic d'observation impossible).
+
+### 7.3 Ce qu'il ne faut pas conclure
+
+Que la recette est « verte parce que le dernier run est vert ». Sur le même
+arbre : 2 échecs sur 4 runs CI, puis 5 runs verts, puis 1 échec, puis 2 verts.
+La fréquence reste de l'ordre d'**un échec sur trois**.
