@@ -108,6 +108,7 @@ class ApiServer:
     def __init__(self, env: dict[str, str], *, port: int | None = None) -> None:
         self.env = env
         self.port = port or _free_port()
+        self._log_handle = None
         self.base_url = f"http://127.0.0.1:{self.port}"
         self.log_path = ARTIFACTS / "api-server.log"
         self._process: subprocess.Popen[bytes] | None = None
@@ -115,6 +116,7 @@ class ApiServer:
     def start(self) -> "ApiServer":
         ARTIFACTS.mkdir(parents=True, exist_ok=True)
         log = self.log_path.open("wb")
+        self._log_handle = log
         self._process = subprocess.Popen(
             [
                 sys.executable,
@@ -153,7 +155,28 @@ class ApiServer:
                 self._process.wait(timeout=15)
             except subprocess.TimeoutExpired:
                 self._process.kill()
+                self._process.wait(timeout=15)
             self._process = None
+        if self._log_handle is not None:
+            self._log_handle.close()
+            self._log_handle = None
+        # A worker or an API process that survives its run keeps a port and a
+        # database connection open. Left behind, it can make a *later* run fail in
+        # a way that looks random. Waiting for the port to be released turns that
+        # into a deterministic check.
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+                probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                try:
+                    probe.bind(("127.0.0.1", self.port))
+                    return
+                except OSError:
+                    time.sleep(0.1)
+        raise RuntimeError(f"port {self.port} was not released after stopping the API server")
+
+    def running(self) -> bool:
+        return self._process is not None and self._process.poll() is None
 
     def log_tail(self, limit: int = 4000) -> str:
         if not self.log_path.exists():
@@ -370,6 +393,21 @@ class RecetteRun:
     def execute(self) -> dict[str, Any]:
         import httpx
 
+        t = self.transcript
+        stack = self.stack
+        try:
+            return self._execute_journey(httpx)
+        finally:
+            # Any exception used to leave the Uvicorn process behind. Orphaned
+            # servers then competed with the next run's port allocation and
+            # database connections — the harness must not carry state forward.
+            if self.server is not None:
+                self.server.stop()
+                self.server = None
+            for browser in getattr(self, "_browsers", []):
+                browser.close()
+
+    def _execute_journey(self, httpx: Any) -> dict[str, Any]:
         t = self.transcript
         stack = self.stack
         self.make_fixtures()
@@ -786,6 +824,7 @@ class RecetteRun:
                 before={k: before[k] for k in ("extraction_status", "job_status", "rows_visible_without_tenant_context")},
             )
 
+        self._browsers = [alice, bob]
         alice.close()
         bob.close()
         return t.to_json()
