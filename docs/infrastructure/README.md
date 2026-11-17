@@ -2,7 +2,7 @@
 
 > **Périmètre : recette / Preview uniquement.** Aucune modification de production,
 > aucune fusion, aucune migration destructive.
-> **Dernière mise à jour :** 12 novembre 2026.
+> **Dernière mise à jour :** 17 novembre 2026.
 
 Ce dossier remplace l'affirmation « c'est déployé » par une série d'observations
 reproductibles. Chaque document indique le SHA testé, la procédure exacte, ce qui
@@ -27,7 +27,8 @@ observé**.
 | 11 | [Tests E2E](11-recette-e2e.md) | Le parcours complet fonctionne-t-il de bout en bout ? |
 | 12 | [Registre d'anomalies](12-registre-anomalies.md) | Qu'est-ce qui est cassé, corrigé, ou bloquant ? |
 | 13 | [Verdict](13-verdict-recette-exploitable.md) | Peut-on lancer un pilote ? À quelles conditions ? |
-| 14 | [Diagnostic A-13](14-diagnostic-a13.md) | Pourquoi la recette CI échoue-t-elle parfois ? |
+| 14 | [Diagnostic A-13](14-diagnostic-a13.md) | Pourquoi la recette CI échoue-t-elle parfois ? (état au 13 novembre) |
+| 15 | [A-13 : cause première et correctif](15-a13-cause-premiere-et-correctif.md) | Pourquoi un 201 pouvait précéder la persistance, et ce qui a été corrigé |
 
 ## Le harnais
 
@@ -55,18 +56,18 @@ parcours complet. Le compte rendu machine est écrit dans
 | Tables protégées par RLS (forcé) | **26** sur 26 | `03` |
 | Politiques RLS | **26** | `03` |
 | Restauration sur cible isolée | **réussie**, chaîne d'audit revalidée | `10` |
-| Défauts réels trouvés / corrigés | **7 trouvés — 6 corrigés, 1 ouvert (A-13)** | `12` |
-| Intégration continue | **4 / 4 jobs `success`** sur 5 runs — mais **2 échecs intermittents** suivis (A-13) | `12` |
+| Défauts réels trouvés / corrigés | **8 trouvés — 7 corrigés (dont A-13), 1 ouvert (A-07, environnement)** | `12` |
+| Intégration continue | **4 / 4 jobs `success`** sur `a73e1d5` (run `44081515104`) ; échecs intermittents expliqués et corrigés (A-13) | `12`, `15` |
 | Conditions bloquantes restantes | **6** | `13` |
 
 > **Statut proposé : QUALIFIÉ POUR LA CI ET LA RECETTE TECHNIQUE — NON QUALIFIÉ POUR
 > UN PILOTE AVEC DONNÉES RÉELLES.**
 >
-> **Fusion de la PR #14 : BLOQUÉE par décision du propriétaire** (13/11/2026) —
-> A-13 n'est pas élucidée, et un import a déjà répondu 201 sans écriture durable.
-> Voir `14-diagnostic-a13.md` §7. Motif principal : pas de worker sur Vercel, pas
-> d'antivirus réel exécuté, pas de sauvegarde, et quatre preuves inaccessibles
-> depuis cet environnement (Neon, Vercel à l'exécution, navigateur, ClamAV).
+> **A-13 : CORRIGÉE et démontrée** (17/11/2026, cf. `15`). Le blocage de fusion
+> qu'elle motivait est levé techniquement, mais **la fusion n'a pas été faite** :
+> elle relève d'une mission distincte. Motifs restants : pas de worker sur Vercel,
+> pas d'antivirus réel exécuté, pas de sauvegarde, pas de monitoring.
+> Historique de la décision : `14-diagnostic-a13.md` §7.
 
 ## Trois règles de lecture
 

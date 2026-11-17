@@ -2,7 +2,7 @@
 
 **Date :** 12 novembre 2026
 **Base :** `b289652a383bfe385c531ff4fb25a5f1535f74c7` (branche `main`)
-**SHA de correction :** `fa31e0a8145fc86cda04b466989af100cf1eeeda`
+**SHA de correction :** `fa31e0a8145fc86cda04b466989af100cf1eeeda` (puis `a73e1d5` pour A-13)
 **Périmètre :** recette technique uniquement, aucune donnée client
 
 Chaque anomalie indique : comment elle a été **observée**, sa cause vérifiée, ce
@@ -26,7 +26,7 @@ base d'un raisonnement : elle est close sur une observation.
 | A-11 | Import d'un PDF volumineux refusé par la limite par défaut (2 Mo) | P2 | **atténué** |
 | A-12 | Le job CI de recette ne pouvait pas s'installer (python 3.13 vs wheels `pgserver`) | P1 | **corrigé** |
 | A-14 | Le harnais laissait un serveur Uvicorn orphelin après toute exception | P1 | **corrigé** |
-| A-13 | Échec CI intermittent du parcours de recette (~1 run sur 3), avec un cas établi de **succès d'import non durable** | **P0 (décision propriétaire)** | **OUVERTE — BLOQUANTE : ne pas fusionner** |
+| A-13 | Échec CI intermittent du parcours de recette, avec un cas établi de **succès d'import non durable** | **P0** | **corrigée** — cause première : commit postérieur à la réponse (§ voir `15`) |
 
 ---
 
@@ -358,8 +358,9 @@ lui-même.
 
 ## A-13 — Échec CI intermittent du parcours de recette
 
-**Sévérité : P1 (une CI qui échoue au hasard ne prouve rien).**
-**Statut : OUVERT — instrumenté, pas encore expliqué.**
+**Sévérité : P0 (décision propriétaire, 13 novembre 2026).**
+**Statut : CORRIGÉE le 17 novembre 2026 — cause première démontrée.**
+**Preuve et détail : `15-a13-cause-premiere-et-correctif.md`.**
 
 **Observation.** Sur six runs du job `recette-qualification` au même commit
 applicatif, **deux ont échoué** et quatre ont réussi. Les deux échecs se
@@ -415,6 +416,26 @@ en **P0** : au-delà de l'instabilité du test, un import a répondu **HTTP 201
 sans écriture durable** (run `43344842829`, aucune ligne même pour le rôle admin).
 Détail et voies de déblocage : `14-diagnostic-a13.md` §7. Les documents
 `11` et `13` portent cette nuance.
+
+**Résolution (17 novembre 2026) — cause première démontrée, corrigée, testée.**
+
+La cause n'était ni le RLS, ni le contexte tenant, ni la lenteur : **le code HTTP
+était envoyé avant la validation de la transaction**. Avec FastAPI 0.163.1 /
+Starlette 1.10.0, une dépendance `yield` est démontée *après* l'envoi de la
+réponse ; le commit de `get_db` s'exécutait donc une fois le client déjà servi.
+Un échec de validation ne pouvait plus changer le 201.
+
+Correctif : `Depends(get_db, scope="function")` sur toutes les routes, ce qui
+rétablit l'ordre `routeur → commit → réponse`. Le même défaut expliquait les 409
+« Aucune organisation active », 404 « Produit introuvable » et 401 après
+connexion SSO, reproduits **systématiquement** en limitant l'exécution à un seul
+cœur. `resolve_active_membership` n'efface plus l'organisation active sur une
+lecture en erreur ou incohérente, et trace les causes durables.
+
+Preuves : tests de non-régression échouant sans correctif, E2E 54/54 sous
+contention d'un cœur (4 séries), suite backend 249 passed, PostgreSQL réel 27
+passed, CI 4/4 verte sur `a73e1d5` (run `44081515104`). Détail complet :
+`15-a13-cause-premiere-et-correctif.md`.
 
 **Analyse complémentaire (13 novembre) — corrélation temporelle.** Une exécution
 locale instrumentée situe les phases du parcours :
