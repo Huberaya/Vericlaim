@@ -14,6 +14,9 @@ venv/
 .mypy_cache/
 .ruff_cache/
 
+# Local recette qualification harness: disposable clusters, artifacts, transcripts.
+.recette/
+
 # Runtime database and uploads
 *.db
 *.sqlite3

@@ -34,7 +34,16 @@ def main() -> None:
         assert a.get("/").status_code == 200
         assert a.get("/api/v1/auth/me").status_code == 401
         assert a.post("/api/v1/auth/dev-login").status_code == 404
-        assert a.get("/api/v1/auth/status").json() == {"oidc_configured": False, "dev_login_enabled": False, "authentication_required": True}
+        # Le contrat publié contient aussi `document_upload_max_bytes` (borne
+        # réellement appliquée par le serveur). Comparer le corps entier à
+        # l'ancienne forme tri-champ faisait échouer ce smoke test sur toute
+        # version récente, alors que la réponse était correcte.
+        status_payload = a.get("/api/v1/auth/status").json()
+        assert status_payload["oidc_configured"] is False
+        assert status_payload["dev_login_enabled"] is False
+        assert status_payload["authentication_required"] is True
+        assert isinstance(status_payload["document_upload_max_bytes"], int)
+        assert status_payload["document_upload_max_bytes"] > 0
         assert a.get("/api/v1/auth/login").status_code == 503
         print("PASS frontend HTML, API proxy, anonymous refusal, dev-login closed, OIDC unavailable explicitly")
 

@@ -150,7 +150,7 @@ def _audit_limitations(evaluator_status: str) -> list[str]:
 @router.post("/evaluate", response_model=EvaluationResponse)
 async def evaluate_claims(
     request: Request,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
     principal: TenantPrincipal = Depends(require_permission("audit:run", csrf_protected=True)),
 ) -> EvaluationResponse:
     body, extraction_method, document_sha256 = await _read_request(request)

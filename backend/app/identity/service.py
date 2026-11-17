@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -26,6 +27,9 @@ from app.models.domain import (
 )
 
 
+logger = logging.getLogger(__name__)
+
+
 class IdentityConflictError(RuntimeError):
     pass
 
@@ -36,6 +40,10 @@ class IdentityNotFoundError(RuntimeError):
 
 class AuthorizationInvariantError(RuntimeError):
     pass
+
+
+class IdentityNotResolvableError(RuntimeError):
+    """Une lecture incohérente : rien n'a été modifié, la sélection est conservée."""
 
 
 @dataclass(frozen=True)
@@ -220,16 +228,84 @@ def revoke_auth_session(db: Session, *, raw_token: str | None, settings: Setting
 
 
 def resolve_active_membership(db: Session, current: CurrentSession) -> MembershipView | None:
+    """Résout l'organisation active, sans jamais l'effacer sur un doute.
+
+    A-13 a montré ce que coûtait l'ancienne version : une lecture infructueuse
+    écrivait ``active_organization_id = None`` puis ``flush``. Une seule réponse
+    vide suffisait donc à déconnecter durablement l'utilisateur de son espace, et
+    la requête suivante répondait 409 « aucune organisation active » — un état
+    persistant modifié par une opération de lecture.
+
+    Deux règles remplacent ce comportement :
+
+    - une lecture ne détruit un état persistant que si la cause est établie et
+      qu'elle est *définitive* (membership retiré, organisation désactivée) ;
+    - cette preuve est **corroborée** : l'absence de ligne de jointure peut venir
+      d'une organisation inactive, d'un rôle manquant ou d'une lecture tronquée.
+      On distingue donc explicitement les cas avant d'écrire, et une lecture qui
+      échoue de façon transitoire remonte une erreur au lieu de muter la session.
+    """
     active_organization_id = current.session.active_organization_id
     if active_organization_id is None:
         return None
+    # Une erreur de lecture n'est pas une preuve d'absence : elle remonte telle
+    # quelle, sans rien écrire. La couche appelante décide (500/503) ; un
+    # incident passager ne doit pas devenir une perte d'organisation active.
     row = db.execute(
-        _active_membership_statement(current.user.id).where(Membership.organization_id == active_organization_id)
+        _active_membership_statement(current.user.id).where(
+            Membership.organization_id == active_organization_id
+        )
     ).one_or_none()
-    if row is None:
-        current.session.active_organization_id = None
-        db.flush()
-        return None
+    if row is not None:
+        view = MembershipView(membership=row[0], organization=row[1], role=row[2])
+        set_db_request_context(db, user_id=current.user.id, organization_id=view.organization.id)
+        return view
+
+    # La jointure est vide. Avant d'écrire, établir *pourquoi* : un membership
+    # supprimé/retiré et une organisation désactivée sont des faits durables ;
+    # tout le reste (membership actif mais organisation ou rôle invisible) est
+    # une incohérence à signaler, pas une raison de déconnecter l'utilisateur.
+    membership = db.scalar(
+        select(Membership).where(
+            Membership.user_id == current.user.id,
+            Membership.organization_id == active_organization_id,
+        )
+    )
+    organization = db.get(Organization, active_organization_id)
+    if membership is None:
+        reason = "membership_absent"
+    elif membership.status != MembershipStatus.ACTIVE:
+        reason = "membership_inactive"
+    elif organization is None:
+        reason = "organization_absent"
+    elif organization.status != OrganizationStatus.ACTIVE:
+        reason = "organization_inactive"
+    else:
+        reason = "incoherent_view"
+
+    if reason == "incoherent_view":
+        # Le membership est actif et l'organisation aussi : la jointure vide
+        # trahit un rôle manquant ou une lecture incomplète. Effacer la
+        # sélection serait une perte de données déguisée en décision.
+        logger.error(
+            "active membership incoherent: user=%s organization=%s membership_active=%s",
+            current.user.id,
+            active_organization_id,
+            membership.status,
+        )
+        raise IdentityNotResolvableError(
+            "Organisation active illisible de façon incohérente; sélection conservée."
+        )
+
+    logger.warning(
+        "clearing active organization: user=%s organization=%s reason=%s",
+        current.user.id,
+        active_organization_id,
+        reason,
+    )
+    current.session.active_organization_id = None
+    db.flush()
+    return None
     view = MembershipView(membership=row[0], organization=row[1], role=row[2])
     set_db_request_context(db, user_id=current.user.id, organization_id=view.organization.id)
     return view

@@ -88,7 +88,7 @@ def _member_view_from_mutation(
 @router.get("", response_model=list[MembershipResponse])
 def list_my_organizations(
     principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ) -> list[MembershipResponse]:
     return [present_membership(view) for view in list_active_memberships(db, principal.user_id)]
 
@@ -98,7 +98,7 @@ def create_my_organization(
     body: OrganizationCreateRequest,
     request: Request,
     principal: AuthenticatedPrincipal = Depends(require_csrf_authenticated_principal),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ) -> MembershipResponse:
     slug = body.slug or _slugify(body.name)
     try:
@@ -130,7 +130,7 @@ def update_current_organization(
     body: OrganizationUpdateRequest,
     request: Request,
     principal: TenantPrincipal = Depends(require_permission("organization:manage", csrf_protected=True)),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ) -> OrganizationResponse:
     organization = update_organization_name(db, principal.membership_view.organization, name=body.name)
     append_audit_event(
@@ -159,7 +159,7 @@ def list_available_roles(
 @router.get("/current/members", response_model=list[OrganizationMemberResponse])
 def members_of_current_organization(
     principal: TenantPrincipal = Depends(require_permission("members:read")),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ) -> list[OrganizationMemberResponse]:
     return [present_organization_member(view) for view in list_organization_members(db, principal.organization_id)]
 
@@ -169,7 +169,7 @@ def invite_member(
     body: InviteMemberRequest,
     request: Request,
     principal: TenantPrincipal = Depends(require_permission("members:manage", csrf_protected=True)),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ) -> InvitationResponse:
     try:
         membership, user, role = invite_or_provision_member(
@@ -201,7 +201,7 @@ def change_member_role(
     body: UpdateMembershipRoleRequest,
     request: Request,
     principal: TenantPrincipal = Depends(require_permission("members:manage", csrf_protected=True)),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ) -> OrganizationMemberResponse:
     try:
         membership, user, role = update_member_role(
@@ -231,7 +231,7 @@ def revoke_organization_member(
     user_id: UUID,
     request: Request,
     principal: TenantPrincipal = Depends(require_permission("members:manage", csrf_protected=True)),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ) -> Response:
     try:
         membership, user, role = revoke_member(

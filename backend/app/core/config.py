@@ -147,6 +147,17 @@ def _normalise_base_url(value: str) -> str:
     return value.rstrip("/")
 
 
+def _running_on_managed_platform() -> bool:
+    """Whether this process is a deployed instance rather than a workstation.
+
+    ``VERCEL`` is set by the platform in every Vercel environment (build and
+    runtime, Preview included). Compose, local Uvicorn and CI do not set it, so
+    the development SQLite default remains available where it is honest.
+    """
+
+    return any(os.getenv(name, "").strip() for name in ("VERCEL", "K_SERVICE", "DYNO"))
+
+
 def _validate_url(name: str, value: str, *, require_https: bool) -> str:
     parsed = urlparse(value)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
@@ -193,10 +204,16 @@ def get_settings() -> Settings:
 
     database_url = _optional_env("DATABASE_URL")
     if not database_url:
-        if environment not in {"development", "test"}:
+        # A process running on a managed platform (Vercel sets ``VERCEL=1``) is a
+        # deployment, whatever APP_ENV claims. Falling back to the SQLite
+        # development file there would advertise a working API backed by a
+        # throwaway filesystem: no tenant RLS, no durable audit chain, and — on a
+        # read-only serverless root — not even a usable file. Refuse instead, so a
+        # Preview missing DATABASE_URL fails loudly rather than half-working.
+        if environment not in {"development", "test"} or _running_on_managed_platform():
             raise RuntimeError(
-                "DATABASE_URL must be configured outside development/test; "
-                "refusing the SQLite development default."
+                "DATABASE_URL must be configured outside development/test and on every "
+                "managed deployment; refusing the SQLite development default."
             )
         database_url = "sqlite:///./vericlaim.db"
     else:
@@ -205,6 +222,12 @@ def get_settings() -> Settings:
             database_url = "postgresql+psycopg://" + database_url[len("postgres://"):]
         elif database_url.startswith("postgresql://") and not database_url.startswith("postgresql+"):
             database_url = "postgresql+psycopg://" + database_url[len("postgresql://"):]
+
+    if _running_on_managed_platform() and database_url.startswith("sqlite"):
+        raise RuntimeError(
+            "DATABASE_URL must not point at SQLite on a managed deployment; "
+            "tenant RLS is only enforceable on PostgreSQL."
+        )
 
     if is_production_like and not database_url.startswith(("postgresql://", "postgresql+")):
         raise RuntimeError(

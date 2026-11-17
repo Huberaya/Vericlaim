@@ -48,7 +48,7 @@ class TenantPrincipal(AuthenticatedPrincipal):
 
 def get_authenticated_principal(
     request: Request,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ) -> AuthenticatedPrincipal:
     current = resolve_current_session(
         db,
@@ -65,7 +65,7 @@ def get_authenticated_principal(
 
 def get_tenant_principal(
     authenticated: AuthenticatedPrincipal = Depends(get_authenticated_principal),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ) -> TenantPrincipal:
     membership_view = resolve_active_membership(db, authenticated.current)
     if membership_view is None:

@@ -59,7 +59,7 @@ from app.models.domain import Product, Supplier
 supplier_router = APIRouter(prefix="/api/v1/suppliers", tags=["catalog"])
 product_router = APIRouter(prefix="/api/v1/products", tags=["catalog"])
 
-DATABASE_DEPENDENCY = Depends(get_db)
+DATABASE_DEPENDENCY = Depends(get_db, scope="function")
 CATALOG_READ_DEPENDENCY = Depends(require_permission("catalog:read"))
 CATALOG_MANAGE_DEPENDENCY = Depends(
     require_permission("catalog:manage", csrf_protected=True)
