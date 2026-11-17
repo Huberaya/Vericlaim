@@ -3,7 +3,10 @@
 **Date :** 17 novembre 2026
 **Branche :** `arena/0a0b694c-vericlaim` (PR #14, **non fusionnée**)
 **SHA de base :** `b289652a383bfe385c531ff4fb25a5f1535f74c7` (`main`)
-**SHA des preuves finales :** `4547fe27a4e947e23a03ac2ca7c2b39e29e08b2a`
+**SHA des preuves finales :** `4547fe27a4e947e23a03ac2ca7c2b39e29e08b2a` — dernier
+commit touchant du **code** (les commits de documentation qui le suivent ne
+modifient que `docs/` ; la tête de branche et son run CI sont indiqués dans la
+PR #14 et dans `git log`)
 **Verdict : RESOLVED pour les deux causes démontrées ; réserves en §9.**
 
 Ce document remplace la conclusion d'ouverture de `14-diagnostic-a13.md`. Il ne
@@ -293,8 +296,9 @@ A-13. Corrigé par `next` 16.4.6.
 
 ## 8. Traçabilité
 
-- **SHA final : `4547fe27a4e947e23a03ac2ca7c2b39e29e08b2a`** (branche
-  `arena/0a0b694c-vericlaim`, PR #14 — non fusionnée)
+- **SHA testé (code) : `4547fe27a4e947e23a03ac2ca7c2b39e29e08b2a`** — branche
+  `arena/0a0b694c-vericlaim`, PR #14, **non fusionnée**. Les commits suivants
+  sont documentaires ; leur CI est verte elle aussi.
 - Correctif applicatif : `b4310ef`
 - Correctif d'audit frontend : `a73e1d5`
 - Documentation : `4547fe2`
