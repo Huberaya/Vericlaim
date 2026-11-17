@@ -14,6 +14,11 @@ ambiguous-reply refusal, connection teardown — is exercised against a real
 socket.  Its verdict logic is deliberately trivial and only recognises the EICAR
 test string.
 
+It answers ``PING`` with ``PONG`` because a real clamd does, and because
+``/readyz`` uses that exchange as its liveness probe (A-07). A stub that only
+understood ``INSTREAM`` would make a healthy harness look like a broken
+antivirus — the probe would be right, the harness would be wrong.
+
 What it does NOT prove
 ----------------------
 There is no signature database here.  A verdict from this listener is **not**
@@ -43,6 +48,8 @@ class ClamdStub:
     #: error frame, ``ambiguous`` sends two frames, ``slow`` stalls past any
     #: reasonable deadline, ``close`` drops the connection without a verdict.
     behaviour: str = "clean"
+    #: Simule un démon muet : la sonde doit alors refuser l'import.
+    ping_unreachable: bool = False
     port: int = field(default=0, init=False)
     scans: list[dict[str, object]] = field(default_factory=list, init=False)
     _server: socketserver.ThreadingTCPServer | None = field(default=None, init=False, repr=False)
@@ -76,12 +83,42 @@ class ClamdStub:
 
     def _serve(self, connection: object) -> None:
         connection.settimeout(10)
+
+        # Framing réel de clamd : le PREMIER octet choisit le terminateur.
+        #   nCOMMAND\n  -> réponse terminée par \n
+        #   zCOMMAND\0  -> réponse terminée par \0
+        #   COMMAND     -> (legacy) terminateur \n
+        # Un stub qui n'attendrait que \0 ne comprendrait jamais `nPING\n`,
+        # c'est-à-dire la forme la plus courante — et ferait passer un harnais
+        # sain pour un antivirus en panne.
         command = b""
-        while not command.endswith(b"\0"):
+        while not command:
+            byte = connection.recv(1)
+            if not byte:
+                return
+            command = byte
+        terminator = b"\n"
+        if command == b"z":
+            terminator = b"\0"
+        elif command == b"n":
+            terminator = b"\n"
+        while not command.endswith(terminator):
             byte = connection.recv(1)
             if not byte:
                 return
             command += byte
+
+        # Réponse de vie, avec le terminateur de la commande (cf. framing).
+        # C'est ce que sonde /readyz (A-07) : « configuré » ne suffit pas,
+        # il faut un PONG.
+        body = command.lstrip(b"nz").rstrip(b"\0\n")
+        if body == b"PING":
+            if self.ping_unreachable:
+                connection.close()
+                return
+            connection.sendall(b"PONG" + terminator)
+            return
+
         if not command.startswith(b"zINSTREAM\0"[: len(command)]) or b"INSTREAM" not in command:
             connection.sendall(b"UNKNOWN COMMAND\0")
             return

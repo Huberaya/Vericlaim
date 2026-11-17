@@ -102,7 +102,12 @@ class _FakeClamd:
             # « nPING\n » est terminé par un saut de ligne, « zINSTREAM\0 »
             # par un octet NUL. Attendre « \n » pour les deux bloquait
             # indéfiniment sur INSTREAM.
-            while not (buffer.startswith(b"nPING") and b"\n" in buffer) and not buffer.startswith(b"zINSTREAM"):
+            # Le client sérialise ses envois : commande, puis longueur, puis
+            # données. On ne boucle donc que tant que le tampon est **vide**.
+            # Boucler jusqu'à ce qu'une trame entière soit reconnue bouclait à
+            # l'infini sur INSTREAM — « zINSTREAM\0 » fait 10 octets et le
+            # préfixe de longueur qui suit était avalé par l'attente.
+            while not buffer:
                 chunk = connection.recv(4096)
                 if not chunk:
                     return
@@ -110,7 +115,13 @@ class _FakeClamd:
             if buffer.startswith(b"nPING"):
                 connection.sendall(self._ping)
                 return
-            buffer = buffer[9:]  # en-tête zINSTREAM (9 octets) consommé
+            # « zINSTREAM\0 » fait 10 octets — pas 9. Une longueur fixe fausse
+            # décale toutes les trames suivantes : le double lit alors la
+            # longueur dans les données et ferme la connexion au milieu de
+            # l'envoi (BrokenPipe côté client, de façon intermittente selon la
+            # découpe TCP). On consomme donc jusqu'au terminateur.
+            command_end = buffer.index(b"\0") + 1
+            buffer = buffer[command_end:]
             while True:
                 raw_size = need(4)
                 if raw_size is None:
@@ -263,3 +274,52 @@ def test_fail_closed_never_promotes_an_unscanned_file() -> None:
     scanner = DisabledMalwareScanner()
     with pytest.raises(MalwareScannerUnavailableError):
         scanner.scan(b"%PDF-1.7")
+
+
+def test_recette_clamd_stub_answers_the_readiness_probe() -> None:
+    """Le harnais de recette doit se comporter comme un démon clamd réel.
+
+    Défaut réel trouvé par la CI de recette : le stub n'implémentait que
+    ``zINSTREAM`` et attendait un NUL sur **toutes** les commandes. Le client
+    sonde avec ``nPING\\n`` (terminateur nouvelle ligne, conforme au protocole
+    clamd) ; le stub ne répondait jamais, la sonde bloquait puis concluait
+    « unreachable », et le parcours échouait sur
+    ``document_import: refused``.
+
+    La sonde avait raison, le harnais avait tort. Ce test empêche de
+    « corriger » le problème en relâchant la sonde : il vérifie que c'est bien
+    le stub qui répond, dans les deux framings, et qu'un stub muet est toujours
+    détecté.
+    """
+
+    import socket
+    import sys
+    from pathlib import Path
+
+    recette = Path(__file__).resolve().parents[2] / "tools" / "recette"
+    if str(recette) not in sys.path:
+        sys.path.insert(0, str(recette))
+
+    from app.documents.scanner import ClamAvMalwareScanner
+    from clamd_stub import ClamdStub
+
+    stub = ClamdStub().start()
+    try:
+        scanner = ClamAvMalwareScanner(host=stub.host, port=stub.port, timeout_seconds=5)
+        assert scanner.healthcheck() is None, "le stub sain doit être joignable"
+
+        # Les deux framings du protocole répondent, avec leur propre terminateur.
+        for payload, expected in ((b"nPING\n", b"PONG\n"), (b"zPING\x00", b"PONG\x00")):
+            with socket.create_connection((stub.host, stub.port), timeout=5) as connection:
+                connection.sendall(payload)
+                assert connection.recv(64) == expected
+    finally:
+        stub.stop()
+
+    # Un démon muet reste détecté : la sonde n'a pas été relâchée.
+    silent = ClamdStub(ping_unreachable=True).start()
+    try:
+        scanner = ClamAvMalwareScanner(host=silent.host, port=silent.port, timeout_seconds=5)
+        assert scanner.healthcheck() is not None
+    finally:
+        silent.stop()
