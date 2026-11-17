@@ -3,8 +3,7 @@
 **Date :** 17 novembre 2026
 **Branche :** `arena/0a0b694c-vericlaim` (PR #14, **non fusionnée**)
 **SHA de base :** `b289652a383bfe385c531ff4fb25a5f1535f74c7` (`main`)
-**SHA des preuves finales :** voir §8 — le hash exact est enregistré dans
-`.recette/last-run.json` et dans les runs CI cités.
+**SHA des preuves finales :** `4547fe27a4e947e23a03ac2ca7c2b39e29e08b2a`
 **Verdict : RESOLVED pour les deux causes démontrées ; réserves en §9.**
 
 Ce document remplace la conclusion d'ouverture de `14-diagnostic-a13.md`. Il ne
@@ -236,11 +235,13 @@ elle qui fait foi, pas les séries confortables.
 | `npm run typecheck`, `npm run build` | verts |
 | `npm audit --audit-level=moderate` | 0 vulnérabilité |
 
-### 5.3 CI sur le SHA candidat
+### 5.3 CI sur le SHA final
 
-Run `44081515104` sur `a73e1d5` : **4/4 jobs verts** — Backend verification,
-PostgreSQL tenant isolation (RLS), Recette qualification (real data plane),
-Frontend verification.
+Run `44081869281` sur `4547fe2` (SHA final) : **4/4 jobs verts** — Backend
+verification, PostgreSQL tenant isolation (RLS), Recette qualification (real data
+plane), Frontend verification.
+
+Le run précédent (`44081515104`, `a73e1d5`) était également 4/4 vert.
 
 Le run précédent (`44081214447`, `b4310ef`) était vert sur les trois jobs qui
 testent ce correctif et rouge sur le seul audit npm : un avis modéré
@@ -292,10 +293,16 @@ A-13. Corrigé par `next` 16.4.6.
 
 ## 8. Traçabilité
 
+- **SHA final : `4547fe27a4e947e23a03ac2ca7c2b39e29e08b2a`** (branche
+  `arena/0a0b694c-vericlaim`, PR #14 — non fusionnée)
 - Correctif applicatif : `b4310ef`
 - Correctif d'audit frontend : `a73e1d5`
-- Run CI de référence (`a73e1d5`) : `44081515104` — 4/4 verts
-- Transcription E2E : `.recette/last-run.json` (`generated_at` du dernier run)
+- Documentation : `4547fe2`
+- Run CI de référence (`4547fe2`) : `44081869281` — 4/4 verts
+- Run CI sur `a73e1d5` : `44081515104` — 4/4 verts
+- Transcription E2E : `.recette/last-run.json` — `generated_at`
+  `2026-11-17T12:19:31Z`, `failures: 0`, `total: 54`, obtenue **sous
+  `taskset -c 0`** (un seul cœur)
 - Empreinte du diff antérieur à cette mission (référence de non-régression) :
   `d47ac1519deffa6d249b5fcf4b77d4e65a9b8defe9e8bb102f2e4b3f6c6b1711`
   (37 fichiers, +6127/−32)
