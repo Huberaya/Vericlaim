@@ -125,7 +125,7 @@ def oidc_callback(
     code: str | None = None,
     state: str | None = None,
     error: str | None = None,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ) -> RedirectResponse:
     if error:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Connexion SSO refusée ou annulée.")
@@ -179,7 +179,7 @@ def oidc_callback(
 def logout(
     request: Request,
     _: AuthenticatedPrincipal = Depends(require_csrf_authenticated_principal),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ) -> Response:
     revoke_auth_session(db, raw_token=request.cookies.get(SESSION_COOKIE_NAME), settings=settings)
     response = Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -192,7 +192,7 @@ def logout(
 @router.get("/me", response_model=AuthMeResponse)
 def current_user(
     principal: AuthenticatedPrincipal = Depends(get_authenticated_principal),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ) -> AuthMeResponse:
     memberships = list_active_memberships(db, principal.user_id)
     return AuthMeResponse(
@@ -206,7 +206,7 @@ def current_user(
 def switch_active_organization(
     body: ActiveOrganizationRequest,
     principal: AuthenticatedPrincipal = Depends(require_csrf_authenticated_principal),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ) -> MembershipResponse:
     try:
         membership = set_active_organization(db, principal.current, body.organization_id)
@@ -219,7 +219,7 @@ def switch_active_organization(
 def dev_login(
     request: Request,
     response: Response,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db, scope="function"),
 ) -> AuthMeResponse:
     """Allow immediate developer/pilot session creation when OIDC is not yet connected."""
     if not dev_login_allowed(_live_settings(request)):

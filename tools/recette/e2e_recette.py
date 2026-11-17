@@ -539,7 +539,14 @@ class RecetteRun:
             json={"legal_name": "Fournisseur Fictif Alpha SAS", "external_reference": f"SUP-{self.marker}"},
             headers={"Idempotency-Key": f"supplier-a-{self.marker}"},
         )
-        t.check("création fournisseur fictif A", supplier_a.status_code == 201, f"HTTP {supplier_a.status_code}")
+        t.check(
+            "création fournisseur fictif A",
+            supplier_a.status_code == 201,
+            # Le corps est joint : « HTTP 409 » seul ne dit pas si le refus vient
+            # d'une organisation active absente, d'une clé d'idempotence ou d'une
+            # collision de référence. C'est ce détail qui a manqué sur A-13.
+            f"HTTP {supplier_a.status_code} {supplier_a.text[:300]}",
+        )
         supplier_a_id = supplier_a.json()["supplier"]["id"]
 
         product_a = alice.post(
@@ -553,7 +560,11 @@ class RecetteRun:
             },
             headers={"Idempotency-Key": f"product-a-{self.marker}"},
         )
-        t.check("création produit fictif A", product_a.status_code == 201, f"HTTP {product_a.status_code}")
+        t.check(
+            "création produit fictif A",
+            product_a.status_code == 201,
+            f"HTTP {product_a.status_code} {product_a.text[:300]} supplier={supplier_a_id}",
+        )
         product_a_id = product_a.json()["product"]["id"]
 
         # -- document import -----------------------------------------------------------
@@ -567,7 +578,15 @@ class RecetteRun:
                 "tags": ["recette", "fictif"],
             },
         )
-        t.check("création fiche documentaire A", document.status_code == 201, f"HTTP {document.status_code}")
+        # Le corps est joint : un 404 peut signifier « référence d'un autre
+        # tenant », « référence jamais validée » ou « contexte actif perdu ». Le
+        # code seul ne les distingue pas.
+        t.check(
+            "création fiche documentaire A",
+            document.status_code == 201,
+            f"HTTP {document.status_code} {document.text[:300]} | "
+            f"supplier={supplier_a_id} product={product_a_id}",
+        )
         document_id = document.json()["id"]
 
         version_result = self._upload(alice, document_id, self.generated["clean_pdf"], "declaration-fournisseur.pdf", "application/pdf")

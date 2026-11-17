@@ -158,6 +158,17 @@ def probe_database() -> bool:
 def get_db() -> Iterator[Session]:
     """Yield one transaction per HTTP request, failing closed on any outage.
 
+    **Toujours déclarer cette dépendance avec ``scope="function"``.** Sans lui,
+    le teardown d'une dépendance ``yield`` s'exécute *après* l'envoi de la
+    réponse (mesuré sur FastAPI 0.163.1 / Starlette 1.10.0) : le ``commit``
+    ci-dessous survient donc une fois le client déjà servi. Un échec de
+    validation arrivait alors trop tard pour changer le code HTTP, et le client
+    recevait un 201 pour une ligne inexistante. C'est la cause première de A-13 :
+    « version ... does not exist at all ... the upload was never committed ».
+    Avec ``scope="function"``, l'ordre devient corps du routeur → commit →
+    réponse ; un échec produit un 500 et jamais un succès. La non-régression est
+    tenue par ``tests/test_a13_durability_scope.py``, qui balaie les routes.
+
     Request-scoped PostgreSQL settings used by RLS are installed with
     ``set_config(..., true)`` and therefore remain active until this transaction
     ends.  Service functions must ``flush`` for integrity errors, not commit

@@ -47,7 +47,7 @@ validations_router = APIRouter(prefix="/api/v1/validations", tags=["validations"
 analysis_validations_router = APIRouter(prefix="/api/v1/analyses", tags=["analyses-validations"])
 evidence_requests_router = APIRouter(prefix="/api/v1/evidence-requests", tags=["evidence-requests"])
 
-DATABASE_DEPENDENCY = Depends(get_db)
+DATABASE_DEPENDENCY = Depends(get_db, scope="function")
 VALIDATION_MANAGE_DEPENDENCY = Depends(require_permission("validation:manage", csrf_protected=True))
 VALIDATION_READ_DEPENDENCY = Depends(require_permission("validation:read"))
 REQUESTS_MANAGE_DEPENDENCY = Depends(require_permission("evidence_requests:manage", csrf_protected=True))

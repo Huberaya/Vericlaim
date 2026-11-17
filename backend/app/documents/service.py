@@ -519,6 +519,17 @@ def complete_document_upload(
                 DocumentVersion.id == upload.finalized_document_version_id,
             )
         )
+        if version is None:  # pragma: no cover - corruption injectée en test
+            # Le court-circuit idempotent rendait 200 avec ``version: null`` : un
+            # client lisait un succès pour une finalisation dont le résultat
+            # n'existe pas. C'est la signature d'une écriture perdue (le journal
+            # d'upload désigne une version absente) et cela ne doit jamais être
+            # présenté comme un succès. On refuse explicitement, en conservant le
+            # journal : il documente l'incohérence à réconcilier.
+            raise DocumentConflictError(
+                "Cet import est marqué finalisé mais sa version est introuvable; "
+                "l'écriture initiale n'a pas été validée."
+            )
         return UploadFinalization(document=document, upload=upload, version=version, status_code=200)
     if upload.status in {DocumentUploadStatus.REJECTED, DocumentUploadStatus.EXPIRED}:
         raise DocumentConflictError("Cet import ne peut plus être finalisé.")

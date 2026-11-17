@@ -21,7 +21,7 @@ from app.models.audit_schemas import (
 
 router = APIRouter(prefix="/api/v1/audit", tags=["audit"])
 
-DATABASE_DEPENDENCY = Depends(get_db)
+DATABASE_DEPENDENCY = Depends(get_db, scope="function")
 AUDIT_READ_DEPENDENCY = Depends(require_permission("audit:read"))
 
 

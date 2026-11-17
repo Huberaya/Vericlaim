@@ -29,7 +29,7 @@ from app.pilot.service import (
 
 router = APIRouter(prefix="/api/v1/pilot", tags=["b2b-pilot-pack"])
 
-DATABASE_DEPENDENCY = Depends(get_db)
+DATABASE_DEPENDENCY = Depends(get_db, scope="function")
 AUDIT_READ_DEPENDENCY = Depends(require_permission("audit:read"))
 CATALOG_MANAGE_DEPENDENCY = Depends(require_permission("catalog:manage", csrf_protected=True))
 ORG_READ_DEPENDENCY = Depends(require_permission("organization:read"))

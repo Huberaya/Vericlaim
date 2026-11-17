@@ -58,7 +58,7 @@ PRE_AUDIT_DISCLAIMER = (
     "Ce résultat ne constitue pas un avis juridique, une certification ni une décision d’autorité."
 )
 
-DATABASE_DEPENDENCY = Depends(get_db)
+DATABASE_DEPENDENCY = Depends(get_db, scope="function")
 AUDIT_RUN_DEPENDENCY = Depends(require_permission("audit:run", csrf_protected=True))
 AUDIT_READ_DEPENDENCY = Depends(require_permission("audit:read"))
 

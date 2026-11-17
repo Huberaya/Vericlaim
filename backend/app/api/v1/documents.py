@@ -74,7 +74,7 @@ version_router = APIRouter(prefix="/api/v1/document-versions", tags=["documents"
 # FastAPI dependency objects are intentionally built once rather than invoked in
 # endpoint default values. This keeps the dependency graph explicit and avoids
 # recreating permission closures for every route declaration.
-DATABASE_DEPENDENCY = Depends(get_db)
+DATABASE_DEPENDENCY = Depends(get_db, scope="function")
 DOCUMENTS_MANAGE_DEPENDENCY = Depends(require_permission("documents:manage", csrf_protected=True))
 DOCUMENTS_READ_DEPENDENCY = Depends(require_permission("documents:read"))
 DOCUMENTS_READ_CSRF_DEPENDENCY = Depends(require_permission("documents:read", csrf_protected=True))

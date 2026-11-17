@@ -27,7 +27,7 @@ from app.reports.pdf_generator import RegulatoryPdfReportGenerator
 
 router = APIRouter(prefix="/api/v1/reports", tags=["reports"])
 
-DATABASE_DEPENDENCY = Depends(get_db)
+DATABASE_DEPENDENCY = Depends(get_db, scope="function")
 AUDIT_READ_DEPENDENCY = Depends(require_permission("audit:read"))
 
 

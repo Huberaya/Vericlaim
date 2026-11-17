@@ -52,7 +52,7 @@ evidence_links_router = APIRouter(prefix="/api/v1/evidence-links", tags=["eviden
 claims_evidence_router = APIRouter(prefix="/api/v1/claims", tags=["claims-evidence"])
 analyses_evidence_router = APIRouter(prefix="/api/v1/analyses", tags=["analyses-evidence"])
 
-DATABASE_DEPENDENCY = Depends(get_db)
+DATABASE_DEPENDENCY = Depends(get_db, scope="function")
 EVIDENCE_MANAGE_DEPENDENCY = Depends(require_permission("evidence:manage", csrf_protected=True))
 EVIDENCE_READ_DEPENDENCY = Depends(require_permission("evidence:read"))
 AUDIT_READ_DEPENDENCY = Depends(require_permission("audit:read"))

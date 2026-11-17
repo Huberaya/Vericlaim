@@ -37,7 +37,7 @@ from app.models.enterprise_schemas import (
 
 router = APIRouter(prefix="/api/v1/enterprise", tags=["enterprise-readiness"])
 
-DATABASE_DEPENDENCY = Depends(get_db)
+DATABASE_DEPENDENCY = Depends(get_db, scope="function")
 ORG_READ_DEPENDENCY = Depends(require_permission("organization:read"))
 ORG_MANAGE_DEPENDENCY = Depends(require_permission("organization:manage", csrf_protected=True))
 
