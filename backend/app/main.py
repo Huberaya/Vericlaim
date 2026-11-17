@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from app.api.v1.analyses import claims_router
 from app.api.v1.analyses import router as analyses_router
@@ -20,6 +20,8 @@ from app.api.v1.evidence import (
     analyses_evidence_router,
     claims_evidence_router,
     evidence_links_router,
+)
+from app.api.v1.evidence import (
     router as evidence_router,
 )
 from app.api.v1.organizations import router as organizations_router
@@ -33,6 +35,8 @@ from app.api.v1.review import (
 )
 from app.core.config import settings
 from app.core.database import DatabaseUnavailableError, SessionLocal, create_tables, probe_database
+from app.core.metrics import REGISTRY
+from app.core.metrics_middleware import MetricsMiddleware
 from app.documents.scanner import DisabledMalwareScanner, build_malware_scanner
 from app.documents.storage import DisabledObjectStorage, build_object_storage
 from app.engine.inference_evaluator import InferenceEvaluator
@@ -81,6 +85,11 @@ app.state.evaluator = InferenceEvaluator(
     ProofValidator(certificate_registry),
     fr_2024_825_transposition_status=settings.eu_2024_825_fr_transposition_status,
 )
+
+# A-09 : mesure du trafic réel. Enregistré avant CORS pour que la mesure
+# couvre aussi les réponses de pré-vol, mais après les routes de santé, qui
+# sont exclues à l'intérieur du middleware.
+app.add_middleware(MetricsMiddleware)
 
 if settings.cors_origins:
     app.add_middleware(
@@ -156,14 +165,36 @@ def readyz(request: Request) -> JSONResponse:
     # only reports whether a deployment has actually wired them, so an
     # operator can see why `/documents` imports are refused before testing one.
     storage_state = "disabled" if isinstance(storage, DisabledObjectStorage) else "configured"
+
+    # A-07 : « configuré » ne suffisait pas. La sonde interroge réellement le
+    # moteur (PING clamd) pour que la readiness reflète la capacité de scanner,
+    # et non la simple présence d'une configuration. Un échec rend l'import
+    # « refused » : c'est le même fail-closed que celui appliqué à la
+    # complétion, rendu visible avant même qu'un fichier soit déposé.
+    # Valeurs conservées pour ne pas casser les runbooks et les consommateurs
+    # existants (« configured »/« disabled ») ; l'état réel de la sonde est
+    # exposé séparément dans ``malware_scanner_reachable``. Un opérateur qui ne
+    # lit qu'un champ garde donc son ancienne sémantique, et celui qui veut
+    # savoir si le moteur répond a la réponse.
     scanner_state = "disabled" if isinstance(scanner, DisabledMalwareScanner) else "configured"
-    ready = database == "ok"
+    scanner_reason = scanner.healthcheck() if scanner_state == "configured" else "scanner_disabled"
+    scanner_reachable = scanner_state == "configured" and scanner_reason is None
+
+    database_ready = database == "ok"
+    import_ready = storage_state == "configured" and scanner_reachable
+    # La base conditionne la readiness du processus ; le moteur antivirus
+    # conditionne la seule importation documentaire. Les confondre ferait
+    # redémarrer toute l'API pour un clamd momentanément indisponible, alors
+    # que le refus correct est local à l'import.
+    ready = database_ready
     payload = {
         "status": "ready" if ready else "unavailable",
         "database": database,
         "document_storage": storage_state,
         "malware_scanner": scanner_state,
-        "document_import": "enabled" if storage_state == "configured" and scanner_state == "configured" else "refused",
+        "malware_scanner_reachable": scanner_reachable,
+        "malware_scanner_reason": scanner_reason,
+        "document_import": "enabled" if import_ready else "refused",
     }
     return JSONResponse(
         status_code=status.HTTP_200_OK if ready else status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -171,6 +202,44 @@ def readyz(request: Request) -> JSONResponse:
         headers={"Cache-Control": "no-store"},
     )
 
+
+
+@app.get("/metrics", tags=["health"], include_in_schema=False)
+def metrics(request: Request) -> Response:
+    """Export Prometheus (A-09).
+
+    La profondeur des files est lue en base : elle reste exacte même quand
+    aucun worker ne tourne, ce qui est précisément le moment où l'information
+    compte. Une base injoignable ne fait pas échouer la route : les métriques
+    déjà connues sont servies, et la sonde de base porte l'information.
+    """
+
+    queue_metrics: dict[str, object] = {}
+    database_ok = probe_database()
+    if database_ok:
+        try:
+            from app.core.database import SessionLocal
+            from app.core.queue_metrics import collect_queue_metrics
+
+            with SessionLocal() as db:
+                queue_metrics = collect_queue_metrics(db)
+        except Exception:  # noqa: BLE001 - l'export ne doit pas tomber avec la base
+            queue_metrics = {}
+
+    scanner = request.app.state.document_scanner
+    try:
+        reachable = scanner.healthcheck() is None
+        REGISTRY.observe_scanner(reachable)
+    except Exception:  # noqa: BLE001 - une sonde n'est pas une panne
+        reachable = False
+
+    extra = {
+        "database_up": 1 if database_ok else 0,
+        "scanner_reachable": 1 if reachable else 0,
+    }
+    extra.update({key: value for key, value in queue_metrics.items()})
+    body = REGISTRY.render(extra)
+    return Response(content=body, media_type="text/plain; version=0.0.4; charset=utf-8")
 
 
 @app.get("/", tags=["health"])

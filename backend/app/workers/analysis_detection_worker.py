@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 import os
 import socket
-import time
+from pathlib import Path
 from uuid import UUID
 
 from sqlalchemy import select
@@ -30,6 +30,7 @@ from app.core.config import Settings, settings
 from app.core.database import SessionLocal
 from app.identity.service import set_db_request_context
 from app.models.domain import Organization, OrganizationStatus
+from app.workers.runtime import WorkerRuntime
 
 logger = logging.getLogger(__name__)
 # This UUID only establishes PostgreSQL request-local RLS context; worker audit
@@ -165,16 +166,49 @@ class AnalysisDetectionWorker:
         return False
 
     def run_forever(self) -> None:
-        logger.info("Analysis detection worker started", extra={"worker_id": self.worker_id})
-        while True:
-            if not self.run_once():
-                time.sleep(self.settings.analysis_detection_poll_seconds)
+        """Délègue au runtime commun (A-06) : arrêt propre et santé publiée."""
+
+        build_analysis_detection_runtime(
+            settings=settings,
+            worker_id=self.worker_id,
+        ).run()
+
+
+def build_analysis_detection_runtime(
+    *,
+    settings: Settings,
+    worker_id: str,
+    concurrency: int | None = None,
+    health_path: Path | None = None,
+) -> WorkerRuntime:
+    resolved_concurrency = concurrency if concurrency is not None else int(
+        os.getenv("ANALYSIS_WORKER_CONCURRENCY", "1")
+    )
+    if resolved_concurrency < 1:
+        raise ValueError("ANALYSIS_WORKER_CONCURRENCY doit être >= 1")
+    worker = AnalysisDetectionWorker(settings=settings, worker_id=worker_id)
+    return WorkerRuntime(
+        name="analysis_detection",
+        worker_id=worker_id,
+        step=lambda _index: worker.run_once(),
+        poll_seconds=settings.analysis_detection_poll_seconds,
+        concurrency=resolved_concurrency,
+        health_path=health_path,
+    )
 
 
 def main() -> None:
     logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
     worker_id = os.getenv("ANALYSIS_DETECTION_WORKER_ID") or f"{socket.gethostname()}-{os.getpid()}"
-    AnalysisDetectionWorker(settings=settings, worker_id=worker_id).run_forever()
+    runtime = build_analysis_detection_runtime(
+        settings=settings,
+        worker_id=worker_id,
+        health_path=Path(os.environ["ANALYSIS_WORKER_HEALTH_FILE"])
+        if os.getenv("ANALYSIS_WORKER_HEALTH_FILE")
+        else None,
+    )
+    runtime.install_signal_handlers()
+    raise SystemExit(runtime.run())
 
 
 if __name__ == "__main__":  # pragma: no cover - exercised by Compose deployment.

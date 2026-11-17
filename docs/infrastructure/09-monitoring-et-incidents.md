@@ -1,31 +1,35 @@
 # 09 — Monitoring, logs et gestion d'incidents
 
 **Date :** 12 novembre 2026
-**SHA testé :** `fa31e0a8145fc86cda04b466989af100cf1eeeda`
+**SHA testé :** `c73b12fd663e744dcda153bc35b0166fb977feaa` (+ branche mission 4 pour A-09)
 
 ## 1. Ce qui existe réellement
 
 | Mécanisme | État | Détail |
 |---|---|---|
 | `/healthz` | **existe** | prouve que le processus répond, rien de plus (le code le dit explicitement) |
-| `/readyz` | **existe, utile** | atteint réellement PostgreSQL, expose `document_storage` et `malware_scanner` comme `configured`/`disabled`, et `document_import: enabled/refused` |
+| `/readyz` | **existe, utile** | atteint réellement PostgreSQL, expose `document_storage` et `malware_scanner` comme `configured`/`disabled`, **`malware_scanner_reachable`** (sonde `PING` réelle depuis A-07) et `document_import: enabled/refused` |
 | handlers d'erreur ASGI | **existe** | base injoignable → **503** neutre, sans texte de driver ; traces côté serveur |
 | logs applicatifs | **existe** | `logging` standard, `LOG_LEVEL`, messages structurés avec `extra` (job, organisation) |
 | journal d'audit | **existe, robuste** | `audit_events` append-only, chaîne de hachage, `GET /api/v1/audit/verify` |
-| métriques (latence, profondeur de file, taux d'erreur) | **absent** | aucun export Prometheus/OpenTelemetry |
-| alerting | **absent** | aucune règle, aucun canal |
+| métriques (latence, profondeur de file, taux d'erreur) | **présentes depuis A-09** | `GET /metrics` (format Prometheus), middleware HTTP, profondeur de file lue **en base** |
+| alerting | **configuré, jamais observé** | 9 règles dans `infra/monitoring/alerts.yml`, 5 runbooks ; **aucun** Prometheus/Alertmanager n'a tourné, **aucune** alerte n'a été vue se déclencher |
 | suivi d'erreurs frontend | **absent** | aucun Sentry/équivalent |
 | agrégateur de logs | **absent du dépôt** | dépend de la plateforme (Vercel/Docker) |
 
-**Conséquence** : un incident est *traçable* (logs + audit + `/readyz`) mais **pas
-*alerté***. Personne n'est réveillé par un worker arrêté.
+**Conséquence, corrigée en partie seulement.** Un incident est *traçable*
+(logs + audit + `/readyz`) et, depuis A-09, *mesurable* (`/metrics`) et
+*descriptible* (règles d'alerte avec cause et runbook). Il n'est toujours **pas
+alerté** : le chemin « métrique → collecteur → notification » n'existe nulle
+part dans cet environnement. Personne n'est encore réveillé par un worker
+arrêté — mais la métrique qui permettrait de le réveiller existe et est testée.
 
 ## 2. Preuves
 
 | # | Contrôle | Observation |
 |---|---|---|
 | 1 | `/healthz` | **200** |
-| 2 | `/readyz` | **200**, `database: ok`, `document_storage: configured`, `malware_scanner: configured`, `document_import: enabled` |
+| 2 | `/readyz` | **200**, `database: ok`, `document_storage: configured`, `malware_scanner: configured`, `malware_scanner_reachable: true`, `document_import: enabled` |
 | 3 | `/readyz` avec base absente | **503** `status: unavailable` (couvert par les tests existants) |
 | 4 | requête API avec base absente | **503** message neutre, pas de repli SQLite |
 | 5 | chaîne d'audit | **`is_valid: true`**, 14 événements après le parcours A |
@@ -108,11 +112,66 @@ elle a été vérifiée ou pourquoi elle ne l'a pas été.
 - pas de test de bascule (baisse/base secondaire) : Neon gère la disponibilité, mais
   rien n'est documenté côté VeriClaim.
 
-## 6. Verdict
+## 6. Métriques et alertes livrées par A-09
+
+### 6.1 Séries exportées (`GET /metrics`)
+
+| Série | Type | Ce qu'elle permet de distinguer |
+|---|---|---|
+| `vericlaim_http_requests_total{method,route,status}` | counter | taux d'erreur **par point d'entrée** (gabarit de route, jamais l'URL) |
+| `vericlaim_http_request_duration_seconds_bucket` | histogram | p95 de latence |
+| `vericlaim_database_up` | gauge | base joignable **depuis ce processus** |
+| `vericlaim_scanner_reachable` | gauge | moteur antivirus joignable (sonde `PING`) |
+| `vericlaim_document_queue_queued` / `_running` / `_failed` | gauge | profondeur de file par état |
+| `vericlaim_document_queue_oldest_queued_seconds` | gauge | **retard**, pas seulement volume |
+| `vericlaim_analysis_queue_*` | gauge | idem pour l'analyse |
+| `vericlaim_organizations_active` | gauge | périmètre servi |
+| `vericlaim_uptime_seconds` | gauge | redémarrages |
+
+Les deux séries de file sont lues **en base** à chaque scrap : elles restent
+exactes quand aucun worker ne tourne, c'est-à-dire quand l'information compte.
+
+`/healthz`, `/readyz` et `/metrics` sont **exclus** de la mesure : un superviseur
+qui interroge toutes les 10 s fausserait sinon le taux d'erreur et la latence.
+
+### 6.2 Règles (`infra/monitoring/alerts.yml`)
+
+| Alerte | Seuil | Sévérité |
+|---|---|---|
+| `VeriClaimApiDown` | `up == 0` pendant 2 min | critical |
+| `VeriClaimDatabaseDown` | `vericlaim_database_up == 0` pendant 1 min | critical |
+| `VeriClaimHigh5xxRate` | > 2 % de 5xx sur 5 min | warning |
+| `VeriClaimApiLatencyHigh` | p95 > 2,5 s sur 10 min | warning |
+| `VeriClaimDocumentQueueBacklog` | > 20 jobs en attente sur 10 min | critical |
+| `VeriClaimDocumentJobStalled` | job en attente depuis > 600 s | critical |
+| `VeriClaimAnalysisQueueBacklog` | > 20 jobs en attente sur 10 min | warning |
+| `VeriClaimScannerUnreachable` | `scanner_reachable == 0` sur 3 min | critical |
+| `VeriClaimWorkerHeartbeatStale` | battement > 120 s | critical |
+
+Chaque règle porte une **cause probable** et un **runbook** ; les tests
+vérifient que le fichier de runbook existe réellement sur disque.
+Runbooks : `docs/runbooks/`.
+
+### 6.3 Les trois niveaux, tenus séparés
+
+| Niveau | État | Preuve |
+|---|---|---|
+| Instrumentation présente | **OUI** | 8 tests A-09, séries vérifiées dans la réponse HTTP |
+| Alertes configurées | **OUI** | YAML valide, seuils testés au-dessus/en dessous, runbooks existants |
+| **Alertes observées** | **NON** | aucun Prometheus/Alertmanager déployé ; **aucune alerte n'a été reçue ni vue se déclencher** |
+
+Les tests de seuils rejouent la logique de comparaison sur des valeurs choisies ;
+ce n'est **pas** un Prometheus réel. Le chemin de notification n'a jamais été
+exercé de bout en bout.
+
+## 7. Verdict
 
 - **Traçabilité : oui.** Logs, `/readyz`, journal d'audit infalsifiable, codes
   d'erreur stables et rejouables.
-- **Détection proactive : non.** Aucune métrique, aucune alerte. Un worker arrêté
-  ou une file qui gonfle ne se voit que si quelqu'un regarde.
-- La procédure d'incident est proposée et partiellement vérifiée ; elle n'est pas
-  outillée. C'est une condition explicite du pilote.
+- **Instrumentation : oui depuis A-09.** Métriques réelles, testées, dont la
+  profondeur et le retard de file lus en base.
+- **Détection proactive : non.** Les alertes sont **écrites**, pas **branchées**.
+  Un worker arrêté produit désormais une métrique claire, mais personne n'est
+  encore notifié. Condition explicite du pilote, non satisfaite à ce jour.
+- La procédure d'incident est proposée, partiellement vérifiée et désormais
+  associée à des runbooks par alerte ; elle n'est pas outillée.

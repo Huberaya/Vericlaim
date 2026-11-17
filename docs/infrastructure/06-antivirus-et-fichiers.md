@@ -85,7 +85,9 @@ cet upload.
 
 1. Déployer un vrai `clamd` (ou un service d'analyse managé) sur l'environnement de
    recette, avec `DOCUMENT_SCANNER_MODE=clamav` et `DOCUMENT_CLAMAV_HOST` joignables.
-2. Vérifier `/readyz` → `malware_scanner: configured`.
+2. Vérifier `/readyz` → `malware_scanner: configured` **et**
+   `malware_scanner_reachable: true`. Le premier ne prouve qu'une configuration ;
+   seul le second prouve qu'un moteur répond au `PING`.
 3. Exécuter le scénario EICAR **sur la Preview**, avec un accès autorisé, et
    constater le refus.
 4. Renseigner la version de signatures dans `scan_signature_version` pour rendre la

@@ -2,8 +2,31 @@
 
 **Date :** 12 novembre 2026
 **SHA testé :** `fa31e0a8145fc86cda04b466989af100cf1eeeda`
-**Responsabilité opérationnelle Neon : assistant ChatGPT.**
-**Statut Neon direct : NON VÉRIFIÉ ICI — `api.neon.tech` injoignable depuis mon environnement.**
+**Statut Neon direct : NON VÉRIFIÉ — `api.neon.tech` est hors de portée réseau de l'environnement d'exécution de l'agent.**
+**Accès de l'équipe de pilotage : voir §0 — l'équipe A bel et bien accès au projet Neon.**
+
+## 0. Qui a accès à quoi — correction d'une affirmation erronée
+
+Une version antérieure de ce document attribuait la responsabilité
+opérationnelle de Neon à un « assistant ChatGPT » et laissait entendre que
+l'équipe n'avait pas la main sur la base.
+
+**C'est faux et cette affirmation est retirée.** L'état réel :
+
+| Acteur | Accès au projet Neon | Ce qu'il peut faire |
+|---|---|---|
+| **Équipe de pilotage VeriClaim** | **oui** (propriétaire du projet) | console Neon, rôles, PITR, branche de base, réglages de rétention |
+| Environnement d'exécution de l'agent | **non** — `api.neon.tech` non résolu/joignable | rien sur Neon ; exécution locale et CI uniquement |
+
+La conséquence est double, et les deux moitiés comptent :
+
+* les vérifications marquées **« non exécutées »** dans ce document ne le sont
+  pas parce que personne ne peut les faire, mais parce que **l'agent** ne peut
+  pas les faire. L'équipe de pilotage, elle, peut exécuter les commandes
+  fournies au §6 et rapporter la sortie ;
+* aucun résultat de ce document ne doit être lu comme « Neon est validé ». Tant
+  que la sortie n'est pas rapportée, le statut reste **non vérifié** — par
+  honnêteté, pas par prudence excessive.
 
 ## 1. Ce que je peux prouver, et comment
 
@@ -121,6 +144,9 @@ projet Vercel.
 ## 7. Ce que je n'ai pas fait
 
 - Aucune migration sur la base persistante.
+- Aucune connexion au projet Neon ni à `api.neon.tech` (réseau indisponible).
+- Aucun rôle, privilège ou policy Neon modifié — voir §0 : c'est l'équipe de
+  pilotage qui détient cet accès, pas l'agent.
 - Aucun accès en écriture à Neon.
 - Aucun changement de rôle, de privilège ou de policy.
 - Aucune rotation de secret.
@@ -130,6 +156,51 @@ projet Vercel.
 - **Le dispositif de rôles et de RLS est prouvé** sur un PostgreSQL 16 réel, avec
   les scripts revus et le vrai rôle runtime : 26 tables protégées, audit
   append-only, aucun privilège élevé, isolation inter-tenant vérifiée par 27 tests.
-- **Neon lui-même n'est pas vérifié** : cela reste à la charge de l'assistant, et
-  tant que les réponses N1–N7 manquent, la recette Neon n'est pas qualifiée par ce
-  chantier.
+- **Neon lui-même n'est pas vérifié** : ce n'est pas une limite de l'équipe mais
+  de l'environnement d'exécution de l'agent. Tant que les réponses N1–N7 ne sont
+  pas rapportées, la recette Neon n'est pas qualifiée par ce chantier.
+- **A-10 apporte un vérificateur utilisable par l'équipe** :
+  `tools/runtime_check/verify_runtime_identity.py` (lecture seule, TLS
+  obligatoire, rapport sans secret). Exécuté localement : 9 tests passent,
+  1 test de preuve sur vraie URL est **ignoré** faute d'URL de recette.
+  La commande exacte à lancer par l'équipe est au §9.
+
+## 9. Vérification TLS / identité runtime (A-10)
+
+Script de **lecture seule**, sans argument de connexion (la chaîne passe par
+l'environnement, jamais par la ligne de commande, donc jamais dans l'historique
+du shell) :
+
+```bash
+export DATABASE_RUNTIME_URL='postgresql://vericlaim_app@<hôte>/<base>?sslmode=require'
+python tools/runtime_check/verify_runtime_identity.py --expected-role vericlaim_app --json
+# sortie 0 = aucun écart ; 1 = écarts listés ; 2 = cible absente/injoignable
+```
+
+Contrôles effectués :
+
+| Contrôle | Écart signalé |
+|---|---|
+| TLS actif sur la connexion runtime | `tls_inactive` (connexion refusée si TLS exigé) |
+| Rôle runtime ≠ superutilisateur | `runtime_role_is_superuser` |
+| Rôle runtime sans droit DDL | `runtime_role_can_create_schema_objects` |
+| Rôle attendu | `unexpected_role:<nom>` |
+| Révision Alembic présente | `alembic_version_missing` |
+| RLS activé, forcé, avec ≥ 1 policy (9 tables) | `rls_disabled:*`, `rls_not_forced:*`, `rls_no_policy:*` |
+
+Le rapport ne contient **ni chaîne de connexion, ni mot de passe, ni hôte** :
+seulement des noms de rôle, des booléens et des compteurs. Il peut donc être
+cité dans une revue.
+
+**Preuves obtenues, et leur portée :**
+
+| Preuve | Statut |
+|---|---|
+| Détection d'un rôle superutilisateur et d'un droit DDL (PostgreSQL 16 local) | **exécutée** |
+| Détection d'une base non migrée sans plantage | **exécutée** |
+| Refus d'une connexion sans TLS | **exécutée** (port fermé + cluster sans SSL) |
+| `/readyz` et démarrage refusant une URL non chiffrée en production | **exécutée** (`test_a10_runtime_identity.py`) |
+| **TLS réel actif sur une vraie URL Neon** | **NON EXÉCUTÉE** — nécessite `VERICLAIM_STAGING_RUNTIME_URL` |
+
+La dernière ligne est celle qui compte pour un pilote. Elle est écrite ici pour
+être vue, pas pour être découverte plus tard.

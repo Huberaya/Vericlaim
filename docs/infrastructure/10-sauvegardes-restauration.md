@@ -17,12 +17,16 @@ exécutée** sur une cible isolée, et les procédures qui restent à la charge 
 
 | Élément | État | Détail |
 |---|---|---|
-| Sauvegarde automatique outillée | **inexistante** | aucune tâche, aucun workflow, aucun script de dump dans `.github/` ou `infra/` |
-| Documentation de sauvegarde | **absente** | rien dans `docs/operations/` hors runbook de migration |
-| Stratégie Neon (PITR / branches) | **déléguée** | dépend de l'offre Neon ; non vérifiable d'ici |
-| Sauvegarde du stockage objet | **inexistante** | aucun script ; buckets non couverts |
-| Rétention | **non définie** | aucune politique |
-| Chiffrement des sauvegardes | **non défini** | — |
+| Sauvegarde outillée | **existe depuis A-08** | `tools/backup/vericlaim_backup.py` : `backup`, `verify`, `prune`, `restore` |
+| Sauvegarde **planifiée** | **inexistante** | aucun cron, aucun workflow n'appelle le script : le RPO réel reste « depuis la dernière exécution manuelle » |
+| Manifeste et checksums | **existe** | `manifest.json` : SHA-256 et taille de chaque pièce, révision Alembic, compteurs par table |
+| Vérification d'intégrité | **existe et testée** | `verify` détecte troncature **et** altération à taille constante |
+| Rétention | **outillée, non planifiée** | `--keep-last`, `--max-age-days` ; le dernier jeu n'est jamais supprimé |
+| Restauration en cible isolée | **existe et testée** | base neuve `vericlaim_restore_<horodatage>`, révision et compteurs comparés au manifeste |
+| Runbook | **existe** | `docs/runbooks/incident-sauvegarde.md` |
+| Stratégie Neon (PITR / branches) | **hors de portée de l'agent** | l'équipe de pilotage a l'accès (voir `03` §0) ; aucun accès depuis ici |
+| Sauvegarde du stockage objet | **inventaire seulement** | `objects.json` liste les objets (clé, taille, ETag) ; les objets ne sont **pas** rechargés |
+| Chiffrement des sauvegardes | **non défini** | repose sur le chiffrement du volume cible ; non implémenté ici |
 | RPO / RTO | **non définis** | — |
 | Responsabilité | **non attribuée** | ni opérateur, ni astreinte |
 
@@ -140,6 +144,35 @@ objet inexistant. Il faut :
 
 Priorité **P1**. C'est une lacune de conception, pas seulement d'exploitation.
 
+## 5 bis. Ce que A-08 ajoute réellement (et ce qu'il n'ajoute pas)
+
+**Ajouté et testé** (`backend/tests/test_a08_backup_restore.py`, **8/8**, sur un
+vrai PostgreSQL 16 jetable) :
+
+| Contrôle | Résultat |
+|---|---|
+| Manifeste décrivant exactement l'archive (taille + SHA-256) | conforme |
+| Détection d'une archive **tronquée** | `verify` → sortie 2, motif explicite |
+| Détection d'une archive **altérée à taille constante** | détectée par SHA-256 |
+| Restauration dans une base neuve | révision préservée, compteurs identiques, source intacte |
+| Cible absente | aucune restauration tentée |
+| Rétention | garde les N derniers, ne vide jamais le magasin |
+| `redact_dsn` | ni mot de passe ni DSN dans les rapports |
+
+**Toujours absent, et qui bloque un pilote :**
+
+| Manque | Conséquence |
+|---|---|
+| planification (cron / workflow) | **RPO réel = depuis la dernière exécution manuelle** |
+| rechargement des objets | une perte d'objet est constatable, pas réparable |
+| politique de chiffrement | dépend du volume cible |
+| sauvegarde Neon (PITR) | hors de portée de l'agent (voir `03` §0) |
+| mesure du RTO à l'échelle | le RTO mesuré (~3 s) porte sur un schéma vide : **il ne vaut rien** comme engagement |
+
+Le RTO réel ne peut pas être annoncé sur cette base. Toute communication au
+pilotage doit dire « restauration outillée et testée sur un schéma de test »,
+jamais « RTO de 3 secondes ».
+
 ## 6. Runbook de restauration proposé
 
 1. Identifier le point de reprise (Neon : branche PITR ; objet : version datée).
@@ -158,8 +191,14 @@ ne l'ont pas été.
 
 ## 7. Verdict
 
-- **Aucune sauvegarde automatisée n'existe dans le produit** : constaté.
+- **Une sauvegarde outillée, vérifiable et restaurable existe désormais** (A-08),
+  avec 8 tests exécutés sur une vraie instance PostgreSQL.
+- **Elle n'est pas planifiée** : le RPO reste non défini en pratique. La
+  sauvegarde existe, la **politique** de sauvegarde n'existe pas.
 - **Une restauration a réellement été exécutée** sur une cible isolée, avec
   vérification de la révision, des données, du RLS et de la chaîne d'audit.
-- **La sauvegarde Neon n'est pas vérifiée** et **le stockage objet n'est pas
-  couvert** : deux conditions bloquantes pour un pilote avec données réelles.
+- **La sauvegarde Neon n'est pas vérifiée** — non par absence d'accès de
+  l'équipe (`03` §0), mais par absence d'accès de l'agent — et **le stockage
+  objet n'est couvert qu'en inventaire** : deux conditions bloquantes pour un
+  pilote avec données réelles.
+- **Aucun RTO engageable** n'est mesurable ici. Ne pas en annoncer un.

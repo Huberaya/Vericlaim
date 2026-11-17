@@ -14,10 +14,9 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
-
 from app.core import database
 from app.core.database import DatabaseUnavailableError, get_db
+from fastapi.testclient import TestClient
 
 FALLBACK_DB_PATH = Path("/tmp/vericlaim_fallback.db")
 
@@ -84,7 +83,17 @@ def test_readiness_probes_the_database_while_liveness_does_not() -> None:
         assert body["database"] == "ok"
         # The view must state whether the two mandatory document-safety
         # boundaries are wired, without ever leaking an endpoint or a credential.
-        assert set(body) == {"status", "database", "document_storage", "malware_scanner", "document_import"}
+        # A-07 audited the scanner itself: ``configured`` says a client exists,
+        # ``malware_scanner_reachable`` says the daemon actually answered PING.
+        assert set(body) == {
+            "status",
+            "database",
+            "document_storage",
+            "malware_scanner",
+            "malware_scanner_reachable",
+            "malware_scanner_reason",
+            "document_import",
+        }
         assert client.get("/healthz").status_code == 200
 
 

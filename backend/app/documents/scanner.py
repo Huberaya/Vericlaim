@@ -8,8 +8,8 @@ protocol so no temporary shared file is needed.
 from __future__ import annotations
 
 import socket
-import time
 import struct
+import time
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -34,6 +34,16 @@ class MalwareScanResult:
 class MalwareScanner(Protocol):
     def scan(self, payload: bytes) -> MalwareScanResult: ...
 
+    def healthcheck(self) -> str | None:
+        """Retourne ``None`` si le moteur répond, sinon la raison du refus.
+
+        Sans cette sonde, ``/readyz`` ne pouvait dire que « un scanner est
+        configuré » — jamais « ce scanner répond ». Une passerelle dont clamd
+        est tombé paraissait donc prête, et chaque import échouait à la
+        complétion au lieu d'être refusé en amont.
+        """
+        ...
+
 
 class DisabledMalwareScanner:
     """Fail closed rather than parse an unscanned binary in normal environments."""
@@ -41,6 +51,9 @@ class DisabledMalwareScanner:
     def scan(self, payload: bytes) -> MalwareScanResult:
         del payload
         raise MalwareScannerUnavailableError("Le service antivirus documentaire n’est pas configuré.")
+
+    def healthcheck(self) -> str | None:
+        return "scanner_disabled"
 
 
 class TestCleanMalwareScanner:
@@ -52,6 +65,9 @@ class TestCleanMalwareScanner:
         if b"EICAR-STANDARD-ANTIVIRUS-TEST-FILE" in payload:
             return MalwareScanResult(is_clean=False, engine="test-eicar")
         return MalwareScanResult(is_clean=True, engine="test-only")
+
+    def healthcheck(self) -> str | None:
+        return None
 
 
 class ClamAvMalwareScanner:
@@ -87,6 +103,30 @@ class ClamAvMalwareScanner:
         if response == "stream: OK":
             return MalwareScanResult(is_clean=True, engine="clamav")
         raise MalwareScanError("Le service antivirus a retourné une réponse invalide.")
+
+    def healthcheck(self) -> str | None:
+        """Envoie ``PING`` (protocole clamd) et exige ``PONG``.
+
+        C'est le seul contrôle qui distingue « clamd configuré » de « clamd
+        répond ». Un échec n'est jamais converti en succès : il est retourné
+        sous forme de raison, et l'appelant refuse l'import (fail-closed).
+        """
+
+        try:
+            with socket.create_connection(
+                (self._host, self._port), timeout=self._timeout_seconds
+            ) as connection:
+                connection.settimeout(self._timeout_seconds)
+                connection.sendall(b"nPING\n")
+                response = connection.recv(64)
+        except OSError:
+            return "scanner_unreachable"
+        # clamd termine ses réponses par un octet NUL, que ``bytes.strip()`` ne
+        # retire pas (il ne coupe que les espaces) : sans cela, un PONG valide
+        # était lu comme une réponse inattendue.
+        if response.strip(b"\x00 \r\n") != b"PONG":
+            return "scanner_unexpected_reply"
+        return None
 
     @staticmethod
     def _remaining_timeout(deadline: float) -> float:
