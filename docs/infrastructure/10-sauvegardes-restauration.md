@@ -1,8 +1,8 @@
 # 10 — Sauvegardes et restauration
 
 **Date :** 18 novembre 2026 (révision A-08 : octets S3, portabilité Windows)
-**SHA de référence :** `8d142e6ef47572e8541b88d3730c2f41d9880f32` + corrections du
-18 novembre (voir `main` après fusion de la PR #15 pour le SHA exact)
+**SHA de référence :** `711fc6dfe484f85d83f3fb91870193340d263384`
+(fusionné dans `main` le 18 novembre 2026)
 **Cible d'essai :** instances jetables isolées, jamais une base ni un bucket
 persistants
 
