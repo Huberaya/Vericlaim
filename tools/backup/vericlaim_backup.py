@@ -40,7 +40,6 @@ import argparse
 import hashlib
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -220,26 +219,68 @@ def _s3_client(settings: dict[str, Any]):
     )
 
 
-def _safe_object_path(bucket: str, key: str) -> Path:
-    """Chemin d'archive sûr pour une clé S3 arbitraire.
+def _safe_component(raw: str) -> str:
+    """Neutralise un nom de composant de chemin sans jamais fusionner deux clés.
 
-    Une clé S3 peut contenir ``..``, un chemin absolu, des antislashs ou des
-    octets de contrôle. L'écrire telle quelle permettrait de sortir du
-    répertoire de sauvegarde (écriture hors périmètre) et rendrait l'archive
-    non portable. Chaque segment est donc neutralisé, et le chemin final est
-    vérifié comme étant bien sous la racine.
+    Le point délicat : remplacer les caractères interdits par ``_`` fait
+    s'effondrer ``a:b.pdf``, ``a<b.pdf`` et ``a_b.pdf`` sur le **même** fichier.
+    Une sauvegarde écraserait alors deux objets par un seul, silencieusement —
+    c'est-à-dire perdrait des données en se présentant comme complète.
+
+    D'où le suffixe : dès qu'un caractère a dû être remplacé (ou que le nom est
+    ambigu), on ajoute l'empreinte SHA-256 du nom d'origine. Deux clés
+    distinctes ne peuvent plus viser le même chemin, et le nom reste lisible.
     """
 
-    segments = []
-    for segment in re.split(r"[\\/]+", key):
-        if segment in {"", ".", ".."}:
-            continue
-        cleaned = "".join(ch if ch.isalnum() or ch in "-._ " else "_" for ch in segment)
-        segments.append(cleaned or "_")
-    if not segments:
-        segments = ["_empty_key"]
-    safe_bucket = "".join(ch if ch.isalnum() or ch in "-._" else "_" for ch in bucket) or "_bucket"
-    return Path("objects") / safe_bucket / Path(*segments)
+    cleaned = "".join(ch if ch.isalnum() or ch in "-._ " else "_" for ch in raw)
+    # Chemin rapide réservé aux noms ASCII déjà sûrs. Un nom non ASCII est aussi
+    # haché : « é.pdf » et « é.pdf » (NFC/NFD) sont deux clés S3 distinctes
+    # qui visent le même fichier sur un système de fichiers normalisant.
+    if cleaned == raw and cleaned not in {"", ".", ".."} and raw.isascii():
+        return cleaned
+    digest = hashlib.sha256(raw.encode("utf-8", "surrogatepass")).hexdigest()[:16]
+    stem = cleaned.strip() or "_"
+    return f"{stem}~{digest}"
+
+
+def _safe_object_path(bucket: str, key: str) -> Path:
+    """Chemin d'archive **injectif** pour une clé S3 arbitraire.
+
+    Trois exigences, dans cet ordre :
+
+    1. **confinement** — une clé comme ``../../etc/passwd`` ne doit jamais
+       écrire hors du répertoire de sauvegarde ;
+    2. **injectivité** — deux clés distinctes ne doivent jamais produire le
+       même chemin. Une collision ne se contente pas de mal nommer un fichier :
+       elle **écrase** un objet sauvegardé par un autre, et le manifeste
+       déclarerait alors deux objets là où un seul existe ;
+    3. **lisibilité** — le chemin doit rester exploitable à l'œil nu.
+
+    Les segments vides (``a//b``) et les ``.``/``..`` sont écartés, mais cela
+    ne suffit pas à rendre la fonction injective : ``a//b.pdf`` et ``a/b.pdf``
+    désignent deux clés S3 distinctes et produiraient le même chemin. Un
+    marqueur déterministe est donc ajouté dès que la normalisation a modifié la
+    clé (segment retiré, caractère substitué).
+    """
+
+    # Séparateur : la barre oblique **seule**. L'antislash est un caractère
+    # légal dans une clé S3 ; le traiter comme un séparateur ferait viser le
+    # même fichier à « a\\b.pdf » et « a/b.pdf ».
+    raw_segments = key.split("/")
+    kept = [segment for segment in raw_segments if segment not in {"", ".", ".."}]
+    normalized = len(kept) != len(raw_segments) or bool(raw_segments and raw_segments[0] == "")
+
+    safe_segments = [_safe_component(segment) for segment in kept]
+    if not safe_segments:
+        safe_segments = ["_empty_key"]
+    if normalized:
+        # Deux clés distinctes peuvent se normaliser identiquement
+        # (``a//b.pdf`` vs ``a/b.pdf``) : la clé brute départage.
+        digest = hashlib.sha256(key.encode("utf-8", "surrogatepass")).hexdigest()[:16]
+        safe_segments = [f"{safe_segments[0]}~norm-{digest}", *safe_segments[1:]]
+
+    safe_bucket = _safe_component(bucket) if bucket.strip() else "_bucket"
+    return Path("objects") / safe_bucket / Path(*safe_segments)
 
 
 def _capture_objects(
@@ -254,12 +295,31 @@ def _capture_objects(
     """
 
     artifacts: list[ObjectArtifact] = []
+    claimed_paths: dict[str, str] = {}
     for bucket in settings.get("buckets", []):
         paginator = client.get_paginator("list_objects_v2")
         for page in paginator.paginate(Bucket=bucket):
             for item in page.get("Contents", []):
                 key = item["Key"]
                 relative = _safe_object_path(bucket, key)
+
+                # Filet de sécurité : si une future évolution du schéma de
+                # nommage réintroduisait une collision, on refuse la sauvegarde
+                # au lieu d'écraser un objet déjà archivé. Perdre une donnée en
+                # silence est le seul résultat inacceptable ici.
+                # La comparaison est insensible à la casse : deux clés S3 qui ne
+                # diffèrent que par la casse visent un seul fichier sur macOS ou
+                # Windows, où l'archive peut être copiée.
+                claim = f"{bucket}/{str(relative).lower()}"
+                previous = claimed_paths.get(claim)
+                if previous is not None:
+                    raise SystemExit(
+                        "Collision de chemins dans l'archive : "
+                        f"{bucket}/{previous!r} et {bucket}/{key!r} visent {relative}. "
+                        "Sauvegarde interrompue pour ne perdre aucun objet."
+                    )
+                claimed_paths[claim] = key
+
                 destination = directory / relative
                 destination.parent.mkdir(parents=True, exist_ok=True)
 
@@ -546,6 +606,31 @@ def _destination_credentials(
     }
 
 
+def _remote_sha256(client: Any, bucket: str, key: str, *, limit_bytes: int | None = None) -> str | None:
+    """Empreinte SHA-256 des **octets réellement stockés**, ou ``None``.
+
+    Comparer les métadonnées ``sha256`` d'un objet est séduisant mais faux : la
+    métadonnée est écrite par l'appelant, pas par le stockage. Un objet
+    corrompu après son dépôt conserve la métadonnée de son contenu d'origine, et
+    une restauration le déclarerait « déjà présent » alors que ses octets sont
+    faux. On relit donc le contenu.
+
+    ``limit_bytes`` borne le coût : au-delà, l'objet est seulement **mesuré**
+    (taille comparée) et signalé comme non vérifié par contenu — jamais comme
+    vérifié.
+    """
+
+    head = client.head_object(Bucket=bucket, Key=key)
+    expected_size = int(head.get("ContentLength", -1))
+    if limit_bytes is not None and expected_size > limit_bytes:
+        return None
+    digest = hashlib.sha256()
+    body = client.get_object(Bucket=bucket, Key=key)["Body"]
+    for block in iter(lambda: body.read(1024 * 1024), b""):
+        digest.update(block)
+    return digest.hexdigest()
+
+
 def _normalize_prefix(prefix: str) -> str:
     """Normalise un préfixe : pas de ``/`` initial, un seul ``/`` final."""
 
@@ -638,23 +723,47 @@ def command_restore_objects(args: argparse.Namespace) -> int:
 
         destination_key = f"{prefix}{key}"
         try:
-            head = client.head_object(Bucket=args.destination_bucket, Key=destination_key)
+            existing_head = client.head_object(Bucket=args.destination_bucket, Key=destination_key)
         except Exception:  # noqa: BLE001 - absent (404) ou erreur : traité comme absent
-            head = None
+            existing_head = None
 
-        if head is not None:
-            existing_sha = (head.get("Metadata") or {}).get("sha256")
+        if existing_head is not None:
+            # On ne se fie ni au nom, ni à la métadonnée : on lit le contenu.
+            existing_size = int(existing_head.get("ContentLength", -1))
+            if existing_size != artifact["bytes"]:
+                collisions.append(
+                    {
+                        "key": destination_key,
+                        "reason": f"objet existant de taille différente ({existing_size} != {artifact['bytes']})",
+                    }
+                )
+                continue
+
+            existing_sha = _remote_sha256(
+                client, args.destination_bucket, destination_key, limit_bytes=args.verify_bytes_limit
+            )
+            if existing_sha is None:
+                # Contenu non lu : on ne peut pas affirmer « identique ». Refuser
+                # est le seul choix honnête ; reconnaître l'objet sur la foi de sa
+                # métadonnée reviendrait à croire l'objet sur parole.
+                collisions.append(
+                    {
+                        "key": destination_key,
+                        "reason": (
+                            "objet existant trop volumineux pour être vérifié par contenu "
+                            f"(> {args.verify_bytes_limit} octets) ; augmenter --verify-bytes-limit"
+                        ),
+                    }
+                )
+                continue
+
             if existing_sha == artifact["sha256"]:
                 already_present.append(destination_key)
                 continue
             collisions.append(
                 {
                     "key": destination_key,
-                    "reason": (
-                        "objet existant sans empreinte comparable"
-                        if not existing_sha
-                        else "objet existant avec un contenu différent"
-                    ),
+                    "reason": "objet existant avec un contenu différent (octets comparés, pas les métadonnées)",
                 }
             )
             continue
@@ -698,11 +807,19 @@ def command_restore_objects(args: argparse.Namespace) -> int:
         client.put_object(**put_arguments)
         restored.append(destination_key)
 
-    # ---- post-contrôle : ce qui a été écrit est relu et comparé.
+    # ---- post-contrôle : les octets écrits sont relus et hachés.
+    # Un `put_object` qui répond 200 ne prouve rien sur ce qui est stocké
+    # (proxy, stockage en panne partielle, écriture tronquée). On relit.
     mismatches: list[str] = []
+    unverified: list[str] = []
     for artifact, destination_key, _local in planned:
-        head = client.head_object(Bucket=args.destination_bucket, Key=destination_key)
-        if (head.get("Metadata") or {}).get("sha256") != artifact["sha256"]:
+        actual = _remote_sha256(
+            client, args.destination_bucket, destination_key, limit_bytes=args.verify_bytes_limit
+        )
+        if actual is None:
+            unverified.append(destination_key)
+            continue
+        if actual != artifact["sha256"]:
             mismatches.append(destination_key)
 
     report = {
@@ -712,15 +829,17 @@ def command_restore_objects(args: argparse.Namespace) -> int:
         "destination": {"bucket": args.destination_bucket, "prefix": prefix},
         "source_buckets": sorted(source_buckets),
         "idempotent_replay": len(already_present) > 0,
-        "verified_after_write": not mismatches,
+        "verified_after_write": not mismatches and not unverified,
+        "verified_how": "sha256 of the stored bytes, re-read after write",
         "mismatches": mismatches,
+        "unverified_too_large": unverified,
         "note": (
             "Aucun objet source n'a été modifié ni supprimé. Rejouer la commande "
             "sur la même destination ne réécrit rien : les objets identiques sont reconnus."
         ),
     }
     print(json.dumps(report, indent=2))
-    return 0 if not mismatches else 2
+    return 0 if (not mismatches and not unverified) else 2
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -758,6 +877,15 @@ def main(argv: list[str] | None = None) -> int:
     restore_objects.add_argument("--destination-endpoint", default=None)
     restore_objects.add_argument("--destination-access-key", default=None)
     restore_objects.add_argument("--destination-secret-key", default=None)
+    restore_objects.add_argument(
+        "--verify-bytes-limit",
+        type=int,
+        default=512 * 1024 * 1024,
+        help=(
+            "Taille maximale d'un objet relu pour comparaison par contenu. Au-delà, "
+            "l'objet est signalé non vérifié plutôt que déclaré identique."
+        ),
+    )
     restore_objects.set_defaults(func=command_restore_objects)
 
     args = parser.parse_args(argv)

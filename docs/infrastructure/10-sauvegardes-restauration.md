@@ -177,6 +177,25 @@ vrai PostgreSQL 16 jetable) :
 | restauration vers la source | **refusée** (même bucket + préfixe vide) ; préfixe non vide accepté |
 | sources après sauvegarde et restauration | ETags identiques : ni ajout, ni suppression, ni réécriture |
 
+**Deux points vérifiés par les octets, pas par la confiance :**
+
+| Contrôle | Pourquoi il ne peut pas reposer sur autre chose |
+|---|---|
+| idempotence (objet « déjà présent ») | la métadonnée `sha256` est écrite par l'appelant, pas par le stockage. Un objet corrompu après dépôt garde la métadonnée de son contenu d'origine : le déclarer identique affichait un succès sur des données fausses. Le contenu est donc **relu et haché** |
+| vérification après écriture | un `put_object` qui répond 200 ne prouve rien sur ce qui est stocké. Chaque objet écrit est relu, haché et comparé |
+
+Au-delà de `--verify-bytes-limit` (512 Mio par défaut), l'objet n'est **pas**
+haché : il est signalé `unverified_too_large` et la commande sort en **2**. Non
+vérifié n'est jamais assimilé à vérifié.
+
+**Nommage de l'archive — injectif.** Les clés S3 peuvent contenir des caractères
+que le système de fichiers refuse. Les remplacer par `_` faisait s'effondrer six
+clés distinctes (`a:b.pdf`, `a<b.pdf`, `a?b.pdf`, `a*b.pdf`, `a|b.pdf`,
+`a_b.pdf`) sur un seul fichier : deux objets sauvegardés, un seul conservé, et un
+manifeste déclarant le contraire. Chaque composant altéré porte désormais
+l'empreinte de son nom d'origine ; une collision résiduelle fait **échouer la
+sauvegarde** au lieu d'écraser un objet.
+
 Semantique de la restauration : **idempotente et non destructive**. Un objet
 identique déjà présent est reconnu (aucune écriture) ; un objet différent à la
 même clé provoque un refus global **avant** toute écriture — une restauration

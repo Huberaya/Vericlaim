@@ -228,11 +228,16 @@ def main(argv: list[str] | None = None) -> int:
             require_tls=not args.allow_no_tls,
             expected_role=args.expected_role,
         )
-    except BaseException as exc:  # noqa: BLE001 - tout échec devient un code sûr
+    except Exception as exc:  # noqa: BLE001 - tout échec devient un code sûr
         # Aucun message d'exception n'est exposé, quel qu'il soit. Les messages
         # de psycopg reprennent l'hôte, le port et parfois l'URI complète ; un
         # rapport de vérification circule hors du poste de travail, il ne doit
         # transporter aucun de ces éléments. Le code, lui, suffit à agir.
+        #
+        # ``Exception`` et non ``BaseException`` : intercepter ``KeyboardInterrupt``
+        # ou ``SystemExit`` empêcherait l'opérateur d'interrompre le script avec
+        # Ctrl-C et transformerait un arrêt volontaire en « échec de connexion ».
+        # Ce sont des signaux de contrôle, pas des erreurs à rapporter.
         code = classify_error(exc)
         print(json.dumps({"ok": False, "problems": [code], "error_code": code}, indent=2))
         return 2

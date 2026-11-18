@@ -59,9 +59,10 @@ Règles appliquées par la commande, et pourquoi :
 |---|---|
 | destination obligatoire (bucket **et** préfixe) | aucune cible n'est devinée |
 | refus si destination = source (même bucket, préfixe vide) | restaurer sur soi écraserait ce qu'on sauvegarde |
-| objet identique déjà présent ⇒ sauté | un rejeu ne réécrit rien (idempotent) |
+| objet identique déjà présent ⇒ sauté | un rejeu ne réécrit rien (idempotent) — comparaison sur les **octets relus**, jamais sur la métadonnée `sha256`, qui est déclarative |
 | objet **différent** déjà présent ⇒ refus global, avant écriture | on ne remplace jamais une donnée existante sur la foi d'une archive plus ancienne |
 | relit chaque objet écrit et compare le SHA-256 | un `put` réussi n'est pas une preuve de contenu |
+| au-delà de `--verify-bytes-limit`, signale `unverified_too_large` et sort en 2 | non vérifié n'est jamais assimilé à vérifié |
 | ne supprime jamais rien | la restauration est additive |
 
 Ordre recommandé : **base d'abord**, objets ensuite, puis réconciliation. La

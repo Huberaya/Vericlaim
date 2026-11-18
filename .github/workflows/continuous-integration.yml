@@ -239,7 +239,15 @@ jobs:
             tests/test_a08_backup_restore.py::test_replaying_restore_is_idempotent \
             tests/test_a08_backup_restore.py::test_collision_with_a_different_existing_object_is_refused \
             tests/test_a08_backup_restore.py::test_restore_refuses_to_target_the_source \
-            tests/test_a08_backup_restore.py::test_sources_are_never_modified_nor_deleted
+            tests/test_a08_backup_restore.py::test_sources_are_never_modified_nor_deleted \
+            tests/test_a08_backup_restore.py::test_object_paths_are_injective_across_distinct_keys \
+            tests/test_a08_backup_restore.py::test_object_paths_stay_confined_and_stable \
+            tests/test_a08_backup_restore.py::test_capture_aborts_rather_than_overwrite_on_path_collision \
+            tests/test_a08_backup_restore.py::test_every_distinct_key_is_archived_separately \
+            tests/test_a08_backup_restore.py::test_idempotence_is_decided_on_bytes_not_metadata \
+            tests/test_a08_backup_restore.py::test_matching_bytes_are_recognised_even_without_metadata \
+            tests/test_a08_backup_restore.py::test_write_is_verified_by_rereading_the_stored_bytes \
+            tests/test_a08_backup_restore.py::test_oversized_objects_are_reported_unverified_never_assumed_identical
 
       - name: Publish the qualification transcript
         if: always()

@@ -286,8 +286,8 @@ Aucune chaîne de connexion n'est acceptée en argument : elle passe par une
 variable d'environnement. Les rapports passent par `redact_dsn` et ne
 contiennent ni mot de passe ni DSN.
 
-**Tests exécutés.** `backend/tests/test_a08_backup_restore.py` — **20/20**
-(8 pour la base, 12 pour les objets) contre un **vrai** PostgreSQL 16 jetable
+**Tests exécutés.** `backend/tests/test_a08_backup_restore.py` — **28/28**
+(8 pour la base, 20 pour les objets) contre un **vrai** PostgreSQL 16 jetable
 (`pgserver`) et un **vrai serveur S3** (`moto` en processus, protocole HTTP) :
 
 | Test | Ce qu'il verrouille |
@@ -299,7 +299,9 @@ contiennent ni mot de passe ni DSN.
 | cible absente | aucune restauration tentée (`SystemExit`) |
 | rétention | ne vide jamais le magasin, garde bien les N derniers |
 | `redact_dsn` | ni mot de passe ni DSN dans le rapport |
-| objets S3 (11 tests) | octets archivés, `missing` signalé, clé hostile neutralisée, archive altérée détectée, restauration vers destination distincte, rejeu idempotent, collision refusée, source jamais modifiée |
+| objets S3 (20 tests) | octets archivés, `missing` signalé, clé hostile neutralisée, archive altérée détectée, restauration vers destination distincte, rejeu idempotent, collision refusée, source jamais modifiée |
+| nommage de l'archive | **injectif** : 23 clés piégeuses ⇒ 23 chemins, aucune collision ; garde qui **interrompt** la sauvegarde si une collision apparaît |
+| idempotence | décidée sur les **octets relus**, jamais sur la métadonnée auto-déclarée |
 
 Un défaut relevé et corrigé pendant ce chantier : le calcul de `kept` dans
 `prune` était maladroit (reconstruction des chemins depuis les noms). Remplacé
