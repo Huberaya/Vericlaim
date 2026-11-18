@@ -26,7 +26,7 @@ base d'un raisonnement : elle est close sur une observation.
 | A-05 | Preview sans `DATABASE_URL` servie par un SQLite jetable | P1 | **corrigé** |
 | A-06 | Aucun worker/cron sur Vercel : les files ne sont jamais drainées | **P1** | **corrigé côté code** — déploiement du runtime : **à faire par l'équipe** |
 | A-07 | Aucun antivirus réel n'a pu être exécuté | **P0 pour un pilote** | **partiel** — code fail-closed + readiness corrigés ; **moteur réel non déployé** |
-| A-08 | Aucune sauvegarde automatisée, stockage objet non couvert | **P0 pour un pilote** | **partiel** — base et **objets** sauvegardés/restaurés et testés ; **planification absente** |
+| A-08 | Sauvegarde non planifiée ; stockage objet sauvegardé mais non qualifié sur S3 managé | **P0 pour un pilote** | **partiel** — base et **objets** sauvegardés/restaurés et testés ; **planification absente** |
 | A-09 | Aucun monitoring proactif (métriques, alertes) | P1 | **partiel** — instrumentation + règles livrées ; **alertes jamais observées** |
 | A-10 | `vericlaim` : TLS PostgreSQL non vérifiable, `verify_runtime.py` jamais exécuté avec succès | P1 | **partiel** — vérificateur livré, **fuite d'information corrigée** ; preuve TLS sur vraie URL non exécutée |
 | A-11 | Import d'un PDF volumineux refusé par la limite par défaut (2 Mo) | P2 | **atténué** |
@@ -263,10 +263,11 @@ URL**, renseigner `scan_signature_version` (toujours jamais rempli — la preuve
 
 ---
 
-## A-08 — Aucune sauvegarde automatisée ; stockage objet non couvert
+## A-08 — Sauvegarde non planifiée ; stockage objet sauvegardé, non qualifié sur S3 managé
 
 **Sévérité : P0 pour un pilote avec données réelles.**
-**Statut : PARTIEL — script et tests réels ; planification et objets non couverts.**
+**Statut : PARTIEL — base et objets sauvegardés, vérifiés et restaurés par des
+tests réels ; planification absente ; aucun exercice sur un stockage managé.**
 
 **Défaut constaté.** Aucun script, aucune tâche, aucun workflow de sauvegarde ;
 aucune politique de rétention ; aucun moyen de vérifier qu'une archive était
@@ -286,9 +287,10 @@ Aucune chaîne de connexion n'est acceptée en argument : elle passe par une
 variable d'environnement. Les rapports passent par `redact_dsn` et ne
 contiennent ni mot de passe ni DSN.
 
-**Tests exécutés.** `backend/tests/test_a08_backup_restore.py` — **28/28**
-(8 pour la base, 20 pour les objets) contre un **vrai** PostgreSQL 16 jetable
-(`pgserver`) et un **vrai serveur S3** (`moto` en processus, protocole HTTP) :
+**Tests exécutés.** `backend/tests/test_a08_backup_restore.py` — **36/36**
+(8 pour la base, 28 pour les objets) contre un **vrai** PostgreSQL 16 jetable
+(`pgserver`) et un **serveur S3 moto** en processus (protocole HTTP réel, mais
+serveur de test — voir la limite plus bas) :
 
 | Test | Ce qu'il verrouille |
 |---|---|
@@ -301,14 +303,15 @@ contiennent ni mot de passe ni DSN.
 | `redact_dsn` | ni mot de passe ni DSN dans le rapport |
 | objets S3 (20 tests) | octets archivés, `missing` signalé, clé hostile neutralisée, archive altérée détectée, restauration vers destination distincte, rejeu idempotent, collision refusée, source jamais modifiée |
 | nommage de l'archive | **injectif** : 23 clés piégeuses ⇒ 23 chemins, aucune collision ; garde qui **interrompt** la sauvegarde si une collision apparaît |
+| portabilité Windows (8 tests) | `file`/`file.`/`file `, noms réservés `CON`/`NUL`/`COM1-9`/`LPT1-9` avec ou sans extension, variantes de casse, NFC/NFD ⇒ chemins distincts, y compris dans le parcours réel de sauvegarde **et** de restauration |
 | idempotence | décidée sur les **octets relus**, jamais sur la métadonnée auto-déclarée |
 
 Un défaut relevé et corrigé pendant ce chantier : le calcul de `kept` dans
 `prune` était maladroit (reconstruction des chemins depuis les noms). Remplacé
 par un calcul direct sur les noms.
 
-**Preuve.** `pytest backend/tests/test_a08_backup_restore.py` → 8 passed
-(2,8 s, cluster réel inclus).
+**Preuve.** `pytest backend/tests/test_a08_backup_restore.py` → **36 passed**
+(PostgreSQL 16 réel et serveur S3 moto inclus).
 
 **RPO/RTO — mesure, pas promesse.**
 

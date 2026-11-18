@@ -869,3 +869,214 @@ def test_oversized_objects_are_reported_unverified_never_assumed_identical(
     second = json.loads(capsys.readouterr().out)
     assert second["already_present"] == 0
     assert "trop volumineux" in second["collisions"][0]["reason"]
+
+
+# ---------------------------------------------------------------------------
+# Portabilité Windows.
+#
+# Une archive produite sur Linux doit rester exploitable sur Windows, et surtout
+# ne jamais y écraser un objet par un autre. Trois familles de noms désignent le
+# même fichier sous Windows alors qu'ils sont distincts sous Linux :
+#   - les points et espaces finaux  (file. / file / file␠)
+#   - les noms réservés de périphérique (CON, NUL, COM1…), avec extension
+#   - les variantes de casse
+# Une quatrième : la normalisation Unicode (NFC/NFD).
+# ---------------------------------------------------------------------------
+
+WINDOWS_RESERVED_NAMES = ["CON", "PRN", "AUX", "NUL"] + [f"COM{i}" for i in range(1, 10)] + [
+    f"LPT{i}" for i in range(1, 10)
+]
+
+
+def _windows_identity(path: str) -> str:
+    """Ce que Windows considère comme le même fichier que `path`.
+
+    Reproduit les règles qui comptent ici : casse ignorée, points et espaces
+    finaux retirés composant par composant.
+    """
+
+    return "/".join(component.rstrip(" .").lower() for component in str(path).split("/"))
+
+
+def _assert_all_distinct(keys: list[str], *, label: str) -> None:
+    """Vérifie qu'aucune paire de clés ne produit le même chemin (même sous Windows)."""
+
+    import vericlaim_backup as module
+
+    literal: dict[str, list[str]] = {}
+    windows: dict[str, list[str]] = {}
+    for key in keys:
+        path = str(module._safe_object_path("vericlaim-clean", key))
+        literal.setdefault(path, []).append(key)
+        windows.setdefault(_windows_identity(path), []).append(key)
+
+    literal_collisions = {path: k for path, k in literal.items() if len(k) > 1}
+    windows_collisions = {path: k for path, k in windows.items() if len(k) > 1}
+    assert literal_collisions == {}, f"{label}: chemins identiques {literal_collisions}"
+    assert windows_collisions == {}, f"{label}: même fichier sous Windows {windows_collisions}"
+
+
+def test_trailing_dot_and_space_do_not_collide() -> None:
+    """`file`, `file.`, `file␠` et `file..` sont quatre clés, quatre fichiers.
+
+    Windows retire silencieusement les points et espaces finaux : sans encodage,
+    ces quatre clés visaient un seul fichier et trois objets étaient perdus.
+    """
+
+    _assert_all_distinct(["file", "file.", "file ", "file..", "file...", "file ."], label="points finaux")
+
+    import vericlaim_backup as module
+
+    # Le nom déjà portable est conservé tel quel : la lisibilité est préservée.
+    assert module._safe_object_path("b", "file").name == "file"
+    # Les variantes ambiguës sont encodées, donc distinctes de `file`.
+    assert module._safe_object_path("b", "file.").name != "file"
+    assert module._safe_object_path("b", "file ").name != "file"
+
+
+def test_windows_reserved_names_are_encoded_with_and_without_extension() -> None:
+    """`CON`, `con.txt`, `COM1`, `lpt9.tar.gz`… : jamais écrits tels quels."""
+
+    keys: list[str] = []
+    for name in WINDOWS_RESERVED_NAMES:
+        keys.extend([name, name.lower(), f"{name}.txt", f"{name.lower()}.log", f"{name.lower()}.tar.gz"])
+    _assert_all_distinct(keys, label="noms réservés")
+
+    import vericlaim_backup as module
+
+    for name in WINDOWS_RESERVED_NAMES:
+        for candidate in (name, name.lower(), f"{name}.txt", f"{name.lower()}.log"):
+            produced = module._safe_object_path("b", candidate).name
+            assert module._is_windows_reserved(candidate)
+            assert produced.startswith("_"), f"{candidate} doit être encodé, obtenu {produced!r}"
+            assert not module._is_windows_reserved(produced), f"{produced!r} reste réservé"
+
+
+def test_case_variants_do_not_collide() -> None:
+    """`File.TXT`, `file.txt`, `FILE.TXT` : un seul est conservé, les autres encodés."""
+
+    _assert_all_distinct(["File.TXT", "file.txt", "FILE.TXT", "fIlE.tXt"], label="casse")
+
+    import vericlaim_backup as module
+
+    assert module._safe_object_path("b", "file.txt").name == "file.txt"
+    for variant in ("File.TXT", "FILE.TXT", "fIlE.tXt"):
+        assert module._safe_object_path("b", variant).name != "file.txt"
+
+
+def test_unicode_normalisation_forms_do_not_collide() -> None:
+    """NFC et NFD de « é » sont deux clés S3, un seul fichier sur macOS."""
+
+    import unicodedata
+
+    key_nfc = unicodedata.normalize("NFC", "é")
+    key_nfd = unicodedata.normalize("NFD", "é")
+    assert key_nfc != key_nfd
+    _assert_all_distinct([key_nfc, key_nfd, "e"], label="normalisation Unicode")
+
+
+def test_naming_is_injective_over_a_representative_corpus() -> None:
+    """Injectivité sur un corpus mêlant tous les pièges connus.
+
+    Ce test ne cherche pas des exemples : il vérifie l'absence de collision sur
+    l'ensemble, y compris en appliquant les règles Windows.
+    """
+
+    corpus = [
+        "file", "file.", "file ", "file..", "FILE", "File.TXT", "file.txt",
+        "CON", "con", "CON.txt", "con.tar.gz", "NUL", "nul.gz", "COM1", "com1.tar.gz", "LPT9",
+        "a:b.pdf", "a_b.pdf", "a<b.pdf", "a?b.pdf", "a*b.pdf", "a|b.pdf", "a\"b.pdf",
+        "a\\b.pdf", "a/b.pdf", "a//b.pdf", "dir/file.txt", "dir_file.txt", "x/y/z.pdf",
+        "../esc.pdf", "esc.pdf", "/leading.pdf", "trailing.pdf/", ".", "..", "", "///",
+        "é.pdf", "e\u0301.pdf", "with space.pdf", " leading-space.pdf", "trailing-space.pdf ",
+        "tab\tchar.pdf", "newline\nchar.pdf", "ÜBER.pdf", "uber.pdf", "文件.pdf", "🙂.pdf",
+        "point.", "point..", "point...", "x" * 300, "x" * 300 + "y",
+    ]
+    _assert_all_distinct(corpus, label="corpus représentatif")
+
+
+def test_pathological_keys_remain_confined() -> None:
+    """Aucune clé, même hostile, ne sort du répertoire de sauvegarde."""
+
+    import vericlaim_backup as module
+
+    for key in ("../../etc/passwd", "..\\..\\windows\\system32", "/etc/passwd", "//x", "a\\..\\..\\b", "..", "."):
+        path = module._safe_object_path("vericlaim-clean", key)
+        assert not path.is_absolute(), key
+        assert ".." not in path.parts, f"{key} -> {path}"
+        assert path.parts[0] == "objects", path
+
+
+def test_backup_keeps_every_windows_ambiguous_object_separately(
+    tmp_path, live_postgres, s3_server, monkeypatch, capsys
+) -> None:
+    """Parcours réel : des clés ambiguës sous Windows sont toutes sauvegardées.
+
+    Ce test ne porte pas sur `_safe_object_path` seule : il vérifie que la
+    sauvegarde **réelle** ne perd aucun objet et que chaque archive contient les
+    octets de sa propre clé.
+    """
+
+    _storage_env(monkeypatch, s3_server.endpoint)
+    bodies = {
+        "docs/file": b"file",
+        "docs/file.": b"file-point",
+        "docs/file ": b"file-espace",
+        "docs/CON": b"con",
+        "docs/con.txt": b"con-txt",
+        "docs/COM1": b"com1",
+        "docs/com1.log": b"com1-log",
+        "docs/File.TXT": b"casse-majuscule",
+        "docs/file.txt": b"casse-minuscule",
+    }
+    for key, body in bodies.items():
+        s3_server.client.put_object(Bucket="vericlaim-clean", Key=key, Body=body)
+
+    directory = _backup_with_objects(tmp_path, live_postgres, monkeypatch, capsys)
+    manifest = json.loads((directory / "manifest.json").read_text())
+
+    assert manifest["objects"] == len(bodies), "tous les objets doivent être sauvegardés"
+    archives = [item["archive"] for item in manifest["object_artifacts"]]
+    assert len(set(archives)) == len(bodies), f"chemins d'archive non distincts: {archives}"
+    for item in manifest["object_artifacts"]:
+        assert (directory / item["archive"]).read_bytes() == bodies[item["key"]], item["key"]
+
+    # Et la restauration rend chaque objet à sa propre clé source.
+    assert command_restore_objects(_restore_args(directory, prefix="win/")) == 0
+    restored = {
+        entry["Key"]: entry
+        for entry in s3_server.client.list_objects_v2(Bucket="vericlaim-restore").get("Contents", [])
+    }
+    assert len(restored) == len(bodies), f"objets restaurés en double ou manquants: {sorted(restored)}"
+    for key, body in bodies.items():
+        destination = s3_server.client.get_object(Bucket="vericlaim-restore", Key=f"win/{key}")["Body"].read()
+        assert destination == body, f"contenu incorrect pour {key!r}"
+
+
+def test_guard_still_aborts_if_a_collision_survives_encoding(tmp_path, s3_server, monkeypatch) -> None:
+    """Même avec des noms encodés, la garde refuse une collision résiduelle.
+
+    On force deux clés à produire le même *alias Windows* et on vérifie que la
+    sauvegarde s'interrompt au lieu d'écraser.
+    """
+
+    import vericlaim_backup as module
+
+    settings = {
+        "endpoint": s3_server.endpoint,
+        "access_key": "test",
+        "secret_key": "test",
+        "region": S3_REGION,
+        "buckets": ["vericlaim-clean"],
+    }
+    s3_server.client.put_object(Bucket="vericlaim-clean", Key="one.pdf", Body=b"premier")
+    s3_server.client.put_object(Bucket="vericlaim-clean", Key="two.pdf", Body=b"second")
+
+    # Nommage volontairement non injectif : "one.pdf" et "two.pdf" se replient
+    # tous deux sur le même chemin.
+    monkeypatch.setattr(module, "_safe_object_path", lambda bucket, key: Path("objects/x~same"))
+
+    with pytest.raises(SystemExit) as excinfo:
+        module._capture_objects(s3_server.client, settings, tmp_path)
+    assert "Collision de chemins" in str(excinfo.value)
+    assert (tmp_path / "objects/x~same").read_bytes() == b"premier", "le premier objet reste intact"

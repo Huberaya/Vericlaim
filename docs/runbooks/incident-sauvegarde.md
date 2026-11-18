@@ -85,6 +85,8 @@ le magasin est une perte de données.
 
 Les sauvegardes **Neon** (PITR, rétention côté fournisseur, chiffrement au
 repos) et la réplication du stockage objet managé relèvent de l'équipe de
-pilotage. Les objets S3 ne sont **pas** rechargés par le script : seul leur
-inventaire est enregistré, ce qui permet de constater une disparition, pas de
-la réparer.
+pilotage. Le script **archive et restaure les octets** des objets
+(`restore-objects`, §3 bis), mais cette restauration n'a été exercée **que
+contre un serveur S3 de test (moto)** : elle n'a jamais tourné contre un
+stockage managé réel. La **réconciliation** entre les versions en base et les
+objets restaurés n'est pas automatisée — elle reste manuelle.

@@ -219,63 +219,138 @@ def _s3_client(settings: dict[str, Any]):
     )
 
 
-def _safe_component(raw: str) -> str:
-    """Neutralise un nom de composant de chemin sans jamais fusionner deux clés.
+#: Noms de périphériques réservés par Windows, dans **tous** les répertoires et
+#: avec ou sans extension (``CON``, ``CON.txt``, ``con.tar.gz`` sont interdits).
+#: Une archive écrite sur Linux puis restaurée sous Windows échouerait — ou,
+#: pire, viserait un autre fichier. On les encode donc dès la sauvegarde.
+_WINDOWS_RESERVED = frozenset(
+    {"con", "prn", "aux", "nul"}
+    | {f"com{i}" for i in range(1, 10)}
+    | {f"lpt{i}" for i in range(1, 10)}
+    # Noms de flux de données alternatifs Windows (``file:stream``).
+    | {"conin$", "conout$"}
+)
 
-    Le point délicat : remplacer les caractères interdits par ``_`` fait
-    s'effondrer ``a:b.pdf``, ``a<b.pdf`` et ``a_b.pdf`` sur le **même** fichier.
-    Une sauvegarde écraserait alors deux objets par un seul, silencieusement —
-    c'est-à-dire perdrait des données en se présentant comme complète.
 
-    D'où le suffixe : dès qu'un caractère a dû être remplacé (ou que le nom est
-    ambigu), on ajoute l'empreinte SHA-256 du nom d'origine. Deux clés
-    distinctes ne peuvent plus viser le même chemin, et le nom reste lisible.
+def _windows_stem(name: str) -> str:
+    """Partie du nom que Windows compare aux noms réservés.
+
+    Windows réserve ``CON``, mais aussi ``CON.txt`` : la comparaison porte sur ce
+    qui précède la **première** extension.
     """
 
-    cleaned = "".join(ch if ch.isalnum() or ch in "-._ " else "_" for ch in raw)
-    # Chemin rapide réservé aux noms ASCII déjà sûrs. Un nom non ASCII est aussi
-    # haché : « é.pdf » et « é.pdf » (NFC/NFD) sont deux clés S3 distinctes
-    # qui visent le même fichier sur un système de fichiers normalisant.
-    if cleaned == raw and cleaned not in {"", ".", ".."} and raw.isascii():
-        return cleaned
+    return name.split(".", 1)[0].strip().rstrip(" .").lower()
+
+
+def _is_windows_reserved(name: str) -> bool:
+    return _windows_stem(name) in _WINDOWS_RESERVED
+
+
+def _windows_aliases(name: str) -> set[str]:
+    """Toutes les formes qu'un même fichier peut prendre sous Windows.
+
+    Deux noms de segments qui produisent le même ensemble désignent le même
+    fichier sur un volume Windows : l'archive ne doit jamais les contenir tous
+    les deux. Sont repliés :
+
+    * la **casse** (NTFS est insensible à la casse) ;
+    * les **points et espaces finaux** (``file.`` et ``file`` sont le même
+      fichier ; Windows les retire silencieusement) ;
+    * les **espaces de tête** ;
+    * les noms **réservés**, dont le comportement dépend du système.
+
+    Retourner un ensemble plutôt qu'une clé unique est volontaire : ``CON`` et
+    ``CON.txt`` sont *deux* noms distincts sous Linux mais un seul périphérique
+    sous Windows. Les replier sur la même chaîne suffit et n'a pas besoin d'être
+    un invariant de la normalisation.
+    """
+
+    stripped = name.strip().rstrip(" .")
+    aliases = {stripped.lower()}
+    if _is_windows_reserved(name):
+        aliases.add("\0reserved")
+    return aliases
+
+
+def _safe_component(raw: str) -> str:
+    """Encode un composant de chemin **portable et injectif**.
+
+    Trois familles de pièges, toutes capables de faire écraser un objet par un
+    autre — c'est-à-dire de perdre une donnée en se présentant comme complète :
+
+    1. **caractères interdits** (``:``, ``<``, ``?``, ``*``, ``|``, ``"``,
+       antislash, octets de contrôle). Les remplacer par ``_`` fait s'effondrer
+       ``a:b.pdf``, ``a<b.pdf`` et ``a_b.pdf`` sur le même fichier ;
+    2. **différences que Linux distingue mais que les systèmes de fichiers
+       ignorent** : casse (``File`` / ``file``), points et espaces finaux
+       (``file.`` / ``file`` / ``file ``), normalisation Unicode (NFC/NFD) ;
+    3. **noms réservés Windows** (``CON``, ``NUL``, ``COM1``…), qui désignent un
+       périphérique et non un fichier.
+
+    Stratégie : un nom qui est déjà sûr *et* portable (ASCII, minuscule, sans
+    caractère interdit, sans point/espace final, non réservé, ≤ 100 caractères)
+    est conservé tel quel — les clés ordinaires restent lisibles. Tout le reste
+    est **encodé**, c'est-à-dire préfixé (``_``) et suffixé par l'empreinte
+    SHA-256 du nom **d'origine** exact. Deux noms différents produisent alors
+    deux empreintes différentes, donc deux chemins différents.
+
+    Le préfixe ``_`` a une raison précise : aucun nom encodé ne peut commencer
+    comme un nom conservé tel quel, ce qui exclut par construction la collision
+    entre un nom encodé et un nom littéral (``a_b.pdf~<h>`` et ``a_b.pdf``).
+    """
+
     digest = hashlib.sha256(raw.encode("utf-8", "surrogatepass")).hexdigest()[:16]
-    stem = cleaned.strip() or "_"
-    return f"{stem}~{digest}"
+
+    portable = (
+        raw.isascii()
+        and raw.islower()
+        and raw not in {"", ".", ".."}
+        and not raw.startswith(" ")
+        and raw == raw.rstrip(" .")
+        and all(ch.isalnum() or ch in "-_." for ch in raw)
+        and not _is_windows_reserved(raw)
+        # Marge sous la limite de 255 octets une fois l'empreinte ajoutée.
+        and len(raw) <= 100
+    )
+    if portable:
+        return raw
+
+    cleaned = "".join(ch if (ch.isascii() and (ch.isalnum() or ch in "-_ ")) else "_" for ch in raw)
+    return f"_{cleaned[:100].strip() or 'empty'}~{digest}"
 
 
 def _safe_object_path(bucket: str, key: str) -> Path:
-    """Chemin d'archive **injectif** pour une clé S3 arbitraire.
+    """Chemin d'archive **injectif et portable** pour une clé S3 arbitraire.
 
-    Trois exigences, dans cet ordre :
+    Exigences, dans cet ordre :
 
-    1. **confinement** — une clé comme ``../../etc/passwd`` ne doit jamais
-       écrire hors du répertoire de sauvegarde ;
-    2. **injectivité** — deux clés distinctes ne doivent jamais produire le
-       même chemin. Une collision ne se contente pas de mal nommer un fichier :
-       elle **écrase** un objet sauvegardé par un autre, et le manifeste
-       déclarerait alors deux objets là où un seul existe ;
-    3. **lisibilité** — le chemin doit rester exploitable à l'œil nu.
+    1. **confinement** — ``../../etc/passwd`` ne doit jamais écrire hors du
+       répertoire de sauvegarde ;
+    2. **absence d'écrasement** — deux clés distinctes ne doivent jamais viser
+       le même fichier. Une collision ne se contente pas de mal nommer : elle
+       **écrase** un objet déjà archivé, et le manifeste déclarerait deux objets
+       là où un seul existe ;
+    3. **portabilité** — l'archive doit se comporter pareil sur Linux, macOS et
+       Windows (casse, points finaux, noms réservés) ;
+    4. **lisibilité** — les clés ordinaires restent reconnaissables.
 
-    Les segments vides (``a//b``) et les ``.``/``..`` sont écartés, mais cela
-    ne suffit pas à rendre la fonction injective : ``a//b.pdf`` et ``a/b.pdf``
-    désignent deux clés S3 distinctes et produiraient le même chemin. Un
+    Les segments vides (``a//b``) et les ``.``/``..`` sont écartés, mais cela ne
+    suffit pas : ``a//b.pdf`` et ``a/b.pdf`` sont deux clés distinctes. Un
     marqueur déterministe est donc ajouté dès que la normalisation a modifié la
-    clé (segment retiré, caractère substitué).
+    clé.
     """
 
-    # Séparateur : la barre oblique **seule**. L'antislash est un caractère
-    # légal dans une clé S3 ; le traiter comme un séparateur ferait viser le
-    # même fichier à « a\\b.pdf » et « a/b.pdf ».
+    # Séparateur : la barre oblique **seule**. L'antislash est un caractère légal
+    # dans une clé S3 ; le traiter comme un séparateur ferait viser le même
+    # fichier à « a\\b.pdf » et « a/b.pdf ».
     raw_segments = key.split("/")
     kept = [segment for segment in raw_segments if segment not in {"", ".", ".."}]
-    normalized = len(kept) != len(raw_segments) or bool(raw_segments and raw_segments[0] == "")
+    normalized = len(kept) != len(raw_segments)
 
     safe_segments = [_safe_component(segment) for segment in kept]
     if not safe_segments:
         safe_segments = ["_empty_key"]
     if normalized:
-        # Deux clés distinctes peuvent se normaliser identiquement
-        # (``a//b.pdf`` vs ``a/b.pdf``) : la clé brute départage.
         digest = hashlib.sha256(key.encode("utf-8", "surrogatepass")).hexdigest()[:16]
         safe_segments = [f"{safe_segments[0]}~norm-{digest}", *safe_segments[1:]]
 
@@ -307,18 +382,29 @@ def _capture_objects(
                 # nommage réintroduisait une collision, on refuse la sauvegarde
                 # au lieu d'écraser un objet déjà archivé. Perdre une donnée en
                 # silence est le seul résultat inacceptable ici.
-                # La comparaison est insensible à la casse : deux clés S3 qui ne
-                # diffèrent que par la casse visent un seul fichier sur macOS ou
-                # Windows, où l'archive peut être copiée.
-                claim = f"{bucket}/{str(relative).lower()}"
-                previous = claimed_paths.get(claim)
-                if previous is not None:
+                # La garde ne se contente pas de comparer des chaînes : elle
+                # raisonne sur les **alias** que le système de fichiers peut
+                # créer (casse, points et espaces finaux, noms réservés
+                # Windows) et sur les composants de chemin eux-mêmes. Une clé
+                # comme ``a/b<c`` dont la barre oblique est encodée dans un
+                # composant reste ainsi distincte de la clé ``a/b/c``.
+                components = [str(part) for part in relative.parts]
+                claims = set()
+                for index, component in enumerate(components):
+                    for alias in _windows_aliases(component):
+                        claims.add("/".join([*components[:index], alias, *components[index + 1 :]]))
+                claim_keys = {f"{bucket}/{claim}" for claim in claims}
+
+                overlap = claim_keys & claimed_paths.keys()
+                if overlap:
+                    previous = claimed_paths[sorted(overlap)[0]]
                     raise SystemExit(
                         "Collision de chemins dans l'archive : "
                         f"{bucket}/{previous!r} et {bucket}/{key!r} visent {relative}. "
                         "Sauvegarde interrompue pour ne perdre aucun objet."
                     )
-                claimed_paths[claim] = key
+                for claim in claim_keys:
+                    claimed_paths[claim] = key
 
                 destination = directory / relative
                 destination.parent.mkdir(parents=True, exist_ok=True)
