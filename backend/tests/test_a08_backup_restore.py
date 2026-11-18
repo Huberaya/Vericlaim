@@ -1,0 +1,1082 @@
+"""A-08 : la sauvegarde est produite, vérifiée, restaurée et rétentionnée.
+
+Le dépôt savait déjà restaurer (`tools/recette/restore.py`) ; il ne savait pas
+produire une archive, la vérifier, ni décider ce qu'on garde. Ce module exerce
+le cycle complet contre un **vrai** PostgreSQL 16 jetable fourni par
+``pgserver``, puis vérifie les garanties qui comptent :
+
+* le manifeste décrit exactement ce qui a été produit (taille + SHA-256) ;
+* une archive altérée ou tronquée est refusée **avant** toute restauration ;
+* la restauration cible une base neuve et préserve révision et compteurs ;
+* la rétention ne vide jamais le magasin ;
+* aucun identifiant ni chaîne de connexion n'apparaît dans les rapports.
+
+Ce qui n'est pas prouvé ici, et que le script ne prétend pas faire : les
+sauvegardes Neon (PITR, rétention côté fournisseur) et le rechargement des
+objets S3 (seul leur *inventaire* est enregistré).
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import sys
+from pathlib import Path
+
+import pytest
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT / "tools" / "backup"))
+
+from vericlaim_backup import (  # noqa: E402
+    command_backup,
+    command_prune,
+    command_restore,
+    command_restore_objects,
+    command_verify,
+    redact_dsn,
+    sha256_file,
+)
+
+
+def _pg_bin_dir() -> Path | None:
+    """Binaires PostgreSQL fournis par pgserver, ou None si absents."""
+
+    try:
+        import pgserver
+    except ImportError:
+        return None
+    candidate = Path(pgserver.__file__).parent / "pginstall" / "bin"
+    return candidate if (candidate / "pg_dump").exists() else None
+
+
+@pytest.fixture()
+def live_postgres(tmp_path: Path):
+    """Cluster jetable réel, avec la table attendue par le script."""
+
+    try:
+        import pgserver
+    except ImportError:  # pragma: no cover - dépendance optionnelle
+        pytest.skip("pgserver absent")
+    bin_dir = _pg_bin_dir()
+    if bin_dir is None:  # pragma: no cover - dépendance optionnelle
+        pytest.skip("binaires pg_dump/pg_restore absents")
+
+    server = pgserver.get_server(str(tmp_path / "pgdata"))
+    dsn = server.get_uri()
+    import psycopg
+
+    with psycopg.connect(dsn, autocommit=True) as connection:
+        connection.execute("CREATE TABLE alembic_version (version_num varchar(32) primary key)")
+        connection.execute("INSERT INTO alembic_version VALUES ('c73b12fd')")
+        connection.execute("CREATE TABLE organizations (id uuid primary key)")
+        connection.execute("CREATE TABLE users (id uuid primary key)")
+        connection.execute("CREATE TABLE documents (id uuid primary key)")
+        connection.execute("CREATE TABLE document_versions (id uuid primary key)")
+        connection.execute("CREATE TABLE audit_events (id uuid primary key)")
+
+    previous_path = os.environ.get("PATH", "")
+    os.environ["PATH"] = f"{bin_dir}{os.pathsep}{previous_path}"
+    try:
+        yield dsn
+    finally:
+        os.environ["PATH"] = previous_path
+
+
+def _args(**kwargs):
+    return type("Args", (), kwargs)()
+
+
+def test_backup_produces_a_manifest_that_matches_the_archive(live_postgres, tmp_path, monkeypatch, capsys):
+    """Le manifeste décrit ce qui existe réellement, taille et SHA-256."""
+
+    monkeypatch.setenv("DATABASE_ADMIN_URL", live_postgres)
+    code = command_backup(_args(directory=str(tmp_path / "backups"), dsn_env="DATABASE_ADMIN_URL"))
+    assert code == 0
+
+    produced = json.loads(capsys.readouterr().out)
+    directory = Path(produced["backup"])
+    manifest = json.loads((directory / "manifest.json").read_text())
+
+    assert manifest["alembic_revision"] == "c73b12fd"
+    assert manifest["target"]["dbname"] != "?" or manifest["target"]["host"] != "?"
+    # Aucune chaîne de connexion complète ni mot de passe dans le manifeste.
+    serialized = json.dumps(manifest)
+    assert "password" not in serialized.lower()
+    assert live_postgres not in serialized
+
+    dump = directory / "database.dump"
+    assert dump.exists() and dump.stat().st_size > 0
+    recorded = {item["name"]: item for item in manifest["artifacts"]}
+    assert recorded["database.dump"]["sha256"] == sha256_file(dump)
+    assert recorded["database.dump"]["bytes"] == dump.stat().st_size
+    assert "objects.json" in recorded
+    # Sans configuration S3, l'inventaire est vide — et le manifeste le dit.
+    assert manifest["objects"] == 0
+
+
+def test_verify_detects_a_truncated_archive(live_postgres, tmp_path, monkeypatch, capsys):
+    """Une archive tronquée est refusée : c'est le contrôle qui manquait."""
+
+    monkeypatch.setenv("DATABASE_ADMIN_URL", live_postgres)
+    command_backup(_args(directory=str(tmp_path / "backups"), dsn_env="DATABASE_ADMIN_URL"))
+    directory = Path(json.loads(capsys.readouterr().out)["backup"])
+    dump = directory / "database.dump"
+
+    assert command_verify(_args(backup=str(directory))) == 0
+
+    original = dump.read_bytes()
+    dump.write_bytes(original[: len(original) // 2])
+    capsys.readouterr()
+    assert command_verify(_args(backup=str(directory))) == 2, "une troncature doit être détectée"
+    report = json.loads(capsys.readouterr().out)
+    assert report["verified"] is False
+    assert any("taille" in problem for problem in report["problems"])
+
+
+def test_verify_detects_a_modified_archive(live_postgres, tmp_path, monkeypatch, capsys):
+    """Une altération de même taille est détectée par le SHA-256."""
+
+    monkeypatch.setenv("DATABASE_ADMIN_URL", live_postgres)
+    command_backup(_args(directory=str(tmp_path / "backups"), dsn_env="DATABASE_ADMIN_URL"))
+    directory = Path(json.loads(capsys.readouterr().out)["backup"])
+    dump = directory / "database.dump"
+
+    payload = bytearray(dump.read_bytes())
+    payload[0] ^= 0xFF  # même longueur, contenu différent
+    dump.write_bytes(bytes(payload))
+
+    assert command_verify(_args(backup=str(directory))) == 2
+    report = json.loads(capsys.readouterr().out)
+    assert any("SHA-256" in problem for problem in report["problems"])
+
+
+def test_restore_targets_a_new_database_and_preserves_the_revision(
+    live_postgres, tmp_path, monkeypatch, capsys
+):
+    """La restauration ne touche pas la source et préserve révision + compteurs."""
+
+    import psycopg
+
+    monkeypatch.setenv("DATABASE_ADMIN_URL", live_postgres)
+    with psycopg.connect(live_postgres, autocommit=True) as connection:
+        connection.execute(
+            "INSERT INTO organizations (id) VALUES ('00000000-0000-0000-0000-000000000001')"
+        )
+
+    command_backup(_args(directory=str(tmp_path / "backups"), dsn_env="DATABASE_ADMIN_URL"))
+    directory = Path(json.loads(capsys.readouterr().out)["backup"])
+
+    assert command_restore(_args(backup=str(directory), admin_dsn_env="DATABASE_ADMIN_URL")) == 0
+    report = json.loads(capsys.readouterr().out)
+
+    assert report["restored_database"].startswith("vericlaim_restore_")
+    assert report["restored_database"] != "vericlaim_restore_", "aucune base inventée"
+    assert report["revision_preserved"] is True
+    assert report["row_counts_match"] is True
+    assert report["objects_in_manifest"] == 0
+
+    # La base source n'a pas été modifiée par la restauration.
+    with psycopg.connect(live_postgres) as connection:
+        count = connection.execute("SELECT count(*) FROM organizations").fetchone()[0]
+    assert count == 1
+
+
+def test_restore_refuses_without_a_target(live_postgres, tmp_path, monkeypatch, capsys):
+    """Sans variable de cible isolée, aucune restauration n'est tentée."""
+
+    monkeypatch.setenv("DATABASE_ADMIN_URL", live_postgres)
+    command_backup(_args(directory=str(tmp_path / "backups"), dsn_env="DATABASE_ADMIN_URL"))
+    directory = Path(json.loads(capsys.readouterr().out)["backup"])
+
+    monkeypatch.delenv("MISSING_TARGET_URL", raising=False)
+    with pytest.raises(SystemExit):
+        command_restore(_args(backup=str(directory), admin_dsn_env="MISSING_TARGET_URL"))
+
+
+def test_backup_refuses_without_a_dsn(tmp_path, monkeypatch):
+    """Pas de cible => pas de sauvegarde : le script n'invente rien."""
+
+    monkeypatch.delenv("ABSENT_URL", raising=False)
+    with pytest.raises(SystemExit):
+        command_backup(_args(directory=str(tmp_path / "backups"), dsn_env="ABSENT_URL"))
+
+
+def test_retention_never_empties_the_store(tmp_path, capsys):
+    """La rétention garde toujours les N derniers jeux, même tous anciens.
+
+    Une politique qui supprime tout est une perte de données déguisée en
+    hygiène : c'est précisément le cas que ce test verrouille.
+    """
+
+    backups = tmp_path / "backups"
+    backups.mkdir()
+    names = [
+        "backup-20200101T000000Z",
+        "backup-20200102T000000Z",
+        "backup-20200103T000000Z",
+        "backup-20200104T000000Z",
+    ]
+    for name in names:
+        (backups / name).mkdir()
+        (backups / name / "manifest.json").write_text("{}")
+
+    assert command_prune(_args(directory=str(backups), keep_last=2, max_age_days=0)) == 0
+    remaining = sorted(path.name for path in backups.glob("backup-*"))
+    assert remaining == names[-2:], f"la rétention a supprimé trop: {remaining}"
+
+
+def test_redact_dsn_never_exposes_credentials() -> None:
+    """Le rapport ne doit contenir ni mot de passe ni chaîne complète."""
+
+    dsn = "postgresql://vericlaim_app:super-secret@db.example:5432/vericlaim?sslmode=require"
+    redacted = redact_dsn(dsn)
+    assert redacted["host"] == "db.example"
+    assert redacted["dbname"] == "vericlaim"
+    assert redacted["sslmode"] == "require"
+    assert "super-secret" not in json.dumps(redacted)
+    assert "vericlaim_app" in redacted["user"]
+
+
+# ---------------------------------------------------------------------------
+# Objets S3 : capture des octets, vérification et restauration effective.
+#
+# Moto sert de **serveur S3 réel** (processus séparé, protocole HTTP, boto3
+# standard), pas d'un mock en mémoire. Cela prouve le contrat : écriture,
+# lecture, ETag, métadonnées, absences.
+#
+# Ce que cela ne prouve PAS : la durabilité, la réplication, le versioning ou
+# le chiffrement d'un stockage managé réel. Aucune restauration vers un bucket
+# de production n'a été effectuée, et ce fichier ne prétend pas le contraire.
+# ---------------------------------------------------------------------------
+
+S3_REGION = "us-east-1"
+
+
+@pytest.fixture()
+def s3_server(tmp_path: Path):
+    """Serveur moto en processus, avec trois buckets propres à ce test."""
+
+    moto = pytest.importorskip("moto", reason="moto requis pour le contrat S3")
+    boto3 = pytest.importorskip("boto3")
+
+    import socket
+    import subprocess
+    import time
+
+    assert moto.__version__  # le module est bien installé
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+
+    process = subprocess.Popen(
+        [sys.executable, "-m", "moto.server", "-H", "127.0.0.1", "-p", str(port)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    endpoint = f"http://127.0.0.1:{port}"
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+                break
+        except OSError:
+            time.sleep(0.1)
+    else:  # pragma: no cover - environnement défaillant
+        process.terminate()
+        pytest.skip("serveur moto indisponible")
+
+    client = boto3.client(
+        "s3",
+        endpoint_url=endpoint,
+        aws_access_key_id="test",
+        aws_secret_access_key="test",
+        region_name=S3_REGION,
+    )
+    for bucket in ("vericlaim-quarantine", "vericlaim-clean", "vericlaim-restore"):
+        client.create_bucket(Bucket=bucket)
+
+    try:
+        yield type("S3", (), {"endpoint": endpoint, "client": client, "process": process})()
+    finally:
+        process.terminate()
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:  # pragma: no cover
+            process.kill()
+
+
+def _storage_env(monkeypatch, endpoint: str) -> None:
+    monkeypatch.setenv("DOCUMENT_STORAGE_ENDPOINT", endpoint)
+    monkeypatch.setenv("DOCUMENT_STORAGE_ACCESS_KEY", "test")
+    monkeypatch.setenv("DOCUMENT_STORAGE_SECRET_KEY", "test")
+    monkeypatch.setenv("DOCUMENT_STORAGE_REGION", S3_REGION)
+    monkeypatch.setenv("DOCUMENT_QUARANTINE_BUCKET", "vericlaim-quarantine")
+    monkeypatch.setenv("DOCUMENT_CLEAN_BUCKET", "vericlaim-clean")
+
+
+def _pg_binaries_on_path(monkeypatch) -> None:
+    """pg_dump/pg_restore fournis par pgserver (CI incluse)."""
+
+    bin_dir = _pg_bin_dir()
+    if bin_dir is None:  # pragma: no cover
+        pytest.skip("binaires PostgreSQL absents")
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+
+
+def _backup_with_objects(tmp_path: Path, live_postgres: str, monkeypatch, capsys) -> Path:
+    monkeypatch.setenv("DATABASE_ADMIN_URL", live_postgres)
+    _pg_binaries_on_path(monkeypatch)
+    command_backup(_args(directory=str(tmp_path / "backups"), dsn_env="DATABASE_ADMIN_URL"))
+    produced = json.loads(capsys.readouterr().out)
+    return Path(produced["backup"])
+
+
+def _restore_args(directory: Path, *, bucket="vericlaim-restore", prefix="restored/", endpoint=None):
+    return _args(
+        backup=str(directory),
+        destination_bucket=bucket,
+        prefix=prefix,
+        destination_endpoint=endpoint,
+        destination_access_key="test",
+        destination_secret_key="test",
+        # Valeur par défaut explicite : un test qui oublie un paramètre introduit
+        # par la suite ne doit pas échouer sur un AttributError, mais vérifier un
+        # comportement.
+        verify_bytes_limit=512 * 1024 * 1024,
+    )
+
+
+def test_one_object_is_archived_with_its_bytes(tmp_path, live_postgres, s3_server, monkeypatch, capsys) -> None:
+    """Un objet : ses OCTETS sont dans l'archive, pas seulement son nom."""
+
+    _storage_env(monkeypatch, s3_server.endpoint)
+    payload = b"%PDF-1.7 contenu-probant-d-un-seul-objet"
+    s3_server.client.put_object(Bucket="vericlaim-quarantine", Key="uploads/one.pdf", Body=payload)
+
+    directory = _backup_with_objects(tmp_path, live_postgres, monkeypatch, capsys)
+    manifest = json.loads((directory / "manifest.json").read_text())
+
+    assert manifest["objects_captured"] is True
+    assert manifest["objects"] == 1
+    assert manifest["object_bytes"] == len(payload)
+    recorded = manifest["object_artifacts"][0]
+    assert recorded["bucket"] == "vericlaim-quarantine"
+    assert recorded["key"] == "uploads/one.pdf"
+    assert recorded["bytes"] == len(payload)
+    assert recorded["sha256"] == hashlib.sha256(payload).hexdigest()
+    assert recorded["missing"] is False
+
+    archived = directory / recorded["archive"]
+    assert archived.exists(), "les octets doivent être présents dans l'archive"
+    assert archived.read_bytes() == payload, "le contenu archivé doit être identique à la source"
+
+    assert command_verify(_args(backup=str(directory))) == 0
+
+
+def test_several_objects_across_buckets_are_archived(tmp_path, live_postgres, s3_server, monkeypatch, capsys) -> None:
+    """Plusieurs objets, deux buckets : tous capturés, aucun confondu."""
+
+    _storage_env(monkeypatch, s3_server.endpoint)
+    fixtures = {
+        ("vericlaim-quarantine", "q/a.pdf"): b"AAA",
+        ("vericlaim-quarantine", "q/b.pdf"): b"BBBB",
+        ("vericlaim-clean", "c/deep/path/c.bin"): b"\x00\x01\x02" * 500,
+    }
+    for (bucket, key), body in fixtures.items():
+        s3_server.client.put_object(Bucket=bucket, Key=key, Body=body)
+
+    directory = _backup_with_objects(tmp_path, live_postgres, monkeypatch, capsys)
+    manifest = json.loads((directory / "manifest.json").read_text())
+
+    assert manifest["objects"] == len(fixtures)
+    assert manifest["object_bytes"] == sum(len(body) for body in fixtures.values())
+    captured = {(item["bucket"], item["key"]): item for item in manifest["object_artifacts"]}
+    assert set(captured) == set(fixtures)
+    for (bucket, key), body in fixtures.items():
+        item = captured[(bucket, key)]
+        assert item["sha256"] == hashlib.sha256(body).hexdigest()
+        assert (directory / item["archive"]).read_bytes() == body
+    # Les deux buckets ne se mélangent pas dans l'archive.
+    assert len({item["archive"] for item in manifest["object_artifacts"]}) == 3
+
+
+def test_missing_source_object_is_reported_not_skipped(tmp_path, live_postgres, s3_server, monkeypatch) -> None:
+    """Objet listé mais illisible : signalé `missing`, jamais silencieusement omis.
+
+    C'est le cas réel d'une clé supprimée entre le listing et la copie. Une
+    sauvegarde qui l'ignorerait se présenterait comme complète : l'omission
+    silencieuse est plus dangereuse que l'échec.
+    """
+
+    import vericlaim_backup as module
+
+    settings = {
+        "endpoint": s3_server.endpoint,
+        "access_key": "test",
+        "secret_key": "test",
+        "region": S3_REGION,
+        "buckets": ["vericlaim-clean"],
+    }
+    s3_server.client.put_object(Bucket="vericlaim-clean", Key="c/disappears.pdf", Body=b"present")
+
+    class VanishingClient:
+        """Liste l'objet (comme un listing réel) puis refuse de le lire."""
+
+        def __init__(self, client):
+            self._client = client
+
+        def get_paginator(self, name):
+            return self._client.get_paginator(name)
+
+        def get_object(self, **_kwargs):
+            raise KeyError("NoSuchKey")
+
+    artifacts = module._capture_objects(VanishingClient(s3_server.client), settings, tmp_path)
+
+    assert len(artifacts) == 1, "l'objet ne doit pas être retiré de la sauvegarde"
+    assert artifacts[0].missing is True
+    assert artifacts[0].bytes == 0
+    assert artifacts[0].metadata["error"] == "KeyError"
+    assert not (tmp_path / artifacts[0].archive).exists()
+
+
+def test_capture_refuses_to_escape_the_backup_directory(tmp_path, s3_server) -> None:
+    """Une clé S3 hostile ne peut pas écrire hors du répertoire de sauvegarde."""
+
+    import vericlaim_backup as module
+
+    settings = {
+        "endpoint": s3_server.endpoint,
+        "access_key": "test",
+        "secret_key": "test",
+        "region": S3_REGION,
+        "buckets": ["vericlaim-clean"],
+    }
+    hostile_key = "../../../etc/passwd"
+    s3_server.client.put_object(Bucket="vericlaim-clean", Key=hostile_key, Body=b"x")
+    artifacts = module._capture_objects(s3_server.client, settings, tmp_path)
+
+    assert len(artifacts) == 1
+    archived = (tmp_path / artifacts[0].archive).resolve()
+    assert tmp_path.resolve() in archived.parents, f"écriture hors périmètre: {archived}"
+    assert ".." not in Path(artifacts[0].archive).parts
+
+
+def test_verify_detects_a_corrupted_object_archive(tmp_path, live_postgres, s3_server, monkeypatch, capsys) -> None:
+    """Archive d'objet corrompue : `verify` refuse, même si le dump est intact."""
+
+    _storage_env(monkeypatch, s3_server.endpoint)
+    s3_server.client.put_object(Bucket="vericlaim-clean", Key="c/corruptible.pdf", Body=b"contenu original")
+    directory = _backup_with_objects(tmp_path, live_postgres, monkeypatch, capsys)
+    manifest = json.loads((directory / "manifest.json").read_text())
+    archived = directory / manifest["object_artifacts"][0]["archive"]
+
+    assert command_verify(_args(backup=str(directory))) == 0
+
+    archived.write_bytes(b"contenu falsifie")
+    capsys.readouterr()
+    assert command_verify(_args(backup=str(directory))) == 2, "une altération d'objet doit être détectée"
+    report = json.loads(capsys.readouterr().out)
+    assert any("SHA-256" in problem for problem in report["problems"]), report["problems"]
+
+
+def test_verify_detects_a_wrong_object_checksum(tmp_path, live_postgres, s3_server, monkeypatch, capsys) -> None:
+    """Checksum erroné dans le manifeste : détecté, pas ignoré."""
+
+    _storage_env(monkeypatch, s3_server.endpoint)
+    s3_server.client.put_object(Bucket="vericlaim-clean", Key="c/checksum.pdf", Body=b"corps")
+    directory = _backup_with_objects(tmp_path, live_postgres, monkeypatch, capsys)
+
+    manifest_path = directory / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["object_artifacts"][0]["sha256"] = "0" * 64  # empreinte volontairement fausse
+    manifest_path.write_text(json.dumps(manifest))
+
+    assert command_verify(_args(backup=str(directory))) == 2
+    report = json.loads(capsys.readouterr().out)
+    assert any("SHA-256" in problem for problem in report["problems"])
+
+
+def test_restore_writes_objects_to_a_distinct_destination(
+    tmp_path, live_postgres, s3_server, monkeypatch, capsys
+) -> None:
+    """Restauration effective vers un bucket et un préfixe distincts."""
+
+    _storage_env(monkeypatch, s3_server.endpoint)
+    bodies = {"q/alpha.pdf": b"%PDF alpha", "c/beta.pdf": b"%PDF beta"}
+    s3_server.client.put_object(Bucket="vericlaim-quarantine", Key="q/alpha.pdf", Body=bodies["q/alpha.pdf"])
+    s3_server.client.put_object(Bucket="vericlaim-clean", Key="c/beta.pdf", Body=bodies["c/beta.pdf"])
+    directory = _backup_with_objects(tmp_path, live_postgres, monkeypatch, capsys)
+
+    assert command_restore_objects(
+        _restore_args(directory, bucket="vericlaim-restore", prefix="restored/")
+    ) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["restored"] == 2
+    assert report["verified_after_write"] is True
+    assert report["collisions"] == []
+
+    written = {
+        item["Key"]: item for item in s3_server.client.list_objects_v2(Bucket="vericlaim-restore").get("Contents", [])
+    }
+    assert set(written) == {"restored/q/alpha.pdf", "restored/c/beta.pdf"}
+    for key, body in bodies.items():
+        restored = s3_server.client.get_object(Bucket="vericlaim-restore", Key=f"restored/{key}")["Body"].read()
+        assert restored == body, "les octets restaurés doivent être identiques aux originaux"
+
+
+def test_replaying_restore_is_idempotent(tmp_path, live_postgres, s3_server, monkeypatch, capsys) -> None:
+    """Rejouer la restauration ne réécrit rien : identique ⇒ reconnu."""
+
+    _storage_env(monkeypatch, s3_server.endpoint)
+    s3_server.client.put_object(Bucket="vericlaim-clean", Key="c/idem.pdf", Body=b"idempotent")
+    directory = _backup_with_objects(tmp_path, live_postgres, monkeypatch, capsys)
+
+    assert command_restore_objects(_restore_args(directory, prefix="replay/")) == 0
+    first = json.loads(capsys.readouterr().out)
+    assert first["restored"] == 1
+
+    assert command_restore_objects(_restore_args(directory, prefix="replay/")) == 0
+    second = json.loads(capsys.readouterr().out)
+    assert second["restored"] == 0, "un rejeu ne doit rien réécrire"
+    assert second["already_present"] == 1
+    assert second["idempotent_replay"] is True
+
+
+def test_collision_with_a_different_existing_object_is_refused(
+    tmp_path, live_postgres, s3_server, monkeypatch, capsys
+) -> None:
+    """Objet différent à la même destination : refus explicite, rien d'écrasé."""
+
+    _storage_env(monkeypatch, s3_server.endpoint)
+    s3_server.client.put_object(Bucket="vericlaim-clean", Key="c/clash.pdf", Body=b"version sauvegardee")
+    directory = _backup_with_objects(tmp_path, live_postgres, monkeypatch, capsys)
+
+    # Destination occupée par un contenu différent, sans empreinte comparable.
+    s3_server.client.put_object(Bucket="vericlaim-restore", Key="clash/c/clash.pdf", Body=b"version recente")
+    capsys.readouterr()
+
+    assert command_restore_objects(_restore_args(directory, prefix="clash/")) == 2, "une collision doit être refusée"
+    report = json.loads(capsys.readouterr().out)
+    assert report["refused"] is True
+    assert report["restored"] == 0
+    assert len(report["collisions"]) == 1
+
+    survivor = s3_server.client.get_object(Bucket="vericlaim-restore", Key="clash/c/clash.pdf")["Body"].read()
+    assert survivor == b"version recente", "l'objet existant ne doit jamais être écrasé"
+
+
+def test_restore_refuses_to_target_the_source(tmp_path, live_postgres, s3_server, monkeypatch, capsys) -> None:
+    """Restaurer sur la source (même bucket, préfixe vide) est refusé."""
+
+    _storage_env(monkeypatch, s3_server.endpoint)
+    s3_server.client.put_object(Bucket="vericlaim-quarantine", Key="q/source.pdf", Body=b"source intacte")
+    directory = _backup_with_objects(tmp_path, live_postgres, monkeypatch, capsys)
+
+    with pytest.raises(SystemExit) as excinfo:
+        command_restore_objects(
+            _restore_args(directory, bucket="vericlaim-quarantine", prefix="", endpoint=s3_server.endpoint)
+        )
+    assert "identique à la source" in str(excinfo.value)
+
+    # Un préfixe non vide dans le bucket source reste possible : ce n'est plus
+    # la source des objets, seulement un bucket qui la contient.
+    assert command_restore_objects(
+        _restore_args(directory, bucket="vericlaim-quarantine", prefix="copie/", endpoint=s3_server.endpoint)
+    ) == 0
+
+
+def test_sources_are_never_modified_nor_deleted(tmp_path, live_postgres, s3_server, monkeypatch, capsys) -> None:
+    """Après sauvegarde ET restauration, les buckets source sont inchangés."""
+
+    _storage_env(monkeypatch, s3_server.endpoint)
+    originals = {"q/one.pdf": b"un", "q/two.pdf": b"deux"}
+    for key, body in originals.items():
+        s3_server.client.put_object(Bucket="vericlaim-quarantine", Key=key, Body=body)
+    before = {
+        item["Key"]: s3_server.client.head_object(Bucket="vericlaim-quarantine", Key=item["Key"])["ETag"]
+        for item in s3_server.client.list_objects_v2(Bucket="vericlaim-quarantine")["Contents"]
+    }
+    directory = _backup_with_objects(tmp_path, live_postgres, monkeypatch, capsys)
+
+    assert command_restore_objects(_restore_args(directory, prefix="out/")) == 0
+    capsys.readouterr()
+
+    listing = s3_server.client.list_objects_v2(Bucket="vericlaim-quarantine").get("Contents", [])
+    after = {item["Key"]: item["ETag"] for item in listing}
+    assert after == before, "la source doit être strictement inchangée (ni ajout, ni suppression, ni réécriture)"
+    for key, body in originals.items():
+        assert s3_server.client.get_object(Bucket="vericlaim-quarantine", Key=key)["Body"].read() == body
+
+
+def test_restore_objects_refuses_a_manifest_without_captured_objects(
+    tmp_path, live_postgres, monkeypatch, capsys
+) -> None:
+    """Un inventaire vide n'est pas une sauvegarde d'objets : refus explicite."""
+
+    monkeypatch.delenv("DOCUMENT_STORAGE_ENDPOINT", raising=False)
+    monkeypatch.setenv("DATABASE_ADMIN_URL", live_postgres)
+    _pg_binaries_on_path(monkeypatch)
+    command_backup(_args(directory=str(tmp_path / "backups"), dsn_env="DATABASE_ADMIN_URL"))
+    produced = json.loads(capsys.readouterr().out)
+    directory = Path(produced["backup"])
+    assert produced["manifest"]["objects_captured"] is False
+
+    with pytest.raises(SystemExit) as excinfo:
+        command_restore_objects(_restore_args(directory, endpoint="http://127.0.0.1:9"))
+    assert "Aucun objet" in str(excinfo.value)
+
+
+# ---------------------------------------------------------------------------
+# Injectivité du nommage et vérification par les OCTETS.
+#
+# Ces deux familles de défauts ont la même conséquence : la sauvegarde ou la
+# restauration se déclare correcte alors que des données sont perdues.
+#   - une collision de chemins fait écraser un objet archivé par un autre ;
+#   - une comparaison sur métadonnées déclare « déjà restauré » un objet dont
+#     les octets sont faux.
+# ---------------------------------------------------------------------------
+
+#: Clés S3 distinctes qui, sous un nommage naïf, produisent le même chemin.
+COLLIDING_KEY_FAMILIES = [
+    ["a:b.pdf", "a_b.pdf"],
+    ["a<b.pdf", "a?b.pdf", "a*b.pdf", "a|b.pdf"],
+    ["a/b.pdf", "a//b.pdf"],
+    ["esc.pdf", "../esc.pdf"],
+    ["dir/file.txt", "dir_file.txt"],
+    ["x/y/z.pdf", "x_y_z.pdf"],
+    ["é.pdf", "e\u0301.pdf"],
+    [".", "..", "", "///"],
+    ["a\\b.pdf"],  # l'antislash est un caractère légal, pas un séparateur
+]
+
+
+def test_object_paths_are_injective_across_distinct_keys() -> None:
+    """Deux clés distinctes ⇒ deux chemins distincts. Sans exception.
+
+    Le défaut d'origine : les caractères interdits étaient remplacés par ``_``,
+    donc ``a:b.pdf``, ``a<b.pdf`` et ``a_b.pdf`` visaient le même fichier —
+    jusqu'à six clés pour un seul objet archivé.
+    """
+
+    import vericlaim_backup as module
+
+    seen: dict[str, str] = {}
+    collisions: list[tuple[str, str, str]] = []
+
+    for family in COLLIDING_KEY_FAMILIES:
+        for key in family:
+            path = str(module._safe_object_path("bucket", key)).lower()
+            previous = seen.get(path)
+            if previous is not None and previous != key:
+                collisions.append((previous, key, path))
+            seen[path] = key
+
+    assert collisions == [], f"chemins partagés par des clés distinctes: {collisions}"
+    # Et chaque clé a bien un chemin propre.
+    assert len(set(seen.values())) == len(seen)
+
+
+def test_object_paths_stay_confined_and_stable() -> None:
+    """Le nommage reste confiné, relatif et déterministe."""
+
+    import vericlaim_backup as module
+
+    for key in ("../../etc/passwd", "/etc/passwd", "..", "//x", "a\\..\\..\\b"):
+        path = module._safe_object_path("bucket", key)
+        assert not path.is_absolute(), key
+        assert ".." not in path.parts, f"{key} -> {path}"
+        assert path.parts[0] == "objects", path
+
+    # Déterministe : deux appels identiques donnent le même chemin, et cette
+    # stabilité est indispensable à la vérification d'une archive existante.
+    assert module._safe_object_path("bucket", "a:b.pdf") == module._safe_object_path("bucket", "a:b.pdf")
+    # Lisible : un nom déjà sûr n'est pas haché.
+    assert module._safe_object_path("bucket", "clean/two.pdf").name == "two.pdf"
+
+
+def test_capture_aborts_rather_than_overwrite_on_path_collision(tmp_path, s3_server, monkeypatch) -> None:
+    """Garde ultime : si une collision apparaissait, la sauvegarde s'arrête.
+
+    On force la collision en rendant le nommage non injectif ; le script doit
+    refuser de continuer plutôt que d'écraser un objet déjà archivé.
+    """
+
+    import vericlaim_backup as module
+
+    settings = {
+        "endpoint": s3_server.endpoint,
+        "access_key": "test",
+        "secret_key": "test",
+        "region": S3_REGION,
+        "buckets": ["vericlaim-clean"],
+    }
+    s3_server.client.put_object(Bucket="vericlaim-clean", Key="one/a.pdf", Body=b"premier")
+    s3_server.client.put_object(Bucket="vericlaim-clean", Key="two/a.pdf", Body=b"second")
+
+    monkeypatch.setattr(module, "_safe_object_path", lambda bucket, key: Path("objects/collision.pdf"))
+
+    with pytest.raises(SystemExit) as excinfo:
+        module._capture_objects(s3_server.client, settings, tmp_path)
+    assert "Collision de chemins" in str(excinfo.value)
+    # Rien n'a été écrit deux fois : le premier objet est resté intact.
+    assert (tmp_path / "objects/collision.pdf").read_bytes() == b"premier"
+
+
+def test_every_distinct_key_is_archived_separately(tmp_path, live_postgres, s3_server, monkeypatch, capsys) -> None:
+    """Bout en bout : clés qui collisionnaient sont toutes présentes et distinctes."""
+
+    _storage_env(monkeypatch, s3_server.endpoint)
+    bodies = {
+        "a:b.pdf": b"deux-points",
+        "a_b.pdf": b"souligne",
+        "a<b.pdf": b"inferieur",
+        "folder/note.txt": b"barre-oblique",
+        "folder_note.txt": b"souligne-encore",
+    }
+    for key, body in bodies.items():
+        s3_server.client.put_object(Bucket="vericlaim-clean", Key=key, Body=body)
+
+    directory = _backup_with_objects(tmp_path, live_postgres, monkeypatch, capsys)
+    manifest = json.loads((directory / "manifest.json").read_text())
+
+    assert manifest["objects"] == len(bodies), "aucun objet ne doit être écrasé par un autre"
+    archives = [item["archive"] for item in manifest["object_artifacts"]]
+    assert len(set(archives)) == len(bodies), f"chemins d'archive non distincts: {archives}"
+    for item in manifest["object_artifacts"]:
+        assert (directory / item["archive"]).read_bytes() == bodies[item["key"]], item["key"]
+
+
+def test_idempotence_is_decided_on_bytes_not_metadata(tmp_path, live_postgres, s3_server, monkeypatch, capsys) -> None:
+    """Objet corrompu avec une métadonnée `sha256` correcte : refusé, pas « déjà présent ».
+
+    C'était le défaut : la comparaison portait sur la métadonnée, écrite par
+    l'appelant. Un objet corrompu après dépôt gardait la métadonnée de son
+    contenu d'origine, et la restauration le déclarait identique — succès
+    affiché, données fausses.
+    """
+
+    _storage_env(monkeypatch, s3_server.endpoint)
+    body = b"contenu de reference"
+    # Même LONGUEUR, contenu différent : sans cela, le contrôle de taille
+    # masquerait le défaut et le test passerait pour la mauvaise raison.
+    corrupted = b"contenu DE REFERENCE"
+    assert len(corrupted) == len(body) and corrupted != body
+    expected_sha = hashlib.sha256(body).hexdigest()
+    s3_server.client.put_object(Bucket="vericlaim-clean", Key="c/bytes.pdf", Body=body)
+    directory = _backup_with_objects(tmp_path, live_postgres, monkeypatch, capsys)
+
+    # Destination : bons métadonnées, mauvais octets, taille identique.
+    s3_server.client.put_object(
+        Bucket="vericlaim-restore",
+        Key="meta/c/bytes.pdf",
+        Body=corrupted,
+        Metadata={"sha256": expected_sha},
+    )
+    capsys.readouterr()
+
+    assert command_restore_objects(_restore_args(directory, prefix="meta/")) == 2, (
+        "des octets différents doivent être refusés même si la métadonnée est correcte"
+    )
+    report = json.loads(capsys.readouterr().out)
+    assert report["already_present"] == 0
+    assert report["refused"] is True
+    # Le refus peut venir de la taille (contrôle le moins coûteux) ou des
+    # octets ; les deux sont des preuves de contenu, aucune ne lit la métadonnée.
+    assert "taille différente" in report["collisions"][0]["reason"] or (
+        "contenu différent" in report["collisions"][0]["reason"]
+    )
+
+    survivor = s3_server.client.get_object(Bucket="vericlaim-restore", Key="meta/c/bytes.pdf")["Body"].read()
+    assert survivor == corrupted, "l'objet existant ne doit pas être modifié"
+
+
+def test_matching_bytes_are_recognised_even_without_metadata(
+    tmp_path, live_postgres, s3_server, monkeypatch, capsys
+) -> None:
+    """Inversement : octets identiques ⇒ reconnu, même sans aucune métadonnée."""
+
+    _storage_env(monkeypatch, s3_server.endpoint)
+    body = b"contenu strictement identique"
+    s3_server.client.put_object(Bucket="vericlaim-clean", Key="c/same.pdf", Body=body)
+    directory = _backup_with_objects(tmp_path, live_postgres, monkeypatch, capsys)
+
+    # Objet déposé par un autre outil : ni métadonnée sha256, ni traçabilité.
+    s3_server.client.put_object(Bucket="vericlaim-restore", Key="bare/c/same.pdf", Body=body)
+    capsys.readouterr()
+
+    assert command_restore_objects(_restore_args(directory, prefix="bare/")) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["already_present"] == 1
+    assert report["restored"] == 0
+
+
+def test_write_is_verified_by_rereading_the_stored_bytes(
+    tmp_path, live_postgres, s3_server, monkeypatch, capsys
+) -> None:
+    """Après écriture, les octets stockés sont relus et hachés.
+
+    Un `put_object` qui répond 200 ne prouve pas ce qui est stocké. On ne
+    déclare `verified_after_write` qu'après relecture.
+    """
+
+    _storage_env(monkeypatch, s3_server.endpoint)
+    s3_server.client.put_object(Bucket="vericlaim-clean", Key="c/readback.pdf", Body=b"relu apres ecriture")
+    directory = _backup_with_objects(tmp_path, live_postgres, monkeypatch, capsys)
+
+    assert command_restore_objects(_restore_args(directory, prefix="readback/")) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["verified_after_write"] is True
+    assert report["verified_how"] == "sha256 of the stored bytes, re-read after write"
+    assert report["unverified_too_large"] == []
+
+
+def test_oversized_objects_are_reported_unverified_never_assumed_identical(
+    tmp_path, live_postgres, s3_server, monkeypatch, capsys
+) -> None:
+    """Au-delà de la limite, l'objet est dit NON vérifié, pas « identique ».
+
+    On ne peut pas relire indéfiniment un stockage : la limite existe. Mais
+    dépasser la limite ne doit jamais se traduire par une affirmation de
+    succès — c'est exactement le raisonnement qui avait produit le défaut.
+    """
+
+    _storage_env(monkeypatch, s3_server.endpoint)
+    payload = b"x" * 4096
+    s3_server.client.put_object(Bucket="vericlaim-clean", Key="c/big.bin", Body=payload)
+    directory = _backup_with_objects(tmp_path, live_postgres, monkeypatch, capsys)
+
+    args = _restore_args(directory, prefix="big/")
+    args.verify_bytes_limit = 16  # volontairement trop petit
+    # L'écriture a bien lieu (l'objet était absent), mais la relecture ne peut
+    # pas conclure : le code de sortie est donc 2. Déclarer 0 reviendrait à
+    # affirmer un succès qu'on n'a pas vérifié — précisément le défaut corrigé.
+    assert command_restore_objects(args) == 2, "non vérifié ne doit pas sortir en succès"
+    first = json.loads(capsys.readouterr().out)
+    assert first["restored"] == 1, "l'objet a bien été écrit"
+    assert first["unverified_too_large"] == ["big/c/big.bin"]
+    assert first["verified_after_write"] is False, "non vérifié ≠ vérifié"
+    written = s3_server.client.get_object(Bucket="vericlaim-restore", Key="big/c/big.bin")["Body"].read()
+    assert written == payload, "l'écriture est réelle, seule la vérification a manqué"
+
+    # Rejeu : l'objet existant ne peut pas être comparé, donc il est refusé.
+    args2 = _restore_args(directory, prefix="big/")
+    args2.verify_bytes_limit = 16
+    assert command_restore_objects(args2) == 2
+    second = json.loads(capsys.readouterr().out)
+    assert second["already_present"] == 0
+    assert "trop volumineux" in second["collisions"][0]["reason"]
+
+
+# ---------------------------------------------------------------------------
+# Portabilité Windows.
+#
+# Une archive produite sur Linux doit rester exploitable sur Windows, et surtout
+# ne jamais y écraser un objet par un autre. Trois familles de noms désignent le
+# même fichier sous Windows alors qu'ils sont distincts sous Linux :
+#   - les points et espaces finaux  (file. / file / file␠)
+#   - les noms réservés de périphérique (CON, NUL, COM1…), avec extension
+#   - les variantes de casse
+# Une quatrième : la normalisation Unicode (NFC/NFD).
+# ---------------------------------------------------------------------------
+
+WINDOWS_RESERVED_NAMES = ["CON", "PRN", "AUX", "NUL"] + [f"COM{i}" for i in range(1, 10)] + [
+    f"LPT{i}" for i in range(1, 10)
+]
+
+
+def _windows_identity(path: str) -> str:
+    """Ce que Windows considère comme le même fichier que `path`.
+
+    Reproduit les règles qui comptent ici : casse ignorée, points et espaces
+    finaux retirés composant par composant.
+    """
+
+    return "/".join(component.rstrip(" .").lower() for component in str(path).split("/"))
+
+
+def _assert_all_distinct(keys: list[str], *, label: str) -> None:
+    """Vérifie qu'aucune paire de clés ne produit le même chemin (même sous Windows)."""
+
+    import vericlaim_backup as module
+
+    literal: dict[str, list[str]] = {}
+    windows: dict[str, list[str]] = {}
+    for key in keys:
+        path = str(module._safe_object_path("vericlaim-clean", key))
+        literal.setdefault(path, []).append(key)
+        windows.setdefault(_windows_identity(path), []).append(key)
+
+    literal_collisions = {path: k for path, k in literal.items() if len(k) > 1}
+    windows_collisions = {path: k for path, k in windows.items() if len(k) > 1}
+    assert literal_collisions == {}, f"{label}: chemins identiques {literal_collisions}"
+    assert windows_collisions == {}, f"{label}: même fichier sous Windows {windows_collisions}"
+
+
+def test_trailing_dot_and_space_do_not_collide() -> None:
+    """`file`, `file.`, `file␠` et `file..` sont quatre clés, quatre fichiers.
+
+    Windows retire silencieusement les points et espaces finaux : sans encodage,
+    ces quatre clés visaient un seul fichier et trois objets étaient perdus.
+    """
+
+    _assert_all_distinct(["file", "file.", "file ", "file..", "file...", "file ."], label="points finaux")
+
+    import vericlaim_backup as module
+
+    # Le nom déjà portable est conservé tel quel : la lisibilité est préservée.
+    assert module._safe_object_path("b", "file").name == "file"
+    # Les variantes ambiguës sont encodées, donc distinctes de `file`.
+    assert module._safe_object_path("b", "file.").name != "file"
+    assert module._safe_object_path("b", "file ").name != "file"
+
+
+def test_windows_reserved_names_are_encoded_with_and_without_extension() -> None:
+    """`CON`, `con.txt`, `COM1`, `lpt9.tar.gz`… : jamais écrits tels quels."""
+
+    keys: list[str] = []
+    for name in WINDOWS_RESERVED_NAMES:
+        keys.extend([name, name.lower(), f"{name}.txt", f"{name.lower()}.log", f"{name.lower()}.tar.gz"])
+    _assert_all_distinct(keys, label="noms réservés")
+
+    import vericlaim_backup as module
+
+    for name in WINDOWS_RESERVED_NAMES:
+        for candidate in (name, name.lower(), f"{name}.txt", f"{name.lower()}.log"):
+            produced = module._safe_object_path("b", candidate).name
+            assert module._is_windows_reserved(candidate)
+            assert produced.startswith("_"), f"{candidate} doit être encodé, obtenu {produced!r}"
+            assert not module._is_windows_reserved(produced), f"{produced!r} reste réservé"
+
+
+def test_case_variants_do_not_collide() -> None:
+    """`File.TXT`, `file.txt`, `FILE.TXT` : un seul est conservé, les autres encodés."""
+
+    _assert_all_distinct(["File.TXT", "file.txt", "FILE.TXT", "fIlE.tXt"], label="casse")
+
+    import vericlaim_backup as module
+
+    assert module._safe_object_path("b", "file.txt").name == "file.txt"
+    for variant in ("File.TXT", "FILE.TXT", "fIlE.tXt"):
+        assert module._safe_object_path("b", variant).name != "file.txt"
+
+
+def test_unicode_normalisation_forms_do_not_collide() -> None:
+    """NFC et NFD de « é » sont deux clés S3, un seul fichier sur macOS."""
+
+    import unicodedata
+
+    key_nfc = unicodedata.normalize("NFC", "é")
+    key_nfd = unicodedata.normalize("NFD", "é")
+    assert key_nfc != key_nfd
+    _assert_all_distinct([key_nfc, key_nfd, "e"], label="normalisation Unicode")
+
+
+def test_naming_is_injective_over_a_representative_corpus() -> None:
+    """Injectivité sur un corpus mêlant tous les pièges connus.
+
+    Ce test ne cherche pas des exemples : il vérifie l'absence de collision sur
+    l'ensemble, y compris en appliquant les règles Windows.
+    """
+
+    corpus = [
+        "file", "file.", "file ", "file..", "FILE", "File.TXT", "file.txt",
+        "CON", "con", "CON.txt", "con.tar.gz", "NUL", "nul.gz", "COM1", "com1.tar.gz", "LPT9",
+        "a:b.pdf", "a_b.pdf", "a<b.pdf", "a?b.pdf", "a*b.pdf", "a|b.pdf", "a\"b.pdf",
+        "a\\b.pdf", "a/b.pdf", "a//b.pdf", "dir/file.txt", "dir_file.txt", "x/y/z.pdf",
+        "../esc.pdf", "esc.pdf", "/leading.pdf", "trailing.pdf/", ".", "..", "", "///",
+        "é.pdf", "e\u0301.pdf", "with space.pdf", " leading-space.pdf", "trailing-space.pdf ",
+        "tab\tchar.pdf", "newline\nchar.pdf", "ÜBER.pdf", "uber.pdf", "文件.pdf", "🙂.pdf",
+        "point.", "point..", "point...", "x" * 300, "x" * 300 + "y",
+    ]
+    _assert_all_distinct(corpus, label="corpus représentatif")
+
+
+def test_pathological_keys_remain_confined() -> None:
+    """Aucune clé, même hostile, ne sort du répertoire de sauvegarde."""
+
+    import vericlaim_backup as module
+
+    for key in ("../../etc/passwd", "..\\..\\windows\\system32", "/etc/passwd", "//x", "a\\..\\..\\b", "..", "."):
+        path = module._safe_object_path("vericlaim-clean", key)
+        assert not path.is_absolute(), key
+        assert ".." not in path.parts, f"{key} -> {path}"
+        assert path.parts[0] == "objects", path
+
+
+def test_backup_keeps_every_windows_ambiguous_object_separately(
+    tmp_path, live_postgres, s3_server, monkeypatch, capsys
+) -> None:
+    """Parcours réel : des clés ambiguës sous Windows sont toutes sauvegardées.
+
+    Ce test ne porte pas sur `_safe_object_path` seule : il vérifie que la
+    sauvegarde **réelle** ne perd aucun objet et que chaque archive contient les
+    octets de sa propre clé.
+    """
+
+    _storage_env(monkeypatch, s3_server.endpoint)
+    bodies = {
+        "docs/file": b"file",
+        "docs/file.": b"file-point",
+        "docs/file ": b"file-espace",
+        "docs/CON": b"con",
+        "docs/con.txt": b"con-txt",
+        "docs/COM1": b"com1",
+        "docs/com1.log": b"com1-log",
+        "docs/File.TXT": b"casse-majuscule",
+        "docs/file.txt": b"casse-minuscule",
+    }
+    for key, body in bodies.items():
+        s3_server.client.put_object(Bucket="vericlaim-clean", Key=key, Body=body)
+
+    directory = _backup_with_objects(tmp_path, live_postgres, monkeypatch, capsys)
+    manifest = json.loads((directory / "manifest.json").read_text())
+
+    assert manifest["objects"] == len(bodies), "tous les objets doivent être sauvegardés"
+    archives = [item["archive"] for item in manifest["object_artifacts"]]
+    assert len(set(archives)) == len(bodies), f"chemins d'archive non distincts: {archives}"
+    for item in manifest["object_artifacts"]:
+        assert (directory / item["archive"]).read_bytes() == bodies[item["key"]], item["key"]
+
+    # Et la restauration rend chaque objet à sa propre clé source.
+    assert command_restore_objects(_restore_args(directory, prefix="win/")) == 0
+    restored = {
+        entry["Key"]: entry
+        for entry in s3_server.client.list_objects_v2(Bucket="vericlaim-restore").get("Contents", [])
+    }
+    assert len(restored) == len(bodies), f"objets restaurés en double ou manquants: {sorted(restored)}"
+    for key, body in bodies.items():
+        destination = s3_server.client.get_object(Bucket="vericlaim-restore", Key=f"win/{key}")["Body"].read()
+        assert destination == body, f"contenu incorrect pour {key!r}"
+
+
+def test_guard_still_aborts_if_a_collision_survives_encoding(tmp_path, s3_server, monkeypatch) -> None:
+    """Même avec des noms encodés, la garde refuse une collision résiduelle.
+
+    On force deux clés à produire le même *alias Windows* et on vérifie que la
+    sauvegarde s'interrompt au lieu d'écraser.
+    """
+
+    import vericlaim_backup as module
+
+    settings = {
+        "endpoint": s3_server.endpoint,
+        "access_key": "test",
+        "secret_key": "test",
+        "region": S3_REGION,
+        "buckets": ["vericlaim-clean"],
+    }
+    s3_server.client.put_object(Bucket="vericlaim-clean", Key="one.pdf", Body=b"premier")
+    s3_server.client.put_object(Bucket="vericlaim-clean", Key="two.pdf", Body=b"second")
+
+    # Nommage volontairement non injectif : "one.pdf" et "two.pdf" se replient
+    # tous deux sur le même chemin.
+    monkeypatch.setattr(module, "_safe_object_path", lambda bucket, key: Path("objects/x~same"))
+
+    with pytest.raises(SystemExit) as excinfo:
+        module._capture_objects(s3_server.client, settings, tmp_path)
+    assert "Collision de chemins" in str(excinfo.value)
+    assert (tmp_path / "objects/x~same").read_bytes() == b"premier", "le premier objet reste intact"

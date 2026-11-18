@@ -1,8 +1,14 @@
 # 12 — Registre des anomalies
 
 **Date :** 12 novembre 2026
-**Base :** `b289652a383bfe385c531ff4fb25a5f1535f74c7` (branche `main`)
-**SHA de correction :** `fa31e0a8145fc86cda04b466989af100cf1eeeda` (puis `a73e1d5` pour A-13)
+**Base :** `c73b12fd663e744dcda153bc35b0166fb977feaa` (branche `main`, après fusion de la PR #14)
+**SHA de correction :** mission 3 `fa31e0a8`/`a73e1d5` (A-13) ; mission 4 sur la branche `arena/64dc27b3-vericlaim`
+
+**Règle de lecture de ce registre.** Trois états seulement, et jamais confondus :
+**corrigé** (défaut reproduit, correction testée, preuve exécutée),
+**partiel** (une partie est prouvée, le reste dépend d'une ressource externe),
+**ouvert** (rien n'est prouvé). Un statut « partiel » n'est pas une manière polie
+de dire « vert » : il nomme précisément ce qui manque.
 **Périmètre :** recette technique uniquement, aucune donnée client
 
 Chaque anomalie indique : comment elle a été **observée**, sa cause vérifiée, ce
@@ -18,11 +24,11 @@ base d'un raisonnement : elle est close sur une observation.
 | A-03 | Dossier probatoire ZIP en erreur 500 | P1 | **corrigé** |
 | A-04 | La suite de tests ne voyait pas les défauts ci-dessus | P1 | **corrigé** |
 | A-05 | Preview sans `DATABASE_URL` servie par un SQLite jetable | P1 | **corrigé** |
-| A-06 | Aucun worker/cron sur Vercel : les files ne sont jamais drainées | **P1** | **ouvert** |
-| A-07 | Aucun antivirus réel n'a pu être exécuté | **P0 pour un pilote** | **ouvert** (environnement) |
-| A-08 | Aucune sauvegarde automatisée, stockage objet non couvert | **P0 pour un pilote** | **ouvert** |
-| A-09 | Aucun monitoring proactif (métriques, alertes) | P1 | **ouvert** |
-| A-10 | `vericlaim` : TLS PostgreSQL non vérifiable, `verify_runtime.py` jamais exécuté avec succès | P1 | **ouvert** |
+| A-06 | Aucun worker/cron sur Vercel : les files ne sont jamais drainées | **P1** | **corrigé côté code** — déploiement du runtime : **à faire par l'équipe** |
+| A-07 | Aucun antivirus réel n'a pu être exécuté | **P0 pour un pilote** | **partiel** — code fail-closed + readiness corrigés ; **moteur réel non déployé** |
+| A-08 | Sauvegarde non planifiée ; stockage objet sauvegardé mais non qualifié sur S3 managé | **P0 pour un pilote** | **partiel** — base et **objets** sauvegardés/restaurés et testés ; **planification absente** |
+| A-09 | Aucun monitoring proactif (métriques, alertes) | P1 | **partiel** — instrumentation + règles livrées ; **alertes jamais observées** |
+| A-10 | `vericlaim` : TLS PostgreSQL non vérifiable, `verify_runtime.py` jamais exécuté avec succès | P1 | **partiel** — vérificateur livré, **fuite d'information corrigée** ; preuve TLS sur vraie URL non exécutée |
 | A-11 | Import d'un PDF volumineux refusé par la limite par défaut (2 Mo) | P2 | **atténué** |
 | A-12 | Le job CI de recette ne pouvait pas s'installer (python 3.13 vs wheels `pgserver`) | P1 | **corrigé** |
 | A-14 | Le harnais laissait un serveur Uvicorn orphelin après toute exception | P1 | **corrigé** |
@@ -159,131 +165,356 @@ sur ces plateformes. Développement local inchangé.
 
 ## A-06 — Aucun worker ni cron sur Vercel : les files ne sont jamais drainées
 
-**Sévérité : P1 (bloque le parcours métier sur la Preview).**
-**Statut : OUVERT — décision d'architecture requise, hors de ma portée.**
+**Sévérité : P1 (bloque le parcours métier hors Compose).**
+**Statut : CORRIGÉ côté code — le déploiement du runtime reste à faire par l'équipe.**
 
-**Observation.** Prouvé par contraste sur la pile réelle :
+**Défaut constaté.** Prouvé par contraste sur la pile réelle : workers lancés →
+`job=completed`, `segments=1`, `claims=3` ; workers non lancés → `pending` /
+`queued` indéfiniment, **aucune** transition. `vercel.json` n'a aucune clé
+`crons`. Les workers n'exposaient que `run_forever()` : pas d'arrêt propre, pas
+de battement de santé, pas de moyen de savoir si un worker était vivant, bloqué
+ou absent.
 
-| Condition | Résultat observé |
+**Correction réalisée.**
+
+| Élément | Ce qui a été ajouté |
 |---|---|
-| workers lancés | `job=completed`, `segments=1`, `claims=3` |
-| workers **non** lancés | `pending` / `queued` après attente, **aucune** transition |
+| `app/workers/runtime.py` | `WorkerRuntime` : boucle bornée (`max_iterations`), arrêt sur SIGTERM/SIGINT, drain à délai borné, concurrence avec `worker_id` **distincts** (`base#1…`, exigés par le fencing) |
+| santé | fichier JSON atomique : `heartbeat_at`, `iterations`, `jobs_processed`, `last_error`, `stopping` |
+| sonde | `python -m app.worker_healthcheck --file …` → sortie 0/1, utilisable en `HEALTHCHECK` Docker ou `ExecStartPost` systemd |
+| workers | les **deux** workers (`document_extraction`, `analysis_detection`) construisent leur runtime et sortent via `SystemExit(runtime.run())` |
+| robustesse | une itération en erreur est journalisée puis la boucle continue ; elle ne tue pas le worker |
 
-Et lecture de `vercel.json` : **aucune clé `crons`**. Les workers n'exposent que
-`run_forever()`, adapté à un processus long (Compose, conteneur), pas à un
-déploiement serverless.
+**Tests exécutés.** `backend/tests/test_worker_runtime_lifecycle.py` — **8/8**.
+Mordant vérifié : en retirant l'initialisation `did_work = False`, le test
+d'itération en erreur échoue (1 failed, 7 passed) — le test détecte donc bien le
+défaut qu'il vise.
 
-**Conséquence.** Sur la Preview, un import reste `pending`, une analyse reste
-`queued`. Le parcours s'arrête après l'upload. Ce n'est pas un bug : c'est
-l'architecture cible du produit (traitement long, OCR) confrontée à un hébergement
-sans processus long.
+**Preuve.** `pytest backend/tests/test_worker_runtime_lifecycle.py` → 8 passed.
+Suite complète : **290 passed, 32 skipped**.
 
-**Ce qui est déjà bon.** L'absence de worker **ne fabrique aucun succès** : la file
-ne bouge pas, rien n'est marqué lu (étapes 53–54). Le comportement est honnête ;
-c'est la fonctionnalité qui manque.
+**Ce qui reste bloqué.** Le code ne déploie rien. Pour que la file soit drainée
+en recette, l'équipe doit :
 
-**Trois options à trancher (aucune décidée ici) :**
-1. exécution planifiée (`crons` Vercel ou planificateur externe) appelant une route
-   **idempotente** qui exécute `run_once()` un nombre borné de fois — le moins
-   intrusif, mais ajoute une surface HTTP à protéger ;
-2. service worker **hors Vercel** (conteneur identique à Compose) ;
-3. file managée + runtime adapté.
+1. exécuter les images `document-worker` / `analysis-worker` sur un runtime à
+   processus long (conteneur, VM, service managé) — **pas** un environnement
+   serverless ;
+2. monter le fichier de santé sur un volume et brancher la sonde
+   (`app.worker_healthcheck`) sur le superviseur ;
+3. si l'hébergement reste Vercel seul : **choisir** l'option cron planifié
+   appelant une route idempotente. Cette route **n'existe pas** et n'est pas
+   ajoutée ici — l'ajouter sans décision d'architecture aurait été une surface
+   HTTP non demandée.
 
-**Recommandation.** Option 2 pour un pilote (elle ne change pas le produit, elle
-change l'hébergement des workers) ; option 1 si l'on veut rester sur Vercel.
+**Options d'architecture, toujours non tranchées** (aucune décidée dans ce
+chantier) : (1) cron Vercel appelant une route idempotente ; (2) service worker
+hors Vercel ; (3) file managée + runtime adapté. Recommandation inchangée :
+option 2 pour un pilote.
 
 ---
 
 ## A-07 — Aucun antivirus réel n'a pu être exécuté
 
-**Sévérité : **P0 pour un pilote ingérant des pièces tierces**.**
-**Statut : OUVERT — limite d'environnement, non contournable ici.**
+**Sévérité : P0 pour un pilote ingérant des pièces tierces.**
+**Statut : PARTIEL — code corrigé et testé, moteur réel NON déployé.**
 
-**Observation.** `apt` indisponible, root absent, aucun dépôt joignable :
-`libclamav`, `clamd`, `freshclam` et la base de signatures ne sont pas
-installables. Aucune détection réelle n'a donc été exercée.
+**Défaut constaté.** Deux défauts distincts, tous deux réels :
 
-**Ce qui est prouvé malgré tout** (voir `06`) : le client clamd INSTREAM respecte
-le protocole, l'EICAR est refusé (422, `upload.status=rejected`), aucune version
-n'est promue, et toute erreur ou indétermination clamd est traitée comme une
-erreur — **jamais** comme un « propre ».
+1. **aucun moyen de savoir si le scanner répondait.** `/readyz` exposait
+   `malware_scanner: configured` — c'est-à-dire « une variable est définie », pas
+   « un moteur analysera vos fichiers ». Une configuration correcte avec un
+   clamd mort produisait exactement la même readiness qu'un système sain ;
+2. `apt` indisponible, root absent, dépôts injoignables : `clamd`,
+   `freshclam` et les signatures ne sont pas installables dans l'environnement
+   d'exécution de l'agent. Aucune détection par un vrai moteur n'a donc pu être
+   exercée ici.
 
-**Aggravant.** `scan_signature_version` n'est jamais renseigné, donc même avec un
-vrai moteur, la preuve « analysé avec la base X » ne serait pas auditable.
+**Correction réalisée.**
 
-**À faire avant un pilote.** Déployer un vrai `clamd` (ou un service managé),
-vérifier `/readyz` → `malware_scanner: configured`, exécuter l'EICAR **sur la
-Preview**, renseigner la version de signatures, documenter la politique de
-quarantaine. **Ne pas communiquer « antivirus opérationnel » avant cela.**
+| Élément | Correction |
+|---|---|
+| `documents/scanner.py` | `healthcheck()` au Protocol et aux 3 implémentations. `ClamAvMalwareScanner` envoie un vrai **`PING`** et attend `PONG` (avec le NUL terminal et la fermeture de connexion du protocole clamd) |
+| verdicts | `None` = joignable ; `scanner_unreachable` ; `scanner_unexpected_reply` ; `scanner_disabled` |
+| `/readyz` | expose `malware_scanner_reachable` et `malware_scanner_reason`, **sans renommer** `malware_scanner` (`configured`/`disabled`) : les runbooks existants continuent de fonctionner |
+| `document_import` | passe à `refused` si le scanner n'est **pas joignable** — le fail-closed ne dépend plus d'une simple variable |
+| readiness du processus | `/readyz` **reste 200** si seul le scanner manque : la base conditionne la readiness, l'antivirus conditionne l'import. Décision explicite, documentée en test |
+
+**Tests exécutés.** `backend/tests/test_a07_scanner_readiness.py` — **8/8**,
+contre un faux démon clamd en TCP local : EICAR refusé, fichier sain accepté,
+service absent, réponse inattendue, réseau coupé.
+
+Un défaut réel a été trouvé **par** ces tests : `bytes.strip()` ne retire pas
+les NUL, donc `PONG\x00` n'était jamais reconnu comme `PONG`. Corrigé
+(`strip(b"\x00 \r\n")`). Sans le test, la sonde aurait déclaré tout clamd sain
+comme injoignable — ou l'inverse selon la tolérance.
+
+**Preuve.** `pytest backend/tests/test_a07_scanner_readiness.py` → 8 passed.
+
+**Limite explicite, écrite dans le test lui-même.** Le verdict EICAR vient d'un
+**serveur de test**, pas du moteur ClamAV. Ce qui est prouvé : le protocole, le
+fail-closed, la readiness. Ce qui **n'est pas** prouvé : qu'un vrai ClamAV
+détecte un vrai EICAR avec des signatures à jour.
+
+**Ce qui reste bloqué.** Déployer un vrai `clamd`, vérifier
+`/readyz → malware_scanner_reachable: true`, rejouer l'EICAR **sur la vraie
+URL**, renseigner `scan_signature_version` (toujours jamais rempli — la preuve
+« analysé avec la base X » reste non auditable), documenter la quarantaine.
+**Ne pas communiquer « antivirus opérationnel » avant cela.**
 
 ---
 
-## A-08 — Aucune sauvegarde automatisée ; stockage objet non couvert
+## A-08 — Sauvegarde non planifiée ; stockage objet sauvegardé, non qualifié sur S3 managé
 
-**Sévérité : **P0 pour un pilote avec données réelles**.**
-**Statut : OUVERT (mais une restauration a été exercée).**
+**Sévérité : P0 pour un pilote avec données réelles.**
+**Statut : PARTIEL — base et objets sauvegardés, vérifiés et restaurés par des
+tests réels ; planification absente ; aucun exercice sur un stockage managé.**
 
-**Observation.** Aucun script, aucune tâche, aucun workflow de sauvegarde dans le
-dépôt ; aucune politique de rétention, de chiffrement, de RPO/RTO ; aucune
-procédure de restauration. Les objets de stockage ne sont couverts par rien.
+**Défaut constaté.** Aucun script, aucune tâche, aucun workflow de sauvegarde ;
+aucune politique de rétention ; aucun moyen de vérifier qu'une archive était
+intègre avant de compter dessus. Le dépôt savait **restaurer**
+(`tools/recette/restore.py`) mais pas **produire une archive vérifiable**.
 
-**Ce qui a été fait.** Un aller-retour complet réel a **été exécuté** sur une cible
-isolée (`tools/recette/restore.py`) : export `pg_dump`, restauration dans une
-**autre** base, réattribution de propriété, grants revus, puis vérification de la
-révision Alembic, des données, du RLS et **de la chaîne d'audit recalculée**.
+**Correction réalisée.** `tools/backup/vericlaim_backup.py` :
 
-```
-revision_preserved: true | all_organizations_present: true
-restored_audit_chain_valid: true | rls_protected_tables: 26
-rows_visible_without_tenant_context: 0 | restore_seconds: 0.53
-```
+| Sous-commande | Ce qu'elle fait |
+|---|---|
+| `backup` | `pg_dump` format custom + inventaire du stockage objet → `manifest.json` (taille et SHA-256 de **chaque** pièce, révision Alembic, compteurs par table) |
+| `verify` | recalcule taille et SHA-256, sortie **2** si l'archive est tronquée ou altérée |
+| `prune` | `--keep-last`, `--max-age-days` ; le dernier jeu n'est **jamais** supprimé |
+| `restore` | crée une base **neuve** `vericlaim_restore_<horodatage>`, refuse une base existante, compare révision et compteurs au manifeste |
 
-**Deux obstacles réels découverts**, qui doivent entrer dans le runbook : (a)
-`pg_restore --no-owner` recrée les objets au nom de l'utilisateur courant, donc la
-propriété doit être réattribuée **avant** les grants ; (b) les **rôles** ne sont
-pas dans le dump — ils doivent être recréés.
+Aucune chaîne de connexion n'est acceptée en argument : elle passe par une
+variable d'environnement. Les rapports passent par `redact_dsn` et ne
+contiennent ni mot de passe ni DSN.
 
-**Reste à faire.** Sauvegarde Neon (PITR, rétention, chiffrement, responsable) **et**
-sauvegarde des objets, avec réconciliation version ↔ objet.
+**Tests exécutés.** `backend/tests/test_a08_backup_restore.py` — **36/36**
+(8 pour la base, 28 pour les objets) contre un **vrai** PostgreSQL 16 jetable
+(`pgserver`) et un **serveur S3 moto** en processus (protocole HTTP réel, mais
+serveur de test — voir la limite plus bas) :
+
+| Test | Ce qu'il verrouille |
+|---|---|
+| manifeste ↔ archive | SHA-256 et taille enregistrés = valeurs recalculées |
+| archive tronquée | `verify` sort 2 avec un motif explicite |
+| archive altérée (même taille) | détectée par le SHA-256 |
+| restauration | base neuve, révision préservée, compteurs identiques, source intacte |
+| cible absente | aucune restauration tentée (`SystemExit`) |
+| rétention | ne vide jamais le magasin, garde bien les N derniers |
+| `redact_dsn` | ni mot de passe ni DSN dans le rapport |
+| objets S3 (20 tests) | octets archivés, `missing` signalé, clé hostile neutralisée, archive altérée détectée, restauration vers destination distincte, rejeu idempotent, collision refusée, source jamais modifiée |
+| nommage de l'archive | **injectif** : 23 clés piégeuses ⇒ 23 chemins, aucune collision ; garde qui **interrompt** la sauvegarde si une collision apparaît |
+| portabilité Windows (8 tests) | `file`/`file.`/`file `, noms réservés `CON`/`NUL`/`COM1-9`/`LPT1-9` avec ou sans extension, variantes de casse, NFC/NFD ⇒ chemins distincts, y compris dans le parcours réel de sauvegarde **et** de restauration |
+| idempotence | décidée sur les **octets relus**, jamais sur la métadonnée auto-déclarée |
+
+Un défaut relevé et corrigé pendant ce chantier : le calcul de `kept` dans
+`prune` était maladroit (reconstruction des chemins depuis les noms). Remplacé
+par un calcul direct sur les noms.
+
+**Preuve.** `pytest backend/tests/test_a08_backup_restore.py` → **36 passed**
+(PostgreSQL 16 réel et serveur S3 moto inclus).
+
+**RPO/RTO — mesure, pas promesse.**
+
+| Grandeur | Valeur mesurée / statut |
+|---|---|
+| RTO mesuré (restauration d'un schéma vide) | **~3 s** — sans valeur pour la production |
+| RTO attendu à l'échelle réelle | **non mesuré** : aucune base de taille réaliste n'a été sauvegardée ici |
+| RPO | **dépend entièrement de la planification**, qui n'existe pas : aujourd'hui le RPO réel est « depuis la dernière exécution manuelle » |
+
+Le runbook `docs/runbooks/incident-sauvegarde.md` documente la procédure
+complète, y compris ce qu'il ne couvre pas.
+
+**Correction complémentaire (objets réels).** La version précédente ne
+sauvegardait que l'*inventaire* des objets : elle n'aurait pas permis de
+restaurer un fichier perdu. Le script archive désormais les **octets**
+(`objects/<bucket>/<clé>`), avec une entrée de manifeste par objet (bucket
+source, clé, taille, SHA-256, métadonnées), la vérification de ces contenus par
+`verify`, et une commande `restore-objects` :
+
+* destination **explicite** (bucket + préfixe) ; refus si elle désigne la source ;
+* **aucun écrasement** : objet identique reconnu (idempotent), objet différent
+  ⇒ refus global **avant** toute écriture ;
+* contrôle après écriture, puis comparaison des ETags source pour prouver
+  qu'aucune donnée source n'a bougé.
+
+**Ce qui reste bloqué.** (a) **planification** : aucune tâche cron/workflow
+n'appelle le script — c'est une décision d'hébergement, pas de code ;
+(b) **durabilité du stockage managé** : la restauration est prouvée contre un
+serveur S3 moto, **pas** contre S3/MinIO de production — versioning, réplication
+et chiffrement au repos ne sont pas démontrés ;
+(c) **Neon** (PITR, rétention, chiffrement, responsable) : hors de portée de
+l'agent (voir `03` §0) ; (d) les rôles ne sont pas dans le dump et doivent être
+recréés, puis les grants réappliqués — c'est dans le runbook.
 
 ---
 
 ## A-09 — Aucun monitoring proactif
 
 **Sévérité : P1 pour un pilote.**
-**Statut : OUVERT.**
+**Statut : PARTIEL — instrumentation et règles livrées ; aucune alerte observée.**
 
-**Observation.** `/readyz` et le journal d'audit sont solides, les logs sont utiles
-et sans secret — mais **aucune métrique et aucune alerte** n'existent. Un worker
-arrêté (A-06) ou une file qui gonfle ne se voit que si quelqu'un regarde.
+**Défaut constaté.** Aucune métrique, aucune alerte. Un worker arrêté (A-06) ou
+une file qui gonfle ne se voyait que si quelqu'un regardait. `/readyz` répond
+« prêt / pas prêt » et ne dit jamais *pourquoi*.
 
-**À faire.** Définir a minima : disponibilité (`/readyz`), taux de 5xx, base
-injoignable, worker inactif avec file non vide, hausse des échecs de scan et d'OCR,
-profondeur de file. Aucune de ces alertes n'existe aujourd'hui.
+**Correction réalisée.**
+
+| Pièce | Contenu |
+|---|---|
+| `app/core/metrics.py` | registre Prometheus sans dépendance, **verrouillé** (les routes FastAPI tournent en pool), histogramme de latence, compteurs par gabarit de route |
+| `app/core/metrics_middleware.py` | mesure HTTP ; `/healthz`, `/readyz`, `/metrics` **exclus** (sinon le superviseur fausserait le taux d'erreur) ; le **gabarit** de route est exporté, jamais l'URL reçue |
+| `app/core/queue_metrics.py` | profondeur par état et **âge du plus vieux job en attente**, lus **en base** |
+| `GET /metrics` | export Prometheus, y compris `database_up`, `scanner_reachable`, files |
+| `infra/monitoring/alerts.yml` | 9 règles, chacune avec cause probable et runbook |
+| `infra/monitoring/worker_heartbeat_exporter.py` | convertit le battement du worker en métrique d'âge |
+| `docs/runbooks/` | 5 runbooks, tous référencés par les règles |
+
+**Décision de conception : les métriques de file sont lues en base, pas tenues
+par le worker.** Un compteur en mémoire du worker vaudrait zéro quand le worker
+est mort — précisément l'état que l'alerte doit détecter. Même raison pour
+l'exportateur de battement : un âge calculé par un tiers est sans ambiguïté,
+alors qu'une métrique « poussée » disparaît avec le processus bloqué.
+
+**Tests exécutés.** `backend/tests/test_a09_metrics_and_alerts.py` — **8/8** :
+séries réellement présentes, routes de santé exclues, aucun identifiant dans
+les labels, compteur sans perte sous 8 threads × 500 incréments, règles YAML
+valides, **chaque runbook existe réellement sur disque**, seuils testés
+juste-au-dessus / juste-en-dessous, exportateur rendant `+Inf` quand le
+fichier manque (et non `0`, qui se lirait « parfaitement sain »), profondeur de
+file lue en base.
+
+Deux défauts trouvés par ces tests : une alerte sans `cause` (ajoutée) et une
+assertion de seuil que j'avais écrite de façon erronée (corrigée).
+
+**Preuve.** `pytest backend/tests/test_a09_metrics_and_alerts.py` → 8 passed.
+`GET /metrics` retourne 200 avec les séries attendues (vérifié en TestClient).
+
+**Distinction exigée par la mission, tenue explicitement :**
+
+| Niveau | État réel |
+|---|---|
+| **Instrumentation présente** | **OUI** — `/metrics` sert des séries réelles, testées |
+| **Alertes configurées** | **OUI** — `alerts.yml`, valide et vérifié par test |
+| **Alertes observées** | **NON** — aucun Prometheus ni Alertmanager n'a tourné ; aucune alerte n'a été reçue, aucune n'a été **vue** se déclencher |
+
+Les tests de seuils rejouent la logique de comparaison sur des valeurs
+choisies ; ce n'est **pas** un Prometheus réel. Le dernier niveau reste donc
+non atteint, et c'est écrit ici plutôt que sous-entendu.
+
+**Ce qui reste bloqué.** Déployer un collecteur (Prometheus ou équivalent),
+brancher l'exportateur de battement, router les alertes vers un canal réel
+(e-mail/astreinte), et **provoquer** au moins une alerte en recette pour
+prouver le chemin de bout en bout. Aucun de ces trois points n'est fait.
 
 ---
 
 ## A-10 — TLS PostgreSQL et `verify_runtime.py` non validés
 
 **Sévérité : P1 (preuve manquante, pas défaut produit connu).**
-**Statut : OUVERT — impossible ici.**
+**Statut : PARTIEL — vérificateur livré et testé ; preuve TLS sur vraie URL non exécutée.**
 
-**Observation.** `infra/neon/verify_runtime.py` exige un TLS actif. Le PostgreSQL
-utilisé pour ce chantier est compilé **sans SSL** ; toutes les tentatives se sont
-arrêtées sur :
+**Défaut constaté.** Deux problèmes, dont un documentaire qui comptait autant que
+le technique :
+
+1. `infra/neon/verify_runtime.py` exige un TLS actif et n'avait **jamais**
+   réussi : le PostgreSQL local est compilé sans SSL, toutes les tentatives
+   s'arrêtaient sur `RuntimeError: Refusing database operation: PostgreSQL TLS
+   is not active.` C'était une preuve négative utile, pas la validation
+   attendue ;
+2. la documentation attribuait la responsabilité de Neon à un « assistant » et
+   laissait entendre que **l'équipe n'avait pas accès à Neon**. C'est faux :
+   l'équipe de pilotage est propriétaire du projet. La limite réelle est celle
+   de **l'environnement d'exécution de l'agent** (`api.neon.tech` injoignable),
+   pas celle de l'équipe. **Corrigé** : nouvelle section §0 de
+   `docs/infrastructure/03-neon-et-runtime.md`, avec la commande exacte que
+   l'équipe peut lancer.
+
+**Correction réalisée.** `tools/runtime_check/verify_runtime_identity.py`,
+**lecture seule** (aucune écriture de schéma, de rôle ou de donnée) :
+
+| Contrôle | Écart signalé |
+|---|---|
+| TLS réellement actif | `tls_inactive` (connexion refusée si TLS exigé) |
+| rôle runtime ≠ superutilisateur | `runtime_role_is_superuser` |
+| rôle runtime sans droit DDL | `runtime_role_can_create_schema_objects` |
+| rôle attendu | `unexpected_role:<nom>` |
+| révision Alembic | `alembic_version_missing` |
+| RLS activé + forcé + policy, sur 9 tables | `rls_disabled:*`, `rls_not_forced:*`, `rls_no_policy:*` |
+
+Le DSN n'est **jamais** un argument : il vient d'une variable d'environnement,
+donc il ne finit pas dans l'historique du shell. Le rapport ne contient ni DSN,
+ni mot de passe, ni hôte.
+
+**Tests exécutés.** `backend/tests/test_a10_runtime_identity.py` — **9 passed,
+1 skipped**, sur un cluster PostgreSQL 16 réel avec rôles jetables :
+
+| Test | Résultat |
+|---|---|
+| schéma conforme → aucun écart RLS | passé |
+| rôle superutilisateur détecté | passé |
+| rôle applicatif sans privilège DDL | passé |
+| rôle inattendu signalé | passé |
+| base non migrée → écart, **pas** de plantage | passé |
+| TLS exigé par défaut (port fermé) | passé |
+| DSN absent → aucune cible inventée | passé |
+| DSN jamais présent dans le rapport | passé |
+| production refuse une URL non chiffrée | passé |
+| **TLS réel sur vraie URL Neon** | **SKIPPED** — `VERICLAIM_STAGING_RUNTIME_URL` absente |
+
+Trois défauts trouvés par ces tests, tous réels : une base sans
+`alembic_version` faisait **planter** le vérificateur (trace brute au lieu d'un
+rapport d'écart) ; une base injoignable produisait également une trace ; et
+**le rapport d'échec restituait le message brut du pilote** — donc l'hôte, le
+port, parfois l'utilisateur. Les trois sont corrigés : connexion en autocommit,
+erreurs converties en codes, et **plus aucun message d'exception exposé**.
+
+**Fuite d'information corrigée (revue du 18 novembre).** `main()` renvoyait
+`detail: str(exc)`. Une simple tentative vers un hôte inexistant affichait :
 
 ```
-RuntimeError: Refusing database operation: PostgreSQL TLS is not active.
+"detail": "failed to resolve host 'sentinel-host.example': [Errno -2] ..."
 ```
 
-C'est une **preuve négative utile** (le garde refuse bien une connexion non
-chiffrée), mais ce n'est pas la validation attendue : la commande n'a **jamais**
-réussi. Neon et `api.neon.tech` sont hors de portée réseau.
+et un `RuntimeError` construit ailleurs avec le DSN dans son texte était imprimé
+tel quel. Le rapport porte désormais un **code stable** et rien d'autre
+(`connection_failed`, `authentication_failed`, `connection_string_invalid`,
+`connection_timeout`, `tls_inactive`, `unexpected_error`). Le message reste
+**inspecté** pour choisir le code, jamais restitué. La classe
+`TlsRequiredError` est dédiée : elle distingue *notre* refus maîtrisé d'un
+`RuntimeError` venu d'ailleurs.
 
-**À faire.** Exécuter, par l'assistant :
-`python infra/neon/verify_runtime.py --expected-revision a7d4c9e2b510` sur la base
-staging, et fournir la sortie. Le script doit être considéré comme **non validé**
-tant que ce n'est pas fait.
+**Tests sentinelles (8).** Chaque scénario injecte des valeurs reconnaissables
+dans le mot de passe, l'utilisateur, l'hôte, le nom de base et les options,
+puis vérifie **stdout ET stderr** :
+
+| Scénario | Nature |
+|---|---|
+| hôte non résoluble | réel (psycopg) |
+| connexion refusée | réelle (port fermé) |
+| **authentification refusée** | **réelle** : cluster jetable en `scram-sha-256`, mauvais mot de passe |
+| chaîne de connexion illisible | réelle (paramètre invalide) |
+| TLS refusé | injectée |
+| exception inattendue portant le DSN | injectée — c'est le cas qui fuitait |
+| codes déclarés | garde : aucun code non déclaré ne peut être émis |
+| classifieur | ne retourne que des codes |
+
+Mordant vérifié : en réintroduisant le champ `detail`, **5 tests échouent**.
+
+**Preuve.** `pytest backend/tests/test_a10_runtime_identity.py` → 9 passed,
+1 skipped. Le skip **est** le résultat honnête : la preuve qui compte n'est pas
+exécutable ici.
+
+**Ce qui reste bloqué.** Exécuter, **par un membre de l'équipe** (qui a l'accès
+Neon) :
+
+```bash
+export DATABASE_RUNTIME_URL='postgresql://vericlaim_app@<hôte>/<base>?sslmode=require'
+python tools/runtime_check/verify_runtime_identity.py --expected-role vericlaim_app --json
+```
+
+Tant que la sortie n'est pas rapportée, la ligne « TLS réel actif » reste
+**non prouvée**. Aucun rôle, privilège ou policy Neon n'a été modifié — voir
+`03` §0 : l'accès appartient à l'équipe, pas à l'agent.
 
 ---
 

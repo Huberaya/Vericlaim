@@ -135,7 +135,11 @@ Liste précise, à exécuter **dans le tableau de bord Vercel**, sans désactive
    toute clé étiquetée Production dans l'environnement Preview.
 5. **`/readyz`** sur la Preview, avec un accès autorisé :
    attendu `database: ok`, `document_storage: configured`,
-   `malware_scanner: configured`, `document_import: enabled`.
+   `malware_scanner: configured`, `malware_scanner_reachable: true`, `document_import: enabled`.
+
+   Depuis A-07, `malware_scanner: configured` ne suffit plus : il indique qu'une
+   variable est définie, pas qu'un moteur répond. C'est `malware_scanner_reachable`
+   qui porte la preuve, et `document_import` qui en tire la conséquence.
    Si `document_import: refused`, la Preview ne peut pas importer de document — et
    le pilote ne peut pas démarrer.
 6. **Workers** : confirmer qu'aucun mécanisme (cron, file externe, service tiers)

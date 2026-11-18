@@ -1,0 +1,120 @@
+# Règles d'alerte VeriClaim — Prometheus, configuration-as-code (A-09)
+#
+# Chaque alerte est ACTIONNABLE : elle nomme une cause probable et un runbook.
+# Une alerte qui ne dit pas quoi faire est un bruit, pas une alerte.
+#
+# Seuils choisis à partir des latences mesurées sur la recette, pas au hasard :
+# - un import complet dure ~1 s ; un p95 d'API > 2,5 s signale une contention ;
+# - un worker dépouille une file en quelques secondes ; un job en attente
+#   depuis 10 min signifie « aucun worker ne tourne », pas « c'est lent ».
+#
+# Ce que ce fichier NE dit PAS : qu'aucune alerte n'a été reçue. Ces règles
+# n'ont pas été branchées sur un Prometheus/Alertmanager réel dans cet
+# environnement. Voir docs/infrastructure/09-monitoring-et-incidents.md §état.
+
+groups:
+  - name: vericlaim-availability
+    rules:
+      - alert: VeriClaimApiDown
+        expr: up{job="vericlaim-api"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "API VeriClaim injoignable"
+          cause: "le processus ne répond plus ou /readyz renvoie 503"
+          runbook: "docs/runbooks/incident-api-indisponible.md"
+
+      - alert: VeriClaimDatabaseDown
+        expr: vericlaim_database_up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Base de données injoignable depuis l'API"
+          cause: "connexion PostgreSQL refusée (réseau, credentials, saturation)"
+          runbook: "docs/runbooks/incident-api-indisponible.md"
+
+      - alert: VeriClaimHigh5xxRate
+        expr: |
+          sum(rate(vericlaim_http_requests_total{status=~"5.."}[5m]))
+            /
+          sum(rate(vericlaim_http_requests_total[5m])) > 0.02
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Plus de 2 % de réponses 5xx pendant 5 minutes"
+          cause: "défaut applicatif, migration manquante ou dépendance en panne"
+          runbook: "docs/runbooks/incident-codes-http.md"
+
+      - alert: VeriClaimApiLatencyHigh
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(vericlaim_http_request_duration_seconds_bucket[5m])) by (le)
+          ) > 2.5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "p95 de latence API au-dessus de 2,5 s"
+          cause: "base saturée, OCR dans le processus API, ou pool épuisé"
+          runbook: "docs/runbooks/incident-api-indisponible.md"
+
+  - name: vericlaim-queues
+    rules:
+      - alert: VeriClaimDocumentQueueBacklog
+        expr: vericlaim_document_queue_queued > 20
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "File d'extraction en retard"
+          cause: "aucun worker documentaire en vie, ou workers bloqués"
+          runbook: "docs/runbooks/incident-file-bloquee.md"
+
+      - alert: VeriClaimDocumentJobStalled
+        expr: vericlaim_document_queue_oldest_queued_seconds > 600
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Un job d'extraction attend depuis plus de 10 minutes"
+          cause: "worker absent, mort, ou lease non libéré"
+          runbook: "docs/runbooks/incident-file-bloquee.md"
+
+      - alert: VeriClaimAnalysisQueueBacklog
+        expr: vericlaim_analysis_queue_queued > 20
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "File d'analyse en retard"
+          cause: "worker d'analyse absent ou bloqué ; il ne partage pas le processus d'extraction"
+          runbook: "docs/runbooks/incident-file-bloquee.md"
+
+  - name: vericlaim-document-safety
+    rules:
+      - alert: VeriClaimScannerUnreachable
+        expr: vericlaim_scanner_reachable == 0
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Le moteur antivirus ne répond pas"
+          cause: "clamd arrêté, réseau coupé, signatures en cours de chargement"
+          effect: "les imports sont REFUSÉS (fail-closed) — aucune donnée n'est acceptée sans scan"
+          runbook: "docs/runbooks/incident-antivirus.md"
+
+      - alert: VeriClaimWorkerHeartbeatStale
+        # Le worker publie un fichier de santé ; l'exportateur le convertit en
+        # métrique. Un battement figé signifie « vivant mais bloqué ».
+        expr: vericlaim_worker_heartbeat_age_seconds > 120
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Un worker ne progresse plus"
+          cause: "boucle bloquée (base, OCR) ou processus mort"
+          runbook: "docs/runbooks/incident-file-bloquee.md"

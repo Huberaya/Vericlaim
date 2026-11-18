@@ -12,6 +12,7 @@ import logging
 import os
 import socket
 import time
+from pathlib import Path
 from uuid import UUID
 
 from sqlalchemy import select
@@ -32,6 +33,7 @@ from app.documents.service import retry_retained_document_purges, sweep_expired_
 from app.documents.storage import ObjectStorage, build_object_storage
 from app.identity.service import set_db_request_context
 from app.models.domain import Organization, OrganizationStatus
+from app.workers.runtime import WorkerHealth, WorkerRuntime  # noqa: F401 - WorkerHealth réexporté
 
 logger = logging.getLogger(__name__)
 # This value is only stored in PostgreSQL's request-local setting; it is never
@@ -239,20 +241,67 @@ class DocumentExtractionWorker:
         return False
 
     def run_forever(self) -> None:
-        logger.info("Document extraction worker started", extra={"worker_id": self.worker_id})
-        while True:
-            if not self.run_once():
-                time.sleep(self.settings.document_extraction_poll_seconds)
+        """Conservé pour compatibilité : délègue au runtime commun (A-06).
+
+        L'ancienne implémentation était une boucle ``while True`` sans gestion
+        de signal ni de santé. Le comportement observable change donc : un
+        ``SIGTERM`` arrête maintenant le worker proprement au lieu de le tuer,
+        et un fichier de santé est publié si ``DOCUMENT_WORKER_HEALTH_FILE`` est
+        défini.
+        """
+
+        build_document_extraction_runtime(
+            settings=settings,
+            storage=build_object_storage(settings),
+            worker_id=self.worker_id,
+        ).run()
+
+
+def build_document_extraction_runtime(
+    *,
+    settings: Settings,
+    storage: ObjectStorage,
+    worker_id: str,
+    concurrency: int | None = None,
+    health_path: Path | None = None,
+) -> WorkerRuntime:
+    """Assemble le runtime du worker d'extraction (A-06).
+
+    ``concurrency`` vaut par défaut ``DOCUMENT_WORKER_CONCURRENCY`` (1). Chaque
+    boucle reçoit un ``worker_id`` distinct : c'est ce qui permet au fencing de
+    distinguer deux tentatives d'un même hôte, cas couvert par
+    ``tests/test_document_lease_fencing.py``.
+    """
+
+    resolved_concurrency = concurrency if concurrency is not None else int(
+        os.getenv("DOCUMENT_WORKER_CONCURRENCY", "1")
+    )
+    if resolved_concurrency < 1:
+        raise ValueError("DOCUMENT_WORKER_CONCURRENCY doit être >= 1")
+    worker = DocumentExtractionWorker(settings=settings, storage=storage, worker_id=worker_id)
+    return WorkerRuntime(
+        name="document_extraction",
+        worker_id=worker_id,
+        step=lambda _index: worker.run_once(),
+        poll_seconds=settings.document_extraction_poll_seconds,
+        concurrency=resolved_concurrency,
+        health_path=health_path,
+    )
 
 
 def main() -> None:
     logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
     worker_id = os.getenv("DOCUMENT_EXTRACTION_WORKER_ID") or f"{socket.gethostname()}-{os.getpid()}"
-    DocumentExtractionWorker(
+    runtime = build_document_extraction_runtime(
         settings=settings,
         storage=build_object_storage(settings),
         worker_id=worker_id,
-    ).run_forever()
+        health_path=Path(os.environ["DOCUMENT_WORKER_HEALTH_FILE"])
+        if os.getenv("DOCUMENT_WORKER_HEALTH_FILE")
+        else None,
+    )
+    runtime.install_signal_handlers()
+    raise SystemExit(runtime.run())
 
 
 if __name__ == "__main__":  # pragma: no cover - exercised by Compose deployment.
