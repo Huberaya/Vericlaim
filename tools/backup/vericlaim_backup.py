@@ -7,15 +7,23 @@ l'archive, rien ne la vérifiait, et aucune rétention n'était définie.
 
 Ce script comble ce manque, sans toucher à Neon :
 
-* ``backup``  — ``pg_dump --format=custom`` + inventaire des objets S3, écrits
-  dans un répertoire horodaté avec un ``manifest.json`` (taille, SHA-256,
-  date, révision Alembic, compteurs de lignes par tenant) ;
+* ``backup``  — ``pg_dump --format=custom`` **et copie des octets réels** des
+  objets S3, écrites dans un répertoire horodaté avec un ``manifest.json``
+  (taille, SHA-256, date, révision Alembic, compteurs de lignes par tenant,
+  et un enregistrement par objet) ;
 * ``verify``  — recalcule les checksums et compare au manifeste ; détecte une
   archive tronquée ou modifiée **avant** qu'on tente de restaurer ;
 * ``restore`` — restaure la base dans une cible **isolée** et rejoue les grants
   revus, puis vérifie révision, RLS et chaîne d'audit ;
 * ``prune``   — applique la rétention (nombre de jeux + âge), sans jamais
   supprimer le dernier jeu vérifié.
+
+Les objets sont **archivés, pas seulement inventoriés** : ``objects/<bucket>/…``
+contient les octets, et chaque entrée du manifeste porte la clé source, le
+bucket source, la taille, le SHA-256 et les métadonnées utiles. Un objet absent
+du stockage au moment de la sauvegarde est **signalé** (``missing: true``) au
+lieu d'être silencieusement sauté : un inventaire incomplet qui se présente
+comme complet est pire qu'une sauvegarde partielle annoncée.
 
 Ce qui n'est pas fait ici, et qui reste à l'équipe de pilotage : les
 sauvegardes Neon (PITR, rétention côté fournisseur, chiffrement au repos) et la
@@ -32,6 +40,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -89,6 +98,37 @@ class BackupArtifact:
 
 
 @dataclass
+class ObjectArtifact:
+    """Un objet S3 archivé.
+
+    ``archive`` est le chemin **relatif** dans le répertoire de sauvegarde.
+    ``missing`` distingue « objet absent du stockage » de « objet vide » : sans
+    ce drapeau, une clé disparue entre l'inventaire et la copie serait
+    indiscernable d'un fichier de 0 octet, et la sauvegarde mentirait par
+    omission.
+    """
+
+    bucket: str
+    key: str
+    archive: str
+    bytes: int
+    sha256: str
+    missing: bool = False
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "bucket": self.bucket,
+            "key": self.key,
+            "archive": self.archive,
+            "bytes": self.bytes,
+            "sha256": self.sha256,
+            "missing": self.missing,
+            "metadata": self.metadata,
+        }
+
+
+@dataclass
 class Manifest:
     created_at: str
     target: dict[str, str]
@@ -97,6 +137,9 @@ class Manifest:
     row_counts: dict[str, int] = field(default_factory=dict)
     objects: int = 0
     object_bytes: int = 0
+    object_artifacts: list[ObjectArtifact] = field(default_factory=list)
+    object_missing: int = 0
+    objects_captured: bool = False
     schema_version: int = SCHEMA_VERSION
 
     def to_json(self) -> dict[str, Any]:
@@ -109,6 +152,9 @@ class Manifest:
             "row_counts": self.row_counts,
             "objects": self.objects,
             "object_bytes": self.object_bytes,
+            "object_missing": self.object_missing,
+            "objects_captured": self.objects_captured,
+            "object_artifacts": [artifact.to_json() for artifact in self.object_artifacts],
         }
 
 
@@ -152,37 +198,104 @@ def _dump_database(dsn: str, destination: Path) -> None:
         raise SystemExit(f"pg_dump a échoué: {result.stderr.strip()[:400]}")
 
 
-def _list_objects(settings: dict[str, Any]) -> list[dict[str, Any]]:
-    """Inventaire des objets S3 : clé, taille, ETag.
+def _s3_client(settings: dict[str, Any]):
+    """Client S3, ou ``None`` si aucun stockage n'est configuré.
 
-    On n'invente pas de backend : si aucune configuration S3 n'est fournie, la
-    sauvegarde des objets est *absente* et le manifeste le dit (``objects: 0``),
-    au lieu de laisser croire qu'elle a eu lieu.
+    On n'invente pas de backend : sans endpoint, la sauvegarde des objets est
+    *absente* et le manifeste le dit (``objects_captured: false``), au lieu de
+    laisser croire qu'elle a eu lieu.
     """
 
     endpoint = settings.get("endpoint")
     if not endpoint:
-        return []
-    try:
-        import boto3
-    except ImportError:
-        return []
-    client = boto3.client(
+        return None
+    import boto3
+
+    return boto3.client(
         "s3",
         endpoint_url=endpoint,
         aws_access_key_id=settings.get("access_key"),
         aws_secret_access_key=settings.get("secret_key"),
         region_name=settings.get("region", "eu-west-3"),
     )
-    inventory: list[dict[str, Any]] = []
+
+
+def _safe_object_path(bucket: str, key: str) -> Path:
+    """Chemin d'archive sûr pour une clé S3 arbitraire.
+
+    Une clé S3 peut contenir ``..``, un chemin absolu, des antislashs ou des
+    octets de contrôle. L'écrire telle quelle permettrait de sortir du
+    répertoire de sauvegarde (écriture hors périmètre) et rendrait l'archive
+    non portable. Chaque segment est donc neutralisé, et le chemin final est
+    vérifié comme étant bien sous la racine.
+    """
+
+    segments = []
+    for segment in re.split(r"[\\/]+", key):
+        if segment in {"", ".", ".."}:
+            continue
+        cleaned = "".join(ch if ch.isalnum() or ch in "-._ " else "_" for ch in segment)
+        segments.append(cleaned or "_")
+    if not segments:
+        segments = ["_empty_key"]
+    safe_bucket = "".join(ch if ch.isalnum() or ch in "-._" else "_" for ch in bucket) or "_bucket"
+    return Path("objects") / safe_bucket / Path(*segments)
+
+
+def _capture_objects(
+    client: Any, settings: dict[str, Any], directory: Path
+) -> list[ObjectArtifact]:
+    """Copie les **octets** de chaque objet dans l'archive et les décrit.
+
+    Un objet listé mais illisible (supprimé entre-temps, droits insuffisants)
+    n'est pas silencieusement ignoré : il entre au manifeste avec
+    ``missing: true``. Une sauvegarde qui saute des fichiers sans le dire est
+    plus dangereuse qu'une sauvegarde qui échoue.
+    """
+
+    artifacts: list[ObjectArtifact] = []
     for bucket in settings.get("buckets", []):
         paginator = client.get_paginator("list_objects_v2")
         for page in paginator.paginate(Bucket=bucket):
             for item in page.get("Contents", []):
-                inventory.append(
-                    {"bucket": bucket, "key": item["Key"], "bytes": int(item["Size"]), "etag": item.get("ETag")}
+                key = item["Key"]
+                relative = _safe_object_path(bucket, key)
+                destination = directory / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+
+                metadata: dict[str, Any] = {"etag": item.get("ETag"), "last_modified": str(item.get("LastModified"))}
+                try:
+                    response = client.get_object(Bucket=bucket, Key=key)
+                    payload = response["Body"].read()
+                except Exception as exc:  # noqa: BLE001 - objet absent/illisible = constat
+                    artifacts.append(
+                        ObjectArtifact(
+                            bucket=bucket,
+                            key=key,
+                            archive=str(relative),
+                            bytes=0,
+                            sha256="",
+                            missing=True,
+                            metadata={**metadata, "error": type(exc).__name__},
+                        )
+                    )
+                    continue
+
+                destination.write_bytes(payload)
+                content_type = response.get("ContentType")
+                if content_type:
+                    metadata["content_type"] = content_type
+                artifacts.append(
+                    ObjectArtifact(
+                        bucket=bucket,
+                        key=key,
+                        archive=str(relative),
+                        bytes=len(payload),
+                        sha256=hashlib.sha256(payload).hexdigest(),
+                        metadata=metadata,
+                    )
                 )
-    return inventory
+    return artifacts
 
 
 def command_backup(args: argparse.Namespace) -> int:
@@ -210,19 +323,33 @@ def command_backup(args: argparse.Namespace) -> int:
             if bucket
         ],
     }
-    inventory = _list_objects(storage_settings)
-    inventory_path = directory / "objects.json"
-    inventory_path.write_text(json.dumps(inventory, indent=2, sort_keys=True), encoding="utf-8")
+    client = _s3_client(storage_settings)
+    object_artifacts: list[ObjectArtifact] = []
+    if client is not None:
+        object_artifacts = _capture_objects(client, storage_settings, directory)
 
+    # ``objects.json`` reste écrit : c'est l'index lisible des objets, utile
+    # pour un diff rapide entre deux sauvegardes. Il ne remplace pas l'archive
+    # des octets — les deux existent, et le manifeste dit lequel est lequel.
+    index_path = directory / "objects.json"
+    index_path.write_text(
+        json.dumps([artifact.to_json() for artifact in object_artifacts], indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+
+    captured = [artifact for artifact in object_artifacts if not artifact.missing]
     manifest = Manifest(
         created_at=_utc_now().isoformat(),
         target=redact_dsn(dsn),
         alembic_revision=_alembic_revision(dsn),
         row_counts=_row_counts(dsn),
-        objects=len(inventory),
-        object_bytes=sum(int(item["bytes"]) for item in inventory),
+        objects=len(captured),
+        object_bytes=sum(artifact.bytes for artifact in captured),
+        object_artifacts=object_artifacts,
+        object_missing=len(object_artifacts) - len(captured),
+        objects_captured=client is not None,
     )
-    for artifact_path in (dump_path, inventory_path):
+    for artifact_path in (dump_path, index_path):
         manifest.artifacts.append(
             BackupArtifact(
                 name=artifact_path.name,
@@ -265,12 +392,36 @@ def command_verify(args: argparse.Namespace) -> int:
         if actual_hash != artifact["sha256"]:
             problems.append(f"{artifact['name']}: SHA-256 différent du manifeste (altération ?)")
 
+    # Les octets archivés sont vérifiés comme le dump : une archive dont les
+    # objets ont été tronqués ne doit pas être déclarée valide parce que seul
+    # le dump était contrôlé.
+    object_artifacts = manifest.get("object_artifacts", [])
+    for artifact in object_artifacts:
+        if artifact.get("missing"):
+            problems.append(f"objet absent au moment de la sauvegarde: {artifact['bucket']}/{artifact['key']}")
+            continue
+        path = directory / artifact["archive"]
+        if not path.exists():
+            problems.append(f"objet archivé manquant: {artifact['archive']}")
+            continue
+        actual_size = path.stat().st_size
+        if actual_size != artifact["bytes"]:
+            problems.append(
+                f"objet {artifact['key']}: taille {actual_size} != {artifact['bytes']} attendue (troncature ?)"
+            )
+            continue
+        if sha256_file(path) != artifact["sha256"]:
+            problems.append(f"objet {artifact['key']}: SHA-256 différent du manifeste (altération ?)")
+
     report = {
         "backup": str(directory),
         "verified": not problems,
         "problems": problems,
         "alembic_revision": manifest.get("alembic_revision"),
         "objects": manifest.get("objects"),
+        "object_missing": manifest.get("object_missing", 0),
+        "objects_captured": manifest.get("objects_captured", False),
+        "objects_checked": sum(1 for artifact in object_artifacts if not artifact.get("missing")),
     }
     print(json.dumps(report, indent=2))
     return 0 if not problems else 2
@@ -368,13 +519,208 @@ def command_restore(args: argparse.Namespace) -> int:
         "mismatches": mismatches,
         "objects_in_manifest": manifest.get("objects", 0),
         "note": (
-            "Les objets S3 ne sont pas rechargés par ce script : l'inventaire du manifeste "
-            "permet de vérifier qu'ils existent toujours, pas de les restaurer."
+            "Cette commande ne restaure que la base. Les objets se restaurent avec "
+            "« restore-objects », vers une destination explicite et distincte de la source."
         ),
     }
     print(json.dumps(report, indent=2))
     ok = report["revision_preserved"] and report["row_counts_match"]
     return 0 if ok else 2
+
+
+def _destination_credentials(
+    settings: dict[str, Any], *, endpoint: str | None, access_key: str | None, secret_key: str | None
+) -> dict[str, Any]:
+    """Reprend les identifiants de la source si la destination n'en fournit pas.
+
+    Cas courant : un même MinIO/S3 avec un bucket de restauration distinct. On
+    ne force pas l'opérateur à ressaisir des identifiants qu'il a déjà.
+    """
+
+    return {
+        "endpoint": endpoint or settings.get("endpoint"),
+        "access_key": access_key or settings.get("access_key"),
+        "secret_key": secret_key or settings.get("secret_key"),
+        "region": settings.get("region", "eu-west-3"),
+        "buckets": [],
+    }
+
+
+def _normalize_prefix(prefix: str) -> str:
+    """Normalise un préfixe : pas de ``/`` initial, un seul ``/`` final."""
+
+    cleaned = prefix.strip().strip("/")
+    return f"{cleaned}/" if cleaned else ""
+
+
+def command_restore_objects(args: argparse.Namespace) -> int:
+    """Restaure les objets archivés vers un bucket et un préfixe **explicites**.
+
+    Trois garanties, chacune vérifiée par un test :
+
+    1. **jamais vers la source** — la destination est refusée si elle désigne le
+       bucket source avec un préfixe vide ; restaurer sur soi-même écraserait
+       les objets qu'on vient sauvegarder ;
+    2. **jamais d'écrasement** — un objet déjà présent à la destination est
+       comparé : identique (même SHA-256) ⇒ reconnu comme déjà restauré et
+       sauté, différent ⇒ **refus explicite**. On ne remplace jamais une donnée
+       existante sur la foi d'une sauvegarde plus ancienne ;
+    3. **refus avant écriture** — le pré-contrôle des collisions a lieu avant
+       toute écriture, sinon une restauration interrompue laisserait un mélange
+       de deux états.
+    """
+
+    import hashlib as _hashlib
+
+    directory = Path(args.backup)
+    manifest = _load_manifest(directory)
+    artifacts = manifest.get("object_artifacts", [])
+    if not artifacts:
+        raise SystemExit(
+            "Aucun objet dans ce manifeste : rien à restaurer. "
+            "Un inventaire vide n'est pas une sauvegarde d'objets."
+        )
+
+    storage_settings = {
+        "endpoint": os.environ.get("DOCUMENT_STORAGE_ENDPOINT"),
+        "access_key": os.environ.get("DOCUMENT_STORAGE_ACCESS_KEY"),
+        "secret_key": os.environ.get("DOCUMENT_STORAGE_SECRET_KEY"),
+        "region": os.environ.get("DOCUMENT_STORAGE_REGION", "eu-west-3"),
+        "buckets": [],
+    }
+    destination = _destination_credentials(
+        storage_settings,
+        endpoint=args.destination_endpoint,
+        access_key=args.destination_access_key,
+        secret_key=args.destination_secret_key,
+    )
+    if not destination["endpoint"]:
+        raise SystemExit("Aucun endpoint de destination : refus d'inventer une cible.")
+
+    source_buckets = {artifact["bucket"] for artifact in artifacts}
+    if args.destination_bucket in source_buckets and not _normalize_prefix(args.prefix):
+        raise SystemExit(
+            "Restauration refusée : destination identique à la source "
+            f"(bucket {args.destination_bucket!r}, préfixe vide). Choisissez un autre "
+            "bucket ou un préfixe non vide."
+        )
+
+    import boto3
+
+    client = boto3.client(
+        "s3",
+        endpoint_url=destination["endpoint"],
+        aws_access_key_id=destination["access_key"],
+        aws_secret_access_key=destination["secret_key"],
+        region_name=destination["region"],
+    )
+    prefix = _normalize_prefix(args.prefix)
+
+    # ---- pré-contrôle : rien n'est écrit avant d'avoir tout examiné.
+    planned: list[tuple[dict[str, Any], str, Path]] = []
+    already_present: list[str] = []
+    collisions: list[dict[str, str]] = []
+    source_problems: list[str] = []
+
+    for artifact in artifacts:
+        key = artifact["key"]
+        if artifact.get("missing"):
+            source_problems.append(f"{artifact['bucket']}/{key}: absent de la source au moment de la sauvegarde")
+            continue
+        local = directory / artifact["archive"]
+        if not local.exists():
+            source_problems.append(f"{key}: octets absents de l'archive ({artifact['archive']})")
+            continue
+        actual = sha256_file(local)
+        if actual != artifact["sha256"]:
+            source_problems.append(f"{key}: archive altérée (SHA-256 différent du manifeste)")
+            continue
+
+        destination_key = f"{prefix}{key}"
+        try:
+            head = client.head_object(Bucket=args.destination_bucket, Key=destination_key)
+        except Exception:  # noqa: BLE001 - absent (404) ou erreur : traité comme absent
+            head = None
+
+        if head is not None:
+            existing_sha = (head.get("Metadata") or {}).get("sha256")
+            if existing_sha == artifact["sha256"]:
+                already_present.append(destination_key)
+                continue
+            collisions.append(
+                {
+                    "key": destination_key,
+                    "reason": (
+                        "objet existant sans empreinte comparable"
+                        if not existing_sha
+                        else "objet existant avec un contenu différent"
+                    ),
+                }
+            )
+            continue
+        planned.append((artifact, destination_key, local))
+
+    if source_problems or collisions:
+        print(
+            json.dumps(
+                {
+                    "restored": 0,
+                    "already_present": len(already_present),
+                    "collisions": collisions,
+                    "source_problems": source_problems,
+                    "refused": True,
+                    "note": (
+                        "Aucune écriture effectuée : le pré-contrôle a échoué. "
+                        "Une restauration partielle serait plus difficile à reprendre qu'un refus."
+                    ),
+                },
+                indent=2,
+            )
+        )
+        return 2
+
+    # ---- écriture : uniquement des clés absentes.
+    restored: list[str] = []
+    for artifact, destination_key, local in planned:
+        payload = local.read_bytes()
+        if _hashlib.sha256(payload).hexdigest() != artifact["sha256"]:  # pragma: no cover - relu juste après
+            raise SystemExit(f"{destination_key}: contenu modifié entre la vérification et l'envoi.")
+        metadata = {"sha256": artifact["sha256"], "source-bucket": artifact["bucket"]}
+        put_arguments: dict[str, Any] = {
+            "Bucket": args.destination_bucket,
+            "Key": destination_key,
+            "Body": payload,
+            "Metadata": metadata,
+        }
+        content_type = (artifact.get("metadata") or {}).get("content_type")
+        if content_type:
+            put_arguments["ContentType"] = content_type
+        client.put_object(**put_arguments)
+        restored.append(destination_key)
+
+    # ---- post-contrôle : ce qui a été écrit est relu et comparé.
+    mismatches: list[str] = []
+    for artifact, destination_key, _local in planned:
+        head = client.head_object(Bucket=args.destination_bucket, Key=destination_key)
+        if (head.get("Metadata") or {}).get("sha256") != artifact["sha256"]:
+            mismatches.append(destination_key)
+
+    report = {
+        "restored": len(restored),
+        "already_present": len(already_present),
+        "collisions": [],
+        "destination": {"bucket": args.destination_bucket, "prefix": prefix},
+        "source_buckets": sorted(source_buckets),
+        "idempotent_replay": len(already_present) > 0,
+        "verified_after_write": not mismatches,
+        "mismatches": mismatches,
+        "note": (
+            "Aucun objet source n'a été modifié ni supprimé. Rejouer la commande "
+            "sur la même destination ne réécrit rien : les objets identiques sont reconnus."
+        ),
+    }
+    print(json.dumps(report, indent=2))
+    return 0 if not mismatches else 2
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -396,10 +742,23 @@ def main(argv: list[str] | None = None) -> int:
     prune.add_argument("--max-age-days", type=int, default=30)
     prune.set_defaults(func=command_prune)
 
-    restore = sub.add_parser("restore", help="Restaure dans une base isolée")
+    restore = sub.add_parser("restore", help="Restaure la base dans une base isolée")
     restore.add_argument("backup")
     restore.add_argument("--admin-dsn-env", default="DATABASE_ADMIN_URL")
     restore.set_defaults(func=command_restore)
+
+    restore_objects = sub.add_parser(
+        "restore-objects", help="Restaure les objets vers un bucket et un préfixe explicites"
+    )
+    restore_objects.add_argument("backup")
+    restore_objects.add_argument("--destination-bucket", required=True)
+    restore_objects.add_argument(
+        "--prefix", default="", help="Préfixe de destination (obligatoire si le bucket est le bucket source)"
+    )
+    restore_objects.add_argument("--destination-endpoint", default=None)
+    restore_objects.add_argument("--destination-access-key", default=None)
+    restore_objects.add_argument("--destination-secret-key", default=None)
+    restore_objects.set_defaults(func=command_restore_objects)
 
     args = parser.parse_args(argv)
     return int(args.func(args))

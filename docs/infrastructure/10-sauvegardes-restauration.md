@@ -25,7 +25,9 @@ exécutée** sur une cible isolée, et les procédures qui restent à la charge 
 | Restauration en cible isolée | **existe et testée** | base neuve `vericlaim_restore_<horodatage>`, révision et compteurs comparés au manifeste |
 | Runbook | **existe** | `docs/runbooks/incident-sauvegarde.md` |
 | Stratégie Neon (PITR / branches) | **hors de portée de l'agent** | l'équipe de pilotage a l'accès (voir `03` §0) ; aucun accès depuis ici |
-| Sauvegarde du stockage objet | **inventaire seulement** | `objects.json` liste les objets (clé, taille, ETag) ; les objets ne sont **pas** rechargés |
+| Sauvegarde du stockage objet | **octets archivés** | `objects/<bucket>/<clé>` contient le contenu réel ; entrée de manifeste par objet (bucket source, clé, taille, SHA-256, métadonnées) |
+| Vérification des objets archivés | **existe et testée** | `verify` recalcule le SHA-256 de chaque objet, pas seulement celui du dump |
+| Restauration des objets | **existe et testée** | `restore-objects --destination-bucket … --prefix …` : refuse la source, ne remplace jamais un objet existant différent |
 | Chiffrement des sauvegardes | **non défini** | repose sur le chiffrement du volume cible ; non implémenté ici |
 | RPO / RTO | **non définis** | — |
 | Responsabilité | **non attribuée** | ni opérateur, ni astreinte |
@@ -159,12 +161,33 @@ vrai PostgreSQL 16 jetable) :
 | Rétention | garde les N derniers, ne vide jamais le magasin |
 | `redact_dsn` | ni mot de passe ni DSN dans les rapports |
 
+**Objets S3 — ce qui est désormais prouvé (11 tests, serveur moto en processus) :**
+
+| Scénario | Résultat vérifié |
+|---|---|
+| un objet | octets archivés, SHA-256 conforme, restitution à l'identique |
+| plusieurs objets, deux buckets | tous capturés, aucun mélange de bucket dans l'archive |
+| objet source illisible/absent | `missing: true` au manifeste — jamais omis silencieusement |
+| clé hostile (`../../etc/passwd`) | chemin neutralisé, aucun écrit hors du répertoire de sauvegarde |
+| archive d'objet corrompue | `verify` → 2, motif SHA-256 |
+| checksum erroné au manifeste | `verify` → 2 |
+| restauration vers destination distincte | octets identiques, contrôlés après écriture |
+| rejeu de la restauration | 0 réécriture, objets identiques reconnus (`already_present`) |
+| collision avec un objet différent | **refus explicite**, l'objet existant est intact |
+| restauration vers la source | **refusée** (même bucket + préfixe vide) ; préfixe non vide accepté |
+| sources après sauvegarde et restauration | ETags identiques : ni ajout, ni suppression, ni réécriture |
+
+Semantique de la restauration : **idempotente et non destructive**. Un objet
+identique déjà présent est reconnu (aucune écriture) ; un objet différent à la
+même clé provoque un refus global **avant** toute écriture — une restauration
+partielle serait plus difficile à reprendre qu'un refus.
+
 **Toujours absent, et qui bloque un pilote :**
 
 | Manque | Conséquence |
 |---|---|
 | planification (cron / workflow) | **RPO réel = depuis la dernière exécution manuelle** |
-| rechargement des objets | une perte d'objet est constatable, pas réparable |
+| restauration vers un stockage **managé réel** | prouvée contre un serveur S3 moto (contrat HTTP), **pas** contre S3/MinIO de production |
 | politique de chiffrement | dépend du volume cible |
 | sauvegarde Neon (PITR) | hors de portée de l'agent (voir `03` §0) |
 | mesure du RTO à l'échelle | le RTO mesuré (~3 s) porte sur un schéma vide : **il ne vaut rien** comme engagement |
@@ -198,7 +221,10 @@ ne l'ont pas été.
 - **Une restauration a réellement été exécutée** sur une cible isolée, avec
   vérification de la révision, des données, du RLS et de la chaîne d'audit.
 - **La sauvegarde Neon n'est pas vérifiée** — non par absence d'accès de
-  l'équipe (`03` §0), mais par absence d'accès de l'agent — et **le stockage
-  objet n'est couvert qu'en inventaire** : deux conditions bloquantes pour un
-  pilote avec données réelles.
+  l'équipe (`03` §0), mais par absence d'accès de l'agent.
+- **Le stockage objet est sauvegardé et restauré pour de vrai** (octets, pas
+  inventaire), et la restauration est prouvée contre un serveur S3 moto. Cela
+  ne démontre **ni** la durabilité, **ni** le versioning, **ni** le chiffrement
+  d'un stockage managé réel, et aucune restauration n'a été faite vers un
+  bucket de production.
 - **Aucun RTO engageable** n'est mesurable ici. Ne pas en annoncer un.

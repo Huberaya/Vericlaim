@@ -10,9 +10,10 @@ export DATABASE_ADMIN_URL='postgresql://…/vericlaim?sslmode=require'
 python tools/backup/vericlaim_backup.py backup --directory /var/backups/vericlaim
 ```
 
-Produit `backup-<horodatage>/` : `database.dump`, `objects.json`,
-`manifest.json` (taille + SHA-256 de chaque pièce, révision Alembic, compteurs
-par table).
+Produit `backup-<horodatage>/` : `database.dump`, les **octets** des objets
+sous `objects/<bucket>/<clé>`, `objects.json` (index lisible) et `manifest.json`
+(taille + SHA-256 de chaque pièce, révision Alembic, compteurs par table, et une
+entrée par objet avec bucket source, clé, taille, SHA-256, métadonnées).
 
 ## 2. Vérifier avant de croire
 
@@ -42,6 +43,33 @@ Après restauration, réappliquer les grants revus :
 python infra/neon/run_post_migration_grants.py
 python infra/neon/verify_runtime.py
 ```
+
+## 3 bis. Restaurer les objets
+
+```bash
+python tools/backup/vericlaim_backup.py restore-objects \
+  /var/backups/vericlaim/backup-<horodatage> \
+  --destination-bucket <bucket-de-restauration> \
+  --prefix restauration-<horodatage>/
+```
+
+Règles appliquées par la commande, et pourquoi :
+
+| Règle | Raison |
+|---|---|
+| destination obligatoire (bucket **et** préfixe) | aucune cible n'est devinée |
+| refus si destination = source (même bucket, préfixe vide) | restaurer sur soi écraserait ce qu'on sauvegarde |
+| objet identique déjà présent ⇒ sauté | un rejeu ne réécrit rien (idempotent) |
+| objet **différent** déjà présent ⇒ refus global, avant écriture | on ne remplace jamais une donnée existante sur la foi d'une archive plus ancienne |
+| relit chaque objet écrit et compare le SHA-256 | un `put` réussi n'est pas une preuve de contenu |
+| ne supprime jamais rien | la restauration est additive |
+
+Ordre recommandé : **base d'abord**, objets ensuite, puis réconciliation. La
+commande ne modifie ni ne supprime aucun objet source ; vérifier les ETags
+source avant/après si le doute subsiste.
+
+Reprise après un refus : un refus n'écrit **rien**. Corriger la cause (préfixe
+différent, bucket neuf) puis relancer — c'est le comportement voulu.
 
 ## 4. Rétention
 

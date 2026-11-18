@@ -19,9 +19,14 @@ Il est en **lecture seule** : aucune requête ne modifie le schéma, les rôles 
 les données. Il fonctionne aussi bien contre un cluster local jetable que
 contre une URL de recette fournie par l'équipe de pilotage.
 
-Sécurité : aucune chaîne de connexion, aucun mot de passe, aucun hôte complet
-n'est affiché. Le rapport ne contient que des noms de rôle, des booléens et des
-compteurs.
+Sécurité : aucune chaîne de connexion, aucun mot de passe, **aucun message
+d'exception du pilote** n'est affiché. Un échec de connexion est rapporté par un
+**code stable** (``connection_failed``, ``authentication_failed``, …) et rien
+d'autre : les messages de psycopg reprennent l'hôte, le port et parfois l'URI, et
+un rapport destiné à être collé dans un ticket ne doit pas transporter cela.
+
+Cette règle vaut aussi pour les erreurs inattendues : un message d'exception non
+maîtrisé n'est jamais exposé, il est remplacé par ``unexpected_error``.
 """
 
 from __future__ import annotations
@@ -45,6 +50,60 @@ EXPECTED_RLS_TABLES = (
 )
 
 
+class TlsRequiredError(RuntimeError):
+    """TLS exigé et absent. Levée par ce module, jamais par le pilote.
+
+    Une sous-classe dédiée permet de distinguer **notre** refus, dont le texte
+    est maîtrisé, d'un ``RuntimeError`` venu d'ailleurs dont le message peut
+    contenir la chaîne de connexion.
+    """
+
+
+#: Codes stables exposés par le script. Ils sont l'**unique** contenu autorisé
+#: pour décrire un échec : un code est comparable, journalisable et sans secret.
+ERROR_CODES = (
+    "tls_inactive",
+    "connection_failed",
+    "authentication_failed",
+    "connection_string_invalid",
+    "connection_timeout",
+    "missing_dsn",
+    "unexpected_error",
+)
+
+
+def classify_error(exc: BaseException) -> str:
+    """Traduit une exception en code stable, sans jamais lire son texte à voix haute.
+
+    Le message est **inspecté** pour choisir le code — c'est le seul moyen de
+    distinguer une authentification refusée d'un hôte injoignable — mais il
+    n'est jamais retourné, journalisé ni imprimé.
+    """
+
+    if isinstance(exc, TlsRequiredError):
+        return "tls_inactive"
+
+    try:
+        import psycopg
+    except ImportError:  # pragma: no cover - psycopg est une dépendance applicative
+        return "unexpected_error"
+
+    text = str(exc).lower()
+    if isinstance(exc, psycopg.OperationalError):
+        # L'ordre compte : un message d'échec TLS contient aussi « connection ».
+        if "timeout" in text or "timed out" in text:
+            return "connection_timeout"
+        if "authentication" in text or "password" in text or "role " in text or "no pg_hba" in text:
+            return "authentication_failed"
+        return "connection_failed"
+    if isinstance(exc, (psycopg.ProgrammingError, psycopg.DataError)):
+        # Chaîne de connexion illisible : parsing refusé avant tout réseau.
+        return "connection_string_invalid"
+    if isinstance(exc, psycopg.Error):
+        return "connection_failed"
+    return "unexpected_error"
+
+
 def _connect(dsn: str, *, require_tls: bool):
     import psycopg
 
@@ -54,7 +113,7 @@ def _connect(dsn: str, *, require_tls: bool):
     connection = psycopg.connect(dsn, connect_timeout=10, autocommit=True)
     if require_tls and not bool(connection.pgconn.ssl_in_use):
         connection.close()
-        raise RuntimeError("TLS inactif : connexion refusée (exigence runtime).")
+        raise TlsRequiredError("TLS inactif")
     return connection
 
 
@@ -169,15 +228,13 @@ def main(argv: list[str] | None = None) -> int:
             require_tls=not args.allow_no_tls,
             expected_role=args.expected_role,
         )
-    except RuntimeError as exc:
-        # TLS refusé : le message est explicite et ne contient pas de DSN.
-        print(json.dumps({"ok": False, "problems": [str(exc)]}, indent=2))
-        return 2
-    except Exception as exc:  # noqa: BLE001 - base injoignable = écart, pas plantage
-        # On ne relaie que le type et le message court de psycopg : la chaîne de
-        # connexion peut y figurer, on ne la rend donc jamais telle quelle.
-        message = str(exc).splitlines()[0][:200]
-        print(json.dumps({"ok": False, "problems": ["connection_failed"], "detail": message}, indent=2))
+    except BaseException as exc:  # noqa: BLE001 - tout échec devient un code sûr
+        # Aucun message d'exception n'est exposé, quel qu'il soit. Les messages
+        # de psycopg reprennent l'hôte, le port et parfois l'URI complète ; un
+        # rapport de vérification circule hors du poste de travail, il ne doit
+        # transporter aucun de ces éléments. Le code, lui, suffit à agir.
+        code = classify_error(exc)
+        print(json.dumps({"ok": False, "problems": [code], "error_code": code}, indent=2))
         return 2
 
     ok = not report["problems"]

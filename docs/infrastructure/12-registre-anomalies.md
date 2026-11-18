@@ -26,9 +26,9 @@ base d'un raisonnement : elle est close sur une observation.
 | A-05 | Preview sans `DATABASE_URL` servie par un SQLite jetable | P1 | **corrigé** |
 | A-06 | Aucun worker/cron sur Vercel : les files ne sont jamais drainées | **P1** | **corrigé côté code** — déploiement du runtime : **à faire par l'équipe** |
 | A-07 | Aucun antivirus réel n'a pu être exécuté | **P0 pour un pilote** | **partiel** — code fail-closed + readiness corrigés ; **moteur réel non déployé** |
-| A-08 | Aucune sauvegarde automatisée, stockage objet non couvert | **P0 pour un pilote** | **partiel** — script + tests réels ; **planification et objets non couverts** |
+| A-08 | Aucune sauvegarde automatisée, stockage objet non couvert | **P0 pour un pilote** | **partiel** — base et **objets** sauvegardés/restaurés et testés ; **planification absente** |
 | A-09 | Aucun monitoring proactif (métriques, alertes) | P1 | **partiel** — instrumentation + règles livrées ; **alertes jamais observées** |
-| A-10 | `vericlaim` : TLS PostgreSQL non vérifiable, `verify_runtime.py` jamais exécuté avec succès | P1 | **partiel** — vérificateur livré et testé ; **preuve TLS sur vraie URL non exécutée** |
+| A-10 | `vericlaim` : TLS PostgreSQL non vérifiable, `verify_runtime.py` jamais exécuté avec succès | P1 | **partiel** — vérificateur livré, **fuite d'information corrigée** ; preuve TLS sur vraie URL non exécutée |
 | A-11 | Import d'un PDF volumineux refusé par la limite par défaut (2 Mo) | P2 | **atténué** |
 | A-12 | Le job CI de recette ne pouvait pas s'installer (python 3.13 vs wheels `pgserver`) | P1 | **corrigé** |
 | A-14 | Le harnais laissait un serveur Uvicorn orphelin après toute exception | P1 | **corrigé** |
@@ -286,8 +286,9 @@ Aucune chaîne de connexion n'est acceptée en argument : elle passe par une
 variable d'environnement. Les rapports passent par `redact_dsn` et ne
 contiennent ni mot de passe ni DSN.
 
-**Tests exécutés.** `backend/tests/test_a08_backup_restore.py` — **8/8** contre
-un **vrai** PostgreSQL 16 jetable (`pgserver`), pas une doublure :
+**Tests exécutés.** `backend/tests/test_a08_backup_restore.py` — **20/20**
+(8 pour la base, 12 pour les objets) contre un **vrai** PostgreSQL 16 jetable
+(`pgserver`) et un **vrai serveur S3** (`moto` en processus, protocole HTTP) :
 
 | Test | Ce qu'il verrouille |
 |---|---|
@@ -298,6 +299,7 @@ un **vrai** PostgreSQL 16 jetable (`pgserver`), pas une doublure :
 | cible absente | aucune restauration tentée (`SystemExit`) |
 | rétention | ne vide jamais le magasin, garde bien les N derniers |
 | `redact_dsn` | ni mot de passe ni DSN dans le rapport |
+| objets S3 (11 tests) | octets archivés, `missing` signalé, clé hostile neutralisée, archive altérée détectée, restauration vers destination distincte, rejeu idempotent, collision refusée, source jamais modifiée |
 
 Un défaut relevé et corrigé pendant ce chantier : le calcul de `kept` dans
 `prune` était maladroit (reconstruction des chemins depuis les noms). Remplacé
@@ -317,10 +319,24 @@ par un calcul direct sur les noms.
 Le runbook `docs/runbooks/incident-sauvegarde.md` documente la procédure
 complète, y compris ce qu'il ne couvre pas.
 
+**Correction complémentaire (objets réels).** La version précédente ne
+sauvegardait que l'*inventaire* des objets : elle n'aurait pas permis de
+restaurer un fichier perdu. Le script archive désormais les **octets**
+(`objects/<bucket>/<clé>`), avec une entrée de manifeste par objet (bucket
+source, clé, taille, SHA-256, métadonnées), la vérification de ces contenus par
+`verify`, et une commande `restore-objects` :
+
+* destination **explicite** (bucket + préfixe) ; refus si elle désigne la source ;
+* **aucun écrasement** : objet identique reconnu (idempotent), objet différent
+  ⇒ refus global **avant** toute écriture ;
+* contrôle après écriture, puis comparaison des ETags source pour prouver
+  qu'aucune donnée source n'a bougé.
+
 **Ce qui reste bloqué.** (a) **planification** : aucune tâche cron/workflow
 n'appelle le script — c'est une décision d'hébergement, pas de code ;
-(b) **stockage objet** : seul l'*inventaire* est enregistré, les objets ne sont
-**pas** rechargés — une disparition est constatable, pas réparable ;
+(b) **durabilité du stockage managé** : la restauration est prouvée contre un
+serveur S3 moto, **pas** contre S3/MinIO de production — versioning, réplication
+et chiffrement au repos ne sont pas démontrés ;
 (c) **Neon** (PITR, rétention, chiffrement, responsable) : hors de portée de
 l'agent (voir `03` §0) ; (d) les rôles ne sont pas dans le dump et doivent être
 recréés, puis les grants réappliqués — c'est dans le runbook.
@@ -440,11 +456,44 @@ ni mot de passe, ni hôte.
 | production refuse une URL non chiffrée | passé |
 | **TLS réel sur vraie URL Neon** | **SKIPPED** — `VERICLAIM_STAGING_RUNTIME_URL` absente |
 
-Deux défauts trouvés par ces tests, tous deux réels : une base sans
+Trois défauts trouvés par ces tests, tous réels : une base sans
 `alembic_version` faisait **planter** le vérificateur (trace brute au lieu d'un
-rapport d'écart), et une base injoignable produisait également une trace. Les
-deux sont corrigés : la connexion est en autocommit et les erreurs deviennent
-des écarts nommés.
+rapport d'écart) ; une base injoignable produisait également une trace ; et
+**le rapport d'échec restituait le message brut du pilote** — donc l'hôte, le
+port, parfois l'utilisateur. Les trois sont corrigés : connexion en autocommit,
+erreurs converties en codes, et **plus aucun message d'exception exposé**.
+
+**Fuite d'information corrigée (revue du 18 novembre).** `main()` renvoyait
+`detail: str(exc)`. Une simple tentative vers un hôte inexistant affichait :
+
+```
+"detail": "failed to resolve host 'sentinel-host.example': [Errno -2] ..."
+```
+
+et un `RuntimeError` construit ailleurs avec le DSN dans son texte était imprimé
+tel quel. Le rapport porte désormais un **code stable** et rien d'autre
+(`connection_failed`, `authentication_failed`, `connection_string_invalid`,
+`connection_timeout`, `tls_inactive`, `unexpected_error`). Le message reste
+**inspecté** pour choisir le code, jamais restitué. La classe
+`TlsRequiredError` est dédiée : elle distingue *notre* refus maîtrisé d'un
+`RuntimeError` venu d'ailleurs.
+
+**Tests sentinelles (8).** Chaque scénario injecte des valeurs reconnaissables
+dans le mot de passe, l'utilisateur, l'hôte, le nom de base et les options,
+puis vérifie **stdout ET stderr** :
+
+| Scénario | Nature |
+|---|---|
+| hôte non résoluble | réel (psycopg) |
+| connexion refusée | réelle (port fermé) |
+| **authentification refusée** | **réelle** : cluster jetable en `scram-sha-256`, mauvais mot de passe |
+| chaîne de connexion illisible | réelle (paramètre invalide) |
+| TLS refusé | injectée |
+| exception inattendue portant le DSN | injectée — c'est le cas qui fuitait |
+| codes déclarés | garde : aucun code non déclaré ne peut être émis |
+| classifieur | ne retourne que des codes |
+
+Mordant vérifié : en réintroduisant le champ `detail`, **5 tests échouent**.
 
 **Preuve.** `pytest backend/tests/test_a10_runtime_identity.py` → 9 passed,
 1 skipped. Le skip **est** le résultat honnête : la preuve qui compte n'est pas
