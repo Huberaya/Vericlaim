@@ -242,7 +242,12 @@ def test_readiness_reports_reachability_separately(tmp_path, monkeypatch: pytest
         replace(main_module.settings, document_scanner_mode="clamav"),
     )
 
+    # L'état applicatif est partagé par tout le processus de test : le scanner
+    # injecté ici (un moteur mort, puis un moteur désactivé) restait en place pour
+    # les fichiers suivants, dont /readyz répondait alors 503 sur une base saine.
+    original_scanner = app.state.document_scanner
     with TestClient(app) as client:
+      try:
         with _FakeClamd(ping=b"PONG\x00") as server:
             app.state.document_scanner = _scanner(server.port)
             body = client.get("/readyz").json()
@@ -290,6 +295,8 @@ def test_readiness_reports_reachability_separately(tmp_path, monkeypatch: pytest
         scanner = _check(body, "malware_scanner")
         assert scanner["status"] != "ok"
         assert body["capabilities"]["malware_scanning"] is False
+      finally:
+        app.state.document_scanner = original_scanner
 
 
 def test_fail_closed_never_promotes_an_unscanned_file() -> None:
