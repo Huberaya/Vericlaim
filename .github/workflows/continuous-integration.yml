@@ -341,16 +341,42 @@ jobs:
       - name: Démarrer un PostgreSQL jetable, avec TLS
         run: |
           set -euo pipefail
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends postgresql
-          PG_VERSION="$(ls /etc/postgresql | head -n1)"
+          # Les miroirs APT publics rendent parfois un 5xx passager : sans
+          # nouvelle tentative, l'étape échouait avec un code 100 d'`apt-get` qui
+          # ne dit rien de la répétition qu'on veut réellement mesurer. Trois
+          # essais, puis on échoue en nommant la cause.
+          for attempt in 1 2 3; do
+            if sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends postgresql; then
+              break
+            fi
+            if [ "${attempt}" -eq 3 ]; then
+              echo "::error::Impossible d'installer PostgreSQL après trois tentatives (miroir APT indisponible)."
+              exit 1
+            fi
+            echo "Installation de PostgreSQL en échec (tentative ${attempt}/3), nouvelle tentative..."
+            sleep 10
+          done
+          # La version se déduit du cluster réellement présent, pas de l'ordre
+          # alphabétique des répertoires.
+          PG_VERSION="$(ls -d /etc/postgresql/*/ 2>/dev/null | head -n1 | xargs -r basename)"
+          if [ -z "${PG_VERSION}" ]; then
+            echo "::error::Aucun cluster PostgreSQL installé."
+            exit 1
+          fi
           sudo sed -i 's/^#*ssl = .*/ssl = on/' "/etc/postgresql/${PG_VERSION}/main/postgresql.conf"
           sudo pg_ctlcluster "${PG_VERSION}" main restart
+          for _ in $(seq 1 30); do
+            pg_isready -h 127.0.0.1 -p 5432 -q && break
+            sleep 1
+          done
           sudo -u postgres psql -v ON_ERROR_STOP=1 -c "ALTER ROLE postgres PASSWORD 'rehearsal-only';"
           sudo -u postgres createdb vericlaim
           # Si TLS n'est pas actif, on s'arrête ici et on le dit. Le produit, lui, refuserait la
           # connexion plus loin avec un message qui ne nommerait pas la cause.
-          psql "host=127.0.0.1 port=5432 dbname=postgres user=postgres sslmode=require" -tAc "select case when ssl then 'TLS actif' else 'TLS inactif' end from pg_stat_ssl where pid = pg_backend_pid()" | grep -qx "TLS actif"
+          psql "host=127.0.0.1 port=5432 dbname=postgres user=postgres sslmode=require" -tAc "select case when ssl then 'TLS actif' else 'TLS inactif' end from pg_stat_ssl where pid = pg_backend_pid()" | grep -qx "TLS actif" || {
+            echo "::error::TLS inactif sur le PostgreSQL jetable : la répétition de restauration serait mesurée sans le chiffrement qu'elle prétend vérifier."
+            exit 1
+          }
           echo "PostgreSQL ${PG_VERSION} jetable démarré, TLS actif."
 
       - name: Installer Python
