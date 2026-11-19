@@ -415,6 +415,19 @@ jobs:
           GRANT CONNECT ON DATABASE vericlaim TO vericlaim_app, vericlaim_backup;
           SQL
 
+      - name: Provision the system identity
+        # Le rôle des parcours d'identité sans organisation est provisionné par le
+        # script audité, exactement comme en production : la migration
+        # `c5f1a8e37b910` refuse de s'appliquer s'il est absent, plutôt que de
+        # laisser l'inscription échouer en service. Sans cette étape, la
+        # répétition échouait à la migration — mesuré, pas supposé.
+        run: |
+          set -euo pipefail
+          psql -h 127.0.0.1 -U postgres -d vericlaim -v ON_ERROR_STOP=1 \
+            -v target_database=vericlaim \
+            -v system_password=rehearsal-system-only-32-characters \
+            -f infra/neon/04_system_role.sql
+
       - name: Rehearse a restore end to end
         run: |
           set -euo pipefail
