@@ -46,11 +46,15 @@ direct, donc pas de problème de CORS entre Preview et API.
 
 ### Conséquence structurelle (voir aussi `01` §4)
 
-`vercel.json` ne déclare **aucun `crons`**. Les deux workers n'ont qu'un
-`run_forever()`. Sur un déploiement Vercel, aucun processus ne draine les files :
-un import reste `pending`, une analyse reste `queued`. Cette campagne le prouve
-par contraste sur la pile réelle (les workers avancent quand ils tournent,
-n'avancent pas quand ils sont arrêtés).
+`vercel.json` déclare **trois `crons` quotidiens** vers une route de cycle qui
+échoue visiblement sans `CRON_SECRET` (503). Ils ont été ajoutés après la mesure
+initiale, puis corrigés : la première version était en `* * * * *`, refusée par
+Vercel sur un plan Hobby **au déploiement**, ce qui faisait échouer chaque
+Preview en 0 s sans compiler. Un cycle ne dure que le temps de la requête, donc
+il ne remplace pas un processus qui draine les files : un import reste
+`pending`, une analyse reste `queued` en dehors du créneau quotidien. Cette
+campagne le prouve par contraste sur la pile réelle (les workers avancent quand
+ils tournent, n'avancent pas quand ils sont arrêtés).
 
 Ce n'est pas un défaut du build : c'est une inadéquation entre l'architecture
 (cibles longues) et l'hébergement choisi pour la Preview. Anomalie **A-06**.

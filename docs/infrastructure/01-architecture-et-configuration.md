@@ -97,7 +97,11 @@ rewrites. Il ne peut pas déclarer de **processus long**. Or :
 1. `app/workers/document_extraction_worker.py` et
    `app/workers/analysis_detection_worker.py` n'ont qu'un point d'entrée
    `run_forever()`, lancé par `docker-compose.yml` comme services séparés.
-2. `vercel.json` ne déclare **aucun `crons`**.
+2. `vercel.json` déclare **trois `crons` quotidiens** vers la route de cycle
+   (`/api/v1/internal/workers/{kind}/tick`, fermée sans `CRON_SECRET`). Un cycle
+   ne dure que le temps de la requête : c'est un rattrapage, pas un traitement
+   continu. La version initiale (chaque minute) était refusée par Vercel sur un
+   plan Hobby **avant compilation**, d'où l'échec de chaque Preview en 0 s.
 3. Sur Vercel, une fonction serverless est gelée après sa réponse.
 
 **Conséquence vérifiée** : sur un déploiement Vercel, un document importé reste

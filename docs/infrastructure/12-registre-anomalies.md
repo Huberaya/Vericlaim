@@ -193,6 +193,25 @@ défaut qu'il vise.
 **Preuve.** `pytest backend/tests/test_worker_runtime_lifecycle.py` → 8 passed.
 Suite complète : **290 passed, 32 skipped**.
 
+**Correctif du 19 novembre 2026 — un `crons` avait été ajouté, et il cassait le
+déploiement.** L'intégration de la PR #7 a introduit trois entrées `crons` en
+`* * * * *` (chaque minute). Sur un compte Hobby, Vercel refuse ce rythme **au
+déploiement** : « Hobby accounts are limited to daily cron jobs ». Chaque Preview
+échouait donc en 0 s, avant même la compilation — le déploiement n'était pas
+seulement inutile, il était bloqué. Ce n'était ni un défaut du build, ni un
+problème de permissions : c'était une configuration incompatible avec le plan.
+
+La cadence est désormais **quotidienne** (`0 3`, `15 3`, `30 3`), le seul rythme
+que Hobby accepte, ce qui rend le déploiement à nouveau possible sur ce plan.
+**Ce que cela ne prouve pas** : qu'une Preview vivante sur `main` drainerait une
+file. Sur Vercel, la fonction s'arrête dès que la réponse est rendue ; un cycle
+lancé par ce planificateur traite ce qu'il peut dans son budget de temps, pas
+tout. La planification reste donc un **rattrapage de secours**, pas un moteur de
+traitement.
+
+Les deux options d'architecture ci-dessous restent ouvertes, et c'est la seconde
+qui reste recommandée pour un pilote.
+
 **Ce qui reste bloqué.** Le code ne déploie rien. Pour que la file soit drainée
 en recette, l'équipe doit :
 
@@ -201,10 +220,10 @@ en recette, l'équipe doit :
    serverless ;
 2. monter le fichier de santé sur un volume et brancher la sonde
    (`app.worker_healthcheck`) sur le superviseur ;
-3. si l'hébergement reste Vercel seul : **choisir** l'option cron planifié
-   appelant une route idempotente. Cette route **n'existe pas** et n'est pas
-   ajoutée ici — l'ajouter sans décision d'architecture aurait été une surface
-   HTTP non demandée.
+3. si l'hébergement reste Vercel seul : la route idempotente **existe**
+   (`/api/v1/internal/workers/{kind}/tick`, fermée par défaut sans `CRON_SECRET`,
+   réponse 503 explicite) et le planificateur quotidien est déclaré. Ce n'est
+   qu'un rattrapage : pour traiter une file en continu, il faut l'option 2.
 
 **Options d'architecture, toujours non tranchées** (aucune décidée dans ce
 chantier) : (1) cron Vercel appelant une route idempotente ; (2) service worker
