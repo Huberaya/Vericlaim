@@ -23,6 +23,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
+from app.core.database import SystemSessionLocal
 from app.email.service import DeliveryResult, OutboundEmail, deliver
 from app.identity.passwords import generate_token, hash_password, password_policy_errors, token_digest, verify_password
 from app.identity.service import (
@@ -79,6 +80,25 @@ class SignupOutcome:
     account_created: bool
     verification_email_recorded: bool
     verification_delivery: str
+
+
+@dataclass(frozen=True)
+class InvitationOutcome:
+    """Ce qu'une acceptation d'invitation rend à l'appelant.
+
+    Des identifiants, jamais des lignes : l'objet ``User`` a été lu sur la session
+    système, et le rendre obligerait l'appelant à faire cohabiter deux sessions.
+    L'ouverture de session, elle, reste du ressort de l'API : elle se fait sur la
+    session applicative, qui n'a pas besoin de contexte pour écrire
+    ``auth_sessions`` (table hors RLS, comme pour la connexion par mot de passe).
+    Écrire la session sur le rôle système aurait exigé de lui accorder ``INSERT``
+    sur les sessions — une capacité dont aucun parcours n'a besoin.
+    """
+
+    user_id: UUID
+    email: str
+    display_name: str | None
+    organization_id: UUID
 
 
 @dataclass(frozen=True)
@@ -232,7 +252,7 @@ def _frontend_link(settings: Settings, path: str, token: str) -> str:
 
 
 def signup(
-    db: Session,
+    db: Session | None = None,
     *,
     settings: Settings,
     email: str,
@@ -247,6 +267,72 @@ def signup(
     address already exists, the same call queues a password-reset e-mail instead
     of a verification one.
     """
+    return _signup_as_system(
+        settings=settings,
+        email=email,
+        password=password,
+        organization_name=organization_name,
+        display_name=display_name,
+    )
+
+
+def _run_on_system_session(operation):
+    """Exécuter une opération transverse sur l'identité système, puis clore.
+
+    Ces parcours (inscription, vérification d'adresse, réinitialisation, acceptation
+    d'invitation) n'ont pas d'organisation à désigner au moment où ils lisent un
+    jeton ou écrivent une ligne : ils tournent donc sur le rôle système, dont les
+    droits sont bornés colonne par colonne. Le commit est fait ici parce que
+    l'opération est autonome ; un échec annule tout, jamais à moitié.
+    """
+    db = SystemSessionLocal()
+    try:
+        result = operation(db)
+        db.commit()
+        return result
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+def _signup_as_system(
+    *,
+    settings: Settings,
+    email: str,
+    password: str,
+    organization_name: str,
+    display_name: str | None,
+) -> SignupOutcome:
+    """L'inscription s'exécute sur l'identité système.
+
+    Elle crée l'organisation et écrit le jeton de vérification avant qu'aucun
+    contexte d'organisation n'existe : sous RLS stricte, aucune organisation ne
+    peut être désignée à ce moment-là. Le rôle système est le seul à pouvoir le
+    faire, et il ne dispose que des colonnes nécessaires.
+    """
+    return _run_on_system_session(
+        lambda db: _signup(
+            db,
+            settings=settings,
+            email=email,
+            password=password,
+            organization_name=organization_name,
+            display_name=display_name,
+        )
+    )
+
+
+def _signup(
+    db: Session,
+    *,
+    settings: Settings,
+    email: str,
+    password: str,
+    organization_name: str,
+    display_name: str | None,
+) -> SignupOutcome:
     normalized_email = normalize_email(email)
     if not normalized_email or "@" not in normalized_email:
         raise SelfServiceError("invalid_email", "L'adresse e-mail est invalide.", status_code=422)
@@ -362,7 +448,14 @@ def signup(
     )
 
 
-def verify_email(db: Session, *, raw_token: str) -> User:
+def verify_email(db: Session | None, *, raw_token: str) -> User:
+    """Vérifier une adresse : parcours sans organisation, donc sur l'identité système."""
+    return _run_on_system_session(
+        lambda session: _verify_email(session, raw_token=raw_token)
+    )
+
+
+def _verify_email(db: Session, *, raw_token: str) -> User:
     record = _consume_token(db, raw_token=raw_token, purpose=IdentityTokenPurpose.EMAIL_VERIFICATION)
     user = db.get(User, record.user_id)
     if user is None:
@@ -518,8 +611,19 @@ def login_with_password(
 # --------------------------------------------------------------------------- #
 
 
-def request_password_reset(db: Session, *, settings: Settings, email: str) -> tuple[bool, str]:
-    """Always succeed. Returns (account_found, delivery_detail)."""
+def request_password_reset(
+    db: Session | None, *, settings: Settings, email: str
+) -> tuple[bool, str]:
+    """Demander une réinitialisation : parcours sans organisation, identité système.
+
+    Always succeed. Returns (account_found, delivery_detail).
+    """
+    return _run_on_system_session(
+        lambda session: _request_password_reset(session, settings=settings, email=email)
+    )
+
+
+def _request_password_reset(db: Session, *, settings: Settings, email: str) -> tuple[bool, str]:
     normalized_email = normalize_email(email)
     user = db.scalar(select(User).where(func.lower(User.email) == normalized_email))
     if user is None:
@@ -563,7 +667,20 @@ def request_password_reset(db: Session, *, settings: Settings, email: str) -> tu
     return True, delivery.detail
 
 
-def confirm_password_reset(db: Session, *, settings: Settings, raw_token: str, new_password: str) -> User:
+def confirm_password_reset(
+    db: Session | None, *, settings: Settings, raw_token: str, new_password: str
+) -> User:
+    """Définir un nouveau mot de passe : parcours sans organisation, identité système."""
+    return _run_on_system_session(
+        lambda session: _confirm_password_reset(
+            session, settings=settings, raw_token=raw_token, new_password=new_password
+        )
+    )
+
+
+def _confirm_password_reset(
+    db: Session, *, settings: Settings, raw_token: str, new_password: str
+) -> User:
     record = _consume_token(db, raw_token=raw_token, purpose=IdentityTokenPurpose.PASSWORD_RESET)
     user = db.get(User, record.user_id)
     if user is None:
@@ -709,9 +826,37 @@ def send_invitation_email(
 
 
 def accept_invitation(
-    db: Session, *, settings: Settings, raw_token: str, password: str, display_name: str | None
-) -> tuple[User, Organization]:
-    """Set the password, activate the membership and the user, in one transaction."""
+    db: Session | None,
+    *,
+    settings: Settings,
+    raw_token: str,
+    password: str,
+    display_name: str | None,
+) -> InvitationOutcome:
+    """Set the password, activate the membership and the user, in one transaction.
+
+    Le jeton d'invitation est consommé avant que l'organisation du destinataire ne
+    soit connue : l'opération tourne donc sur l'identité système.
+    """
+    return _run_on_system_session(
+        lambda session: _accept_invitation(
+            session,
+            settings=settings,
+            raw_token=raw_token,
+            password=password,
+            display_name=display_name,
+        )
+    )
+
+
+def _accept_invitation(
+    db: Session,
+    *,
+    settings: Settings,
+    raw_token: str,
+    password: str,
+    display_name: str | None,
+) -> InvitationOutcome:
     record = _consume_token(db, raw_token=raw_token, purpose=IdentityTokenPurpose.INVITATION)
     user = db.get(User, record.user_id)
     if user is None:
@@ -757,7 +902,12 @@ def accept_invitation(
         action="identity.invitation_accepted",
         payload={"role_code": membership.role.code if membership.role else None},
     )
-    return user, organization
+    return InvitationOutcome(
+        user_id=user.id,
+        email=user.email,
+        display_name=user.display_name,
+        organization_id=organization.id,
+    )
 
 
 def count_users_with_password(db: Session, *, organization_id: UUID) -> int:

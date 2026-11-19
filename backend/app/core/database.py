@@ -67,6 +67,72 @@ if settings.database_url.startswith("sqlite"):
 engine = create_engine(settings.database_url, **_engine_kwargs)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
 
+# --- Accès système -------------------------------------------------------- #
+#
+# Certaines opérations n'ont pas d'organisation par construction : inscription
+# (elle la crée), vérification d'adresse, réinitialisation de mot de passe,
+# webhook prestataire (il la résout depuis le message). Une RLS stricte les
+# interdit, et une RLS permissive pour les faire passer laisse fuiter les lignes
+# des autres organisations — c'est exactement le défaut mesuré avant cette
+# correction.
+#
+# La séparation est donc faite par identité, pas par politique : un second
+# moteur, connecté avec un rôle dédié (`vericlaim_system`) qui contourne la RLS
+# et dont les droits sont accordés *par colonne* (migration c5f1a8e37b910). Il ne
+# peut pas lire le corps d'un e-mail, ni une table applicative.
+#
+# Sans `SYSTEM_DATABASE_URL`, on retombe sur le moteur applicatif : c'est
+# légitime sous SQLite et dans les tests (pas de RLS), et en production le
+# démarrage refuse cet état (voir `_assert_system_access_configured`).
+_system_engine_kwargs: dict[str, Any] = {"pool_pre_ping": True}
+if settings.system_database_url:
+    if settings.system_database_url.startswith("sqlite"):
+        _system_engine_kwargs["connect_args"] = {"check_same_thread": False}
+    SystemEngine = create_engine(settings.system_database_url, **_system_engine_kwargs)
+else:
+    SystemEngine = engine
+
+SystemSessionLocal = sessionmaker(
+    bind=SystemEngine, autoflush=False, autocommit=False, expire_on_commit=False
+)
+
+
+def system_session() -> Iterator[Session]:
+    """Session pour les parcours transverses, sur une connexion qui reste ouverte.
+
+    À utiliser en gestionnaire de contexte. Le commit et le rollback sont la
+    responsabilité de l'appelant : la plupart de ces parcours participent à une
+    transaction plus large (l'inscription crée l'utilisateur, l'organisation et le
+    jeton dans le même appel).
+    """
+    db = SystemSessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+def _assert_system_access_configured() -> None:
+    """Refuser de démarrer une production où les parcours système ne peuvent pas fonctionner.
+
+    Sans rôle système distinct, l'inscription écrit dans des tables soumises à la
+    RLS sans contexte : elle échoue à l'exécution, en production seulement, et
+    seulement pour les nouveaux comptes. Un refus au démarrage est visible ; une
+    inscription cassée ne l'est pas.
+    """
+    if not settings.is_production_like:
+        return
+    if settings.database_url.startswith("sqlite"):
+        return
+    if settings.system_database_url:
+        return
+    raise RuntimeError(
+        "SYSTEM_DATABASE_URL est absente : les parcours d'identité sans organisation "
+        "(inscription, vérification d'adresse, réinitialisation, webhook prestataire) "
+        "échoueraient sous RLS. Configurer le rôle vericlaim_system "
+        "(infra/neon/04_system_role.sql) avant de servir du trafic."
+    )
+
 
 @event.listens_for(Session, "after_begin")
 def _restore_transaction_request_context(session: Session, transaction, connection) -> None:

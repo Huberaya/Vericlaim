@@ -92,15 +92,16 @@ def _set_session_cookies(response: Response, *, raw_token: str, raw_csrf_token: 
 
 
 @router.post("/signup", response_model=SelfServiceMessageResponse, status_code=status.HTTP_202_ACCEPTED)
-def create_account(
-    body: SignupRequest,
-    db: Session = SESSION_DEPENDENCY,
-) -> SelfServiceMessageResponse:
-    """Create an account and its organization. Identical answer for a known address."""
+def create_account(body: SignupRequest) -> SelfServiceMessageResponse:
+    """Create an account and its organization. Identical answer for a known address.
+
+    Aucune session applicative ici, volontairement : l'inscription écrit avant
+    qu'une organisation puisse être désignée. Le parcours ouvre lui-même une
+    session sur l'identité système, dont les droits sont bornés par colonne.
+    """
     settings = _settings()
     try:
         outcome = signup(
-            db,
             settings=settings,
             email=str(body.email),
             password=body.password,
@@ -110,7 +111,6 @@ def create_account(
     except SelfServiceError as exc:
         _raise(exc)
         raise
-    db.commit()
     return SelfServiceMessageResponse(
         status="accepted",
         message=(
@@ -124,16 +124,12 @@ def create_account(
 
 
 @router.post("/verify-email", response_model=SelfServiceMessageResponse)
-def verify_email_address(
-    body: TokenRequest,
-    db: Session = SESSION_DEPENDENCY,
-) -> SelfServiceMessageResponse:
+def verify_email_address(body: TokenRequest) -> SelfServiceMessageResponse:
     try:
-        user = verify_email(db, raw_token=body.token)
+        user = verify_email(None, raw_token=body.token)
     except SelfServiceError as exc:
         _raise(exc)
         raise
-    db.commit()
     return SelfServiceMessageResponse(
         status="verified",
         message=f"L'adresse {user.email} est confirmée. Vous pouvez vous connecter.",
@@ -181,14 +177,10 @@ def password_login(
     response_model=SelfServiceMessageResponse,
     status_code=status.HTTP_202_ACCEPTED,
 )
-def request_reset(
-    body: PasswordResetRequest,
-    db: Session = SESSION_DEPENDENCY,
-) -> SelfServiceMessageResponse:
+def request_reset(body: PasswordResetRequest) -> SelfServiceMessageResponse:
     """Always 202. A different answer would confirm which addresses exist."""
     settings = _settings()
-    request_password_reset(db, settings=settings, email=str(body.email))
-    db.commit()
+    request_password_reset(None, settings=settings, email=str(body.email))
     return SelfServiceMessageResponse(
         status="accepted",
         message=(
@@ -200,19 +192,16 @@ def request_reset(
 
 
 @router.post("/password-reset/confirm", response_model=SelfServiceMessageResponse)
-def confirm_reset(
-    body: PasswordResetConfirmRequest,
-    db: Session = SESSION_DEPENDENCY,
-) -> SelfServiceMessageResponse:
+def confirm_reset(body: PasswordResetConfirmRequest) -> SelfServiceMessageResponse:
+    """Confirm a reset. Auto-consommation de jeton : parcours système, sans locataire."""
     settings = _settings()
     try:
         user = confirm_password_reset(
-            db, settings=settings, raw_token=body.token, new_password=body.new_password
+            None, settings=settings, raw_token=body.token, new_password=body.new_password
         )
     except SelfServiceError as exc:
         _raise(exc)
         raise
-    db.commit()
     return SelfServiceMessageResponse(
         status="password_updated",
         message=(
@@ -263,8 +252,12 @@ def accept_invite(
     """Set the password from an invitation and open the session in one step."""
     settings = _settings()
     try:
-        user, organization = accept_invitation(
-            db,
+        outcome = accept_invitation(
+            # `db` n'est pas utilisé : le jeton est consommé avant que
+            # l'organisation de l'invité ne soit connue, donc l'opération — session
+            # de connexion comprise — tourne sur l'identité système. L'ouvrir ici
+            # supposerait de lire `auth_sessions` sans contexte d'organisation.
+            None,
             settings=settings,
             raw_token=body.token,
             password=body.password,
@@ -273,22 +266,43 @@ def accept_invite(
     except SelfServiceError as exc:
         _raise(exc)
         raise
-    raw_token, raw_csrf_token, _session = _create_session(db, settings=settings, user=user, request=request)
+
+    # L'adhésion est activée et validée : l'invité appartient désormais à
+    # l'organisation. La session est ouverte ici, sur la session applicative.
+    # `auth_sessions` est hors RLS — c'est déjà ainsi que la connexion par mot de
+    # passe ouvre la sienne —, donc aucun contexte d'organisation n'est requis, et
+    # le rôle système n'a pas besoin du droit d'écrire des sessions.
+    raw_token, raw_csrf_token, _session = _create_session(
+        db, settings=settings, user_id=outcome.user_id, request=request
+    )
     _set_session_cookies(
-        response, raw_token=raw_token, raw_csrf_token=raw_csrf_token, settings=settings
+        response,
+        raw_token=raw_token,
+        raw_csrf_token=raw_csrf_token,
+        settings=settings,
     )
     db.commit()
     return SessionIssuedResponse(
-        user_id=str(user.id),
-        email=user.email,
-        display_name=user.display_name,
-        active_organization_id=str(organization.id),
+        user_id=str(outcome.user_id),
+        email=outcome.email,
+        display_name=outcome.display_name,
+        active_organization_id=str(outcome.organization_id),
     )
 
 
-def _create_session(db: Session, *, settings: Settings, user, request: Request):
-    from app.identity.service import create_auth_session
+def _create_session(db: Session, *, settings: Settings, user_id, request: Request):
+    """Ouvrir une session pour un utilisateur que le parcours système vient de valider.
 
+    L'utilisateur est relu sur la session applicative : les objets de la session
+    système ont été fermés avec elle, et les réutiliser ferait cohabiter deux
+    transactions dans un même objet ORM.
+    """
+    from app.identity.service import create_auth_session
+    from app.models.domain import User
+
+    user = db.get(User, user_id)
+    if user is None:  # pragma: no cover - impossible après une acceptation réussie
+        raise SelfServiceError("user_missing", "Invitation introuvable.", status_code=404)
     return create_auth_session(
         db, user=user, settings=settings, request_user_agent=request.headers.get("user-agent")
     )

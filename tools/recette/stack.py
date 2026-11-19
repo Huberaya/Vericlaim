@@ -50,6 +50,7 @@ RUNTIME_DIR = REPO_ROOT / ".recette"
 ADMIN_USER = "postgres"
 APP_ROLE = "vericlaim_app"
 MIGRATOR_ROLE = "vericlaim_migrator"
+SYSTEM_ROLE = "vericlaim_system"
 
 
 class RecetteStackError(RuntimeError):
@@ -91,6 +92,8 @@ class PostgresCluster:
     #: Runtime credential for this run only; never written to a report.
     app_password: str = ""
     migrator_password: str = ""
+    system_password: str = ""
+    system_dsn: str = ""
     #: Evidence captured while provisioning, quoted verbatim in the report.
     evidence: dict[str, object] = field(default_factory=dict)
 
@@ -162,6 +165,7 @@ def start_postgres(*, workdir: Path | None = None, keep: bool = True) -> Postgre
     database = f"vericlaim_recette_{uuid.uuid4().hex[:10]}"
     migrator_password = ephemeral_password("mig")
     app_password = ephemeral_password("app")
+    system_password = ephemeral_password("sys")
 
     with psycopg.connect(admin_dsn, autocommit=True) as admin:
         admin.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(database)))
@@ -169,7 +173,7 @@ def start_postgres(*, workdir: Path | None = None, keep: bool = True) -> Postgre
         # until the bootstrap hands them their first distinct password.  The
         # script refuses to run twice, so it is executed exactly once here on a
         # brand-new database, as the documented procedure requires.
-        for role in (MIGRATOR_ROLE, APP_ROLE):
+        for role in (MIGRATOR_ROLE, APP_ROLE, SYSTEM_ROLE):
             admin.execute(
                 sql.SQL("CREATE ROLE {} NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS").format(
                     sql.Identifier(role)
@@ -186,6 +190,8 @@ def start_postgres(*, workdir: Path | None = None, keep: bool = True) -> Postgre
     )
     cluster.app_password = app_password
     cluster.migrator_password = migrator_password
+    cluster.system_password = system_password
+    cluster.system_dsn = cluster._dsn(user=SYSTEM_ROLE, password=system_password)
     cluster.migrator_dsn = cluster._dsn(user=MIGRATOR_ROLE, password=migrator_password)
     cluster.app_dsn = cluster._dsn(user=APP_ROLE, password=app_password)
 
@@ -211,6 +217,17 @@ def start_postgres(*, workdir: Path | None = None, keep: bool = True) -> Postgre
         )
     if login_roles != {MIGRATOR_ROLE: True, APP_ROLE: True}:
         raise RecetteStackError(f"01_bootstrap_roles.sql did not enable LOGIN for both roles: {login_roles}")
+
+    # Le rôle système est provisionné par le script audité, exactement comme en
+    # production : la migration refuse de s'appliquer s'il est absent, plutôt que
+    # de laisser les parcours d'identité échouer plus tard en production.
+    system_sql = (NEON_ROOT / "04_system_role.sql").read_text(encoding="utf-8")
+    _run_psql(
+        bootstrap_dsn,
+        system_sql,
+        {"target_database": database, "system_password": system_password},
+        label="04_system_role.sql",
+    )
 
     migration = subprocess.run(
         [sys.executable, "-m", "alembic", "upgrade", "head"],

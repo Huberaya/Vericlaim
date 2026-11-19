@@ -68,6 +68,11 @@ class Settings:
     app_name: str = "VeriClaim — Regulatory Rule Engine"
     environment: str = "development"
     database_url: str = "sqlite:///./vericlaim.db"
+    # Rôle distinct pour les opérations transverses (inscription, vérification
+    # d'adresse, réinitialisation, webhook). Vide en développement et sous
+    # SQLite : le rôle applicatif y est alors le seul existant, ce qui est sans
+    # conséquence puisque la RLS n'existe pas sur ce moteur.
+    system_database_url: str | None = None
     auto_create_schema: bool = True
     allow_local_sqlite_fallback: bool = False
     cors_origins: tuple[str, ...] = ("http://localhost:3000",)
@@ -404,6 +409,18 @@ def get_settings() -> Settings:
         os.getenv("ALLOW_LOCAL_SQLITE_FALLBACK"),
         default=False,
     )
+
+    # L'URL du rôle système, distinct de `DATABASE_URL`. Elle n'est pas
+    # obligatoire : sans elle, les parcours sans organisation (inscription,
+    # vérification d'adresse, réinitialisation, webhook) doivent retomber sur le
+    # rôle applicatif — ce qui n'est correct que là où la RLS n'existe pas
+    # (SQLite, tests). En production, son absence est signalée au démarrage.
+    system_database_url = _optional_env("SYSTEM_DATABASE_URL")
+    if system_database_url:
+        if system_database_url.startswith("postgres://"):
+            system_database_url = "postgresql+psycopg://" + system_database_url[len("postgres://"):]
+        elif system_database_url.startswith("postgresql://") and not system_database_url.startswith("postgresql+"):
+            system_database_url = "postgresql+psycopg://" + system_database_url[len("postgresql://"):]
 
     database_url = _optional_env("DATABASE_URL")
     if not database_url:
@@ -745,6 +762,7 @@ def get_settings() -> Settings:
         app_name=os.getenv("APP_NAME", "VeriClaim — Regulatory Rule Engine"),
         environment=environment,
         database_url=database_url,
+        system_database_url=system_database_url,
         auto_create_schema=auto_create_schema,
         allow_local_sqlite_fallback=allow_local_sqlite_fallback,
         cors_origins=origins,

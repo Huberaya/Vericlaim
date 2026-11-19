@@ -62,8 +62,10 @@ pytestmark = pytest.mark.skipif(
 
 MIGRATOR_ROLE = "vericlaim_migrator"
 APP_ROLE = "vericlaim_app"
+SYSTEM_ROLE = "vericlaim_system"
 MIGRATOR_PASSWORD = "integration-migrator-password"
 APP_PASSWORD = "integration-app-password"
+SYSTEM_PASSWORD = "integration-system-password-32char"
 
 
 @dataclass(frozen=True)
@@ -74,6 +76,7 @@ class Cluster:
     database: str
     migrator_dsn: str
     app_dsn: str
+    system_dsn: str
 
 
 def _dsn_for(dsn: str, *, dbname: str | None = None, user: str | None = None, password: str | None = None) -> str:
@@ -155,23 +158,30 @@ def cluster() -> Iterator[Cluster]:
         # Roles are cluster-wide and may survive an interrupted run. Reuse them
         # only after re-asserting the least-privilege attributes: a pre-existing
         # privileged role must never be silently adopted by this suite.
-        for role, password in ((MIGRATOR_ROLE, MIGRATOR_PASSWORD), (APP_ROLE, APP_PASSWORD)):
+        for role, password in (
+            (MIGRATOR_ROLE, MIGRATOR_PASSWORD),
+            (APP_ROLE, APP_PASSWORD),
+            (SYSTEM_ROLE, SYSTEM_PASSWORD),
+        ):
             cursor.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (role,))
             if cursor.fetchone():
+                bypass = "BYPASSRLS" if role == SYSTEM_ROLE else "NOBYPASSRLS"
                 cursor.execute(
                     sql.SQL(
-                        "ALTER ROLE {} LOGIN NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS PASSWORD {}"
+                        "ALTER ROLE {} LOGIN NOCREATEDB NOCREATEROLE NOINHERIT " + bypass + " PASSWORD {}"
                     ).format(sql.Identifier(role), sql.Literal(password))
                 )
             else:
+                bypass = "BYPASSRLS" if role == SYSTEM_ROLE else "NOBYPASSRLS"
                 cursor.execute(
                     sql.SQL(
-                        "CREATE ROLE {} LOGIN NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS PASSWORD {}"
+                        "CREATE ROLE {} LOGIN NOCREATEDB NOCREATEROLE NOINHERIT " + bypass + " PASSWORD {}"
                     ).format(sql.Identifier(role), sql.Literal(password))
                 )
 
     migrator_dsn = _dsn_for(ADMIN_DSN, dbname=database, user=MIGRATOR_ROLE, password=MIGRATOR_PASSWORD)
     app_dsn = _dsn_for(ADMIN_DSN, dbname=database, user=APP_ROLE, password=APP_PASSWORD)
+    system_dsn = _dsn_for(ADMIN_DSN, dbname=database, user=SYSTEM_ROLE, password=SYSTEM_PASSWORD)
 
     # Mirror 01_bootstrap_roles.sql: only the owner may grant on the schema.
     with _connect(_dsn_for(ADMIN_DSN, dbname=database), autocommit=True) as owner, owner.cursor() as cursor:
@@ -210,6 +220,7 @@ def cluster() -> Iterator[Cluster]:
             database=database,
             migrator_dsn=migrator_dsn,
             app_dsn=app_dsn,
+            system_dsn=system_dsn,
         )
     finally:
         _drop_database_and_roles(ADMIN_DSN, database)
@@ -236,6 +247,7 @@ def _seed(cluster: Cluster) -> Tenants:
     session_a, session_b = uuid.uuid4(), uuid.uuid4()
     orphan_message, orphan_event = uuid.uuid4(), uuid.uuid4()
 
+    seeded_users: list[uuid.UUID] = []
     with _connect(cluster.migrator_dsn) as connection, connection.cursor() as cursor:
         for (
             organization,
@@ -301,6 +313,7 @@ def _seed(cluster: Cluster) -> Tenants:
                 "VALUES (%s, %s, %s, 'active', now(), now())",
                 (user, f"utilisateur-{label.lower()}-{user.hex[:8]}@exemple.test", f"Utilisateur {label}"),
             )
+            seeded_users.append(user)
             cursor.execute(
                 "INSERT INTO identity_tokens "
                 "(id, user_id, organization_id, purpose, token_hash, expires_at, created_at, updated_at) "
@@ -329,10 +342,13 @@ def _seed(cluster: Cluster) -> Tenants:
                 "VALUES (%s, %s, 'local', %s, 'starter', 'open', %s, now() + interval '1 hour', now(), now())",
                 (session, organization, f"session-{label}-{session.hex[:8]}", f"https://exemple.test/checkout/{label}"),
             )
-        # Une ligne sans organisation : ce que laissent derrière elles une
-        # inscription interrompue et une notification globale. Elle doit rester
-        # lisible par le service (aucune organisation ne peut la revendiquer) et
-        # invisible à toute organisation.
+        connection.commit()
+
+    # Les lignes sans organisation ne sont plus écrivables par le rôle applicatif :
+    # la politique est stricte. Elles sont créées ici par le rôle système, comme
+    # en production (inscription, webhook), ce qui vérifie au passage que ce rôle
+    # en est bien capable.
+    with _connect(cluster.system_dsn) as system, system.cursor() as cursor:
         cursor.execute(
             "INSERT INTO email_messages "
             "(id, organization_id, recipient_email, subject, body_text, purpose, status, created_at, updated_at) "
@@ -340,9 +356,6 @@ def _seed(cluster: Cluster) -> Tenants:
             "        'transactional', 'queued', now(), now())",
             (orphan_message, f"orphelin-{orphan_message.hex[:8]}@exemple.test"),
         )
-        # Un événement prestataire arrive **sans** organisation : elle n'est
-        # déduite qu'ensuite, du message lui-même. C'est exactement le cas que la
-        # politique doit laisser passer, et la raison d'être de la ligne orpheline.
         cursor.execute(
             "INSERT INTO billing_provider_events "
             "(id, organization_id, provider, provider_event_id, event_type, payload_json, "
@@ -351,7 +364,21 @@ def _seed(cluster: Cluster) -> Tenants:
             "        true, now(), false, now(), now())",
             (orphan_event, f"evt-{orphan_event.hex[:12]}"),
         )
-        connection.commit()
+        cursor.execute(
+            "INSERT INTO identity_tokens "
+            "(id, user_id, organization_id, purpose, token_hash, expires_at, created_at, updated_at) "
+            "VALUES (%s, %s, NULL, 'email_verification', %s, now() + interval '1 day', now(), now())",
+            (
+                uuid.uuid4(),
+                # Réutiliser un utilisateur existant suffit : c'est la colonne
+                # `organization_id` qui porte le cas testé, pas l'identité.
+                seeded_users[0],
+                # L'empreinte est unique : une constante faisait échouer la
+                # deuxième exécution du jeu d'essai.
+                hashlib.sha256(f"orphelin-{uuid.uuid4()}".encode()).hexdigest(),
+            ),
+        )
+        system.commit()
 
     return Tenants(
         organization_a=organization_a,
@@ -451,7 +478,10 @@ def test_the_newly_protected_tables_carry_forced_row_level_security(cluster: Clu
             row = cursor.fetchone()
             assert row == (True, True), f"{table} : ENABLE/FORCE RLS attendu, obtenu {row}"
             cursor.execute("SELECT count(*) FROM pg_policies WHERE tablename = %s", (table,))
-            assert int(cursor.fetchone()[0]) == 1, f"{table} doit porter exactement une politique"
+            assert int(cursor.fetchone()[0]) == 1, (
+                f"{table} doit porter exactement une politique : des politiques permissives "
+                "supplémentaires se combineraient par OR et annuleraient le cloisonnement"
+            )
 
 
 def test_each_organisation_only_reads_its_own_identity_and_billing_rows(
@@ -468,73 +498,58 @@ def test_each_organisation_only_reads_its_own_identity_and_billing_rows(
         assert _count(app_connection, table, tenants.organization_a) == 0
 
 
-def test_rows_without_organisation_are_visible_to_the_service_alone(
+def test_rows_without_organisation_are_invisible_to_every_organisation(
     cluster: Cluster, tenants: Tenants, app_connection
 ) -> None:
-    """Mesure exacte d'une limite connue, pas une affirmation de sécurité.
+    """Aucune organisation ne voit une ligne sans organisation — plus aucune.
 
-    Trois tables portent un ``organization_id`` nullable, et leur politique vaut
-    ``organization_id IS NULL OR organization_id = vericlaim_current_organization_id()``.
-    Conséquence, telle qu'elle est réellement :
+    C'était le défaut mesuré : avec la politique permissive
+    ``organization_id IS NULL OR ...``, l'organisation A lisait le jeton de
+    réinitialisation d'un utilisateur rattaché à B dès que ce jeton avait été émis
+    avant rattachement. La politique est désormais stricte, et ces lignes
+    n'appartiennent qu'au rôle système.
 
-    * **sans aucun contexte d'organisation** (ce que fait l'application pour
-      consommer un jeton, vérifier une adresse ou appliquer un webhook), les
-      lignes orphelines *et* les lignes d'une organisation déjà rattachée sont
-      visibles ;
-    * **dès qu'un contexte d'organisation est posé**, une organisation ne voit
-      que ses propres lignes plus les orphelines — elle ne voit jamais les lignes
-      d'une autre organisation.
-
-    Autrement dit, la politique protège contre la lecture croisée *entre
-    organisations authentifiées*, et pas contre une requête oubliée qui
-    n'installe aucun contexte. Ce dernier cas est aujourd'hui inatteignable par
-    l'API : aucune route ne lit ces trois tables, et les chemins qui les
-    traversent (jeton, webhook) s'exécutent sans identité d'organisation par
-    construction.
-
-    Le test fixe la mesure pour que la situation ne puisse pas s'améliorer ou se
-    dégrader en silence. Une politique par utilisateur (``vericlaim_current_user_id``
-    sur ``identity_tokens.user_id``) ou une séparation des rôles lecture/écriture
-    la remplacerait avantageusement ; elle n'est pas introduite ici parce qu'elle
-    changerait le comportement des tentatives de connexion (verrouillage par
-    adresse e-mail) sans preuve de non-régression à cette échelle.
+    Ce test vérifie les deux faces : invisibles pour les organisations, visibles
+    pour le rôle système — sans quoi la vérification d'adresse et la
+    réinitialisation deviendraient impossibles.
     """
     orphan_tables = ORPHAN_CAPABLE_TABLES
 
-    # 1. Avec un contexte, la lecture croisée est refusée.
-    for organisation, other in (
-        (tenants.organization_a, tenants.organization_b),
-        (tenants.organization_b, tenants.organization_a),
-    ):
+    for organisation in (tenants.organization_a, tenants.organization_b):
         _set_tenant(app_connection, organisation)
-        assert _count(app_connection, orphan_tables[0], organisation) == 1
-        assert _count(app_connection, orphan_tables[0], other) == 0
-        with app_connection.cursor() as cursor:
-            for table in orphan_tables:
+        for table in orphan_tables:
+            with app_connection.cursor() as cursor:
                 cursor.execute(
-                    sql.SQL(
-                        "SELECT count(*) FROM {} WHERE organization_id = %s"
-                    ).format(sql.Identifier(table)),
-                    (other,),
+                    sql.SQL("SELECT count(*) FROM {} WHERE organization_id IS NULL").format(
+                        sql.Identifier(table)
+                    )
                 )
                 assert int(cursor.fetchone()[0]) == 0, (
-                    f"{table} : une organisation ne doit jamais lire les lignes d'une autre"
+                    f"{table} : une organisation lit une ligne sans organisation — fuite"
                 )
 
-    # 2. Sans aucun contexte, le service voit ce qu'il doit voir — et c'est
-    #    aussi la limite : tout y est visible, orphelins compris.
-    service = psycopg.connect(cluster.app_dsn)
-    try:
-        _set_tenant(service, None)
-        for table in ("email_messages", "billing_provider_events"):
-            visible = _count(service, table)
-            assert visible >= 1, (
-                f"{table} : le service sans contexte doit pouvoir traiter ses lignes "
-                "(consommation de jeton, envoi d'e-mail, webhook), sinon le correctif "
-                "casserait l'authentification au lieu de la protéger"
+    # Aucune ligne visible sans contexte non plus : la politique n'est plus
+    # permissive, un défaut de contexte n'ouvre plus rien.
+    with _connect(cluster.app_dsn) as connection:
+        _set_tenant(connection, None)
+        for table in orphan_tables:
+            assert _count(connection, table) == 0, (
+                f"{table} : sans contexte, le rôle applicatif ne doit plus rien voir"
             )
-    finally:
-        service.close()
+
+    # Et le rôle système, lui, doit voir ces lignes : c'est ce qui rend les
+    # parcours d'identité possibles.
+    with _connect(cluster.system_dsn) as system, system.cursor() as cursor:
+        for table in orphan_tables:
+            cursor.execute(
+                sql.SQL("SELECT count(*) FROM {} WHERE organization_id IS NULL").format(
+                    sql.Identifier(table)
+                )
+            )
+            assert int(cursor.fetchone()[0]) >= 1, (
+                f"{table} : le rôle système doit pouvoir traiter une ligne sans organisation, "
+                "sinon l'inscription ou le webhook deviendrait impossible"
+            )
 
 
 def test_an_organisation_cannot_write_a_row_for_another_one(
