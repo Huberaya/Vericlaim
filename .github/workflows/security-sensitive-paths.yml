@@ -1,0 +1,73 @@
+name: Revue des chemins sensibles
+
+# Une seule demande de fusion a un jour introduit une session propriétaire sans
+# aucun identifiant, dans tous les environnements (voir SECURITY.md §1). Rien ne
+# l'a arrêtée. Ce workflow exige donc un accusé de revue explicite pour les chemins
+# sensibles, au lieu de compter sur l'attention d'un relecteur.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: security-sensitive-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  require-review-acknowledgement:
+    name: Chemins sensibles modifiés
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Récupérer la révision à vérifier
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Détecter les modifications de chemins sensibles
+        id: detect
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin "${BASE_REF}"
+          changed="$(git diff --name-only "origin/${BASE_REF}...HEAD" || true)"
+
+          sensitive="$(printf '%s\n' "${changed}" | grep -E \
+            '^(backend/app/identity/|backend/app/api/v1/auth\.py|backend/app/core/config\.py|backend/app/core/database\.py|backend/app/documents/(security|scanner|storage)\.py|backend/alembic/versions/|\.github/workflows/|SECURITY\.md$)' \
+            || true)"
+
+          if [ -n "${sensitive}" ]; then
+            printf 'Chemins sensibles modifiés :\n%s\n' "${sensitive}"
+            printf 'touched=true\n' >> "${GITHUB_OUTPUT}"
+            {
+              echo '### Chemins sensibles modifiés'
+              echo ''
+              echo '| File |'
+              echo '| --- |'
+              printf '%s\n' "${sensitive}" | sed 's/^/| `/; s/$/` |/'
+              echo ''
+              echo 'Vérifier au regard de la liste de contrôle de `SECURITY.md` §5, puis ajouter'
+              echo 'le label `security-reviewed` pour en accuser réception.'
+            } >> "${GITHUB_STEP_SUMMARY}"
+          else
+            printf 'touched=false\n' >> "${GITHUB_OUTPUT}"
+            echo 'Aucun chemin sensible modifié.' >> "${GITHUB_STEP_SUMMARY}"
+          fi
+
+      - name: Exiger le label security-reviewed
+        if: steps.detect.outputs.touched == 'true'
+        env:
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: |
+          set -euo pipefail
+          if printf '%s' "${LABELS}" | grep -q '"security-reviewed"'; then
+            echo "security-reviewed label present; acknowledgement recorded."
+            exit 0
+          fi
+          echo "::error::Cette pull request modifie des chemins sensibles. Vérifier les contrôles de SECURITY.md section 5, puis ajouter le label 'security-reviewed'."
+          exit 1

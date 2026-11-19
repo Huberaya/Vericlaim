@@ -1,5 +1,19 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "crons": [
+    {
+      "path": "/api/v1/internal/workers/document_extraction/tick",
+      "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/v1/internal/workers/analysis_detection/tick",
+      "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/v1/internal/workers/report_generation/tick",
+      "schedule": "* * * * *"
+    }
+  ],
   "services": {
     "backend": {
       "root": "backend",

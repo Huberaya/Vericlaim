@@ -80,20 +80,17 @@ def test_readiness_probes_the_database_while_liveness_does_not() -> None:
         assert readiness.status_code == 200, readiness.text
         body = readiness.json()
         assert body["status"] == "ready"
-        assert body["database"] == "ok"
-        # The view must state whether the two mandatory document-safety
-        # boundaries are wired, without ever leaking an endpoint or a credential.
-        # A-07 audited the scanner itself: ``configured`` says a client exists,
-        # ``malware_scanner_reachable`` says the daemon actually answered PING.
-        assert set(body) == {
-            "status",
-            "database",
-            "document_storage",
-            "malware_scanner",
-            "malware_scanner_reachable",
-            "malware_scanner_reason",
-            "document_import",
-        }
+        # Contrat A-10 : une vue par dépendance (`checks`) et une synthèse
+        # (`capabilities`). Le champ `database` de l'ancienne vue est remplacé par
+        # le contrôle nommé « database », qui porte en plus la raison d'un échec.
+        database_check = next(check for check in body["checks"] if check["name"] == "database")
+        assert database_check["status"] == "ok"
+        assert body["capabilities"]["database"] is True
+        # La vue doit dire si les deux frontières documentaires sont câblées, sans
+        # jamais laisser fuir un endpoint ni un identifiant.
+        assert set(body) == {"status", "environment", "checks", "capabilities", "failed"}
+        names = {check["name"] for check in body["checks"]}
+        assert names == {"database", "migrations", "document_storage", "malware_scanner"}
         assert client.get("/healthz").status_code == 200
 
 
@@ -113,10 +110,23 @@ def test_unreachable_database_returns_503_not_a_fabricated_success(
         readiness = client.get("/readyz")
 
     assert documents.status_code == 503
-    assert documents.json() == {"detail": "Le service est temporairement indisponible; réessayez plus tard."}
+    # Le message doit dire *pourquoi* le service est indisponible, et ne jamais
+    # contenir de DSN ni de chemin : la cause est la base, le détail technique
+    # reste côté serveur. `code` donne un identifiant stable aux clients.
+    body = documents.json()
+    assert body["code"] == "database_unavailable"
+    assert "injoignable" in body["detail"]
+    assert "://" not in body["detail"]
     assert "sqlite" not in documents.text.lower()
     assert "/tmp" not in documents.text
     assert readiness.status_code == 503
-    assert readiness.json()["database"] == "unavailable"
+    # Contrat A-10 : la vue liste une entrée par dépendance plutôt qu'un champ
+    # unique. Le contrôle nommé porte le statut *et* la raison.
+    ready_body = readiness.json()
+    database_check = next(c for c in ready_body["checks"] if c["name"] == "database")
+    assert database_check["status"] == "failed", ready_body
+    assert ready_body["capabilities"]["database"] is False
+    # ``failed`` énumère les contrôles en échec (pas un booléen).
+    assert "database" in ready_body["failed"]
     # Liveness keeps answering: the process is healthy, the dependency is not.
     assert client.get("/healthz").status_code == 200

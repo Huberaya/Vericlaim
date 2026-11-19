@@ -84,7 +84,7 @@ def test_analysis_old_attempt_cannot_modify_reclaimed_job(operation, monkeypatch
                 assert record_analysis_detection_failure(db, settings=settings, claim=old, error_code="stale", retryable=False) is False
             else:
                 with pytest.raises(AnalysisConflictError):
-                    process_claimed_analysis_detection(db, claim=old)
+                    process_claimed_analysis_detection(db, settings=settings, claim=old)
             db.commit()
         assert fresh is not None
         with Session(engine) as db:
@@ -97,12 +97,12 @@ def test_analysis_old_attempt_cannot_modify_reclaimed_job(operation, monkeypatch
         monkeypatch.undo()
         with Session(engine) as db:
             set_db_request_context(db, user_id=seed.user_id, organization_id=seed.organization_id)
-            result = process_claimed_analysis_detection(db, claim=fresh)
+            result = process_claimed_analysis_detection(db, settings=settings, claim=fresh)
             assert result.claim_count > 0
             db.commit()
         with Session(engine) as db:
             set_db_request_context(db, user_id=seed.user_id, organization_id=seed.organization_id)
             with pytest.raises(AnalysisConflictError):
-                process_claimed_analysis_detection(db, claim=fresh)
+                process_claimed_analysis_detection(db, settings=settings, claim=fresh)
     finally:
         engine.dispose()

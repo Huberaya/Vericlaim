@@ -49,17 +49,34 @@ class EnterpriseMetricsResponse(BaseModel):
 
     uptime_seconds: float
     service_status: str
+    #: Why the service reports this status, in plain words.
+    status_reasons: list[str] = []
     database_status: str
     storage_status: str
     workers_status: str
-    active_tenants_count: int
+    #: Not measurable by a tenant, therefore null and named in `not_measured`.
+    active_tenants_count: int | None
     total_analyses_completed: int
-    average_analysis_latency_ms: float
+    #: Average duration of *HTTP requests* measured by this process since start, not
+    #: an "analysis latency". The previous field name promised something that was
+    #: never measured; the value is now real and the field documents what it is.
+    average_analysis_latency_ms: float | None
     total_api_requests: int
     error_rate_percent: float
     open_alerts_count: int
-    memory_usage_mb: float
-    cpu_utilization_percent: float
+    memory_usage_mb: float | None
+    cpu_utilization_percent: float | None
+    #: Audit events of the requesting organization (tenant-scoped, unlike before).
+    tenant_audit_events: int = 0
+    #: Fields with no honest value on this instance. An empty list means everything
+    #: below is measured.
+    not_measured: list[str] = []
+    #: Explicit scope of the process-level figures above.
+    metrics_note: str = (
+        "Latence, mémoire, CPU et débit sont mesurés dans ce processus et remis à zéro à "
+        "chaque redémarrage ; ils ne sont pas agrégés entre réplicas. Les compteurs métier "
+        "sont, eux, calculés depuis la base au moment de la lecture."
+    )
     timestamp: datetime
 
 

@@ -8,6 +8,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
+from app.billing.http import require_active_subscription
 from app.analyses.service import AnalysisNotFoundError, get_analysis_version_by_number
 from app.core.database import get_db
 from app.identity.dependencies import (
@@ -44,6 +45,10 @@ from app.review.service import (
 
 
 validations_router = APIRouter(prefix="/api/v1/validations", tags=["validations"])
+
+# C13 — garde d'abonnement : cette route produit un artefact payant ou une
+# dépense réelle (OCR, e-mail tiers, rapport signé). Voir app/billing/http.py.
+SUBSCRIPTION_GATE = Depends(require_active_subscription())
 analysis_validations_router = APIRouter(prefix="/api/v1/analyses", tags=["analyses-validations"])
 evidence_requests_router = APIRouter(prefix="/api/v1/evidence-requests", tags=["evidence-requests"])
 
@@ -107,7 +112,7 @@ def _raise_review_error(exc: Exception) -> None:
 # ---------------------------------------------------------------------------
 
 
-@validations_router.post("", response_model=ValidationResponse, status_code=status.HTTP_201_CREATED)
+@validations_router.post("", response_model=ValidationResponse, status_code=status.HTTP_201_CREATED, dependencies=[SUBSCRIPTION_GATE])
 def record_human_validation(
     body: ValidationCreateRequest,
     request: Request,
@@ -158,7 +163,7 @@ def get_version_validations(
 # ---------------------------------------------------------------------------
 
 
-@evidence_requests_router.post("", response_model=EvidenceRequestResponse, status_code=status.HTTP_201_CREATED)
+@evidence_requests_router.post("", response_model=EvidenceRequestResponse, status_code=status.HTTP_201_CREATED, dependencies=[SUBSCRIPTION_GATE])
 def create_new_evidence_request(
     body: EvidenceRequestCreateRequest,
     request: Request,
@@ -252,7 +257,7 @@ def update_request(
         raise
 
 
-@evidence_requests_router.post("/{request_id}/send", response_model=EvidenceRequestResponse)
+@evidence_requests_router.post("/{request_id}/send", response_model=EvidenceRequestResponse, dependencies=[SUBSCRIPTION_GATE])
 def send_request_to_supplier(
     request_id: UUID,
     request: Request,
@@ -273,7 +278,7 @@ def send_request_to_supplier(
         raise
 
 
-@evidence_requests_router.post("/{request_id}/remind", response_model=EvidenceRequestResponse)
+@evidence_requests_router.post("/{request_id}/remind", response_model=EvidenceRequestResponse, dependencies=[SUBSCRIPTION_GATE])
 def record_supplier_reminder(
     request_id: UUID,
     request: Request,
@@ -314,7 +319,7 @@ def cancel_and_delete_request(
         raise
 
 
-@evidence_requests_router.post("/generate-template", response_model=TemplateGenerationResponse)
+@evidence_requests_router.post("/generate-template", response_model=TemplateGenerationResponse, dependencies=[SUBSCRIPTION_GATE])
 def generate_request_template(
     body: TemplateGenerationRequest,
     principal: TenantPrincipal = REQUESTS_READ_DEPENDENCY,

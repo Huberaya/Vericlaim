@@ -16,6 +16,10 @@ EXPECTED_RLS_TABLES: tuple[str, ...] = (
     "analysis_detection_jobs",
     "analysis_documents",
     "analysis_versions",
+    # C5 : les verdicts réglementaires sont persistés par version d'analyse et
+    # portent la traçabilité des règles. Ce sont des données client : sans RLS,
+    # ils seraient lisibles par toute organisation.
+    "analysis_verdicts",
     "analyses",
     "api_keys",
     "audit_events",
@@ -31,6 +35,9 @@ EXPECTED_RLS_TABLES: tuple[str, ...] = (
     "evidence_requests",
     "evidence",
     "legal_holds",
+    # C13 : chaque organisation fixe sa durée de conservation. La ligne dit
+    # combien de temps les preuves d'un client sont gardées : elle est isolée.
+    "organization_retention_policies",
     "products",
     "recommendations",
     "reports",

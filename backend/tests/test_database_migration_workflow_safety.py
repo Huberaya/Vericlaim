@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 
@@ -98,10 +99,32 @@ def test_staging_preflight_fails_closed_on_missing_or_mismatched_target() -> Non
     assert "rolbypassrls" in text
 
 
+def _alembic_head() -> str:
+    """La tête réelle, lue dans la chaîne de migrations — jamais recopiée.
+
+    Une constante écrite ici rougirait à chaque migration ajoutée, et la
+    tentation serait alors de la mettre à jour sans regarder : c'est exactement
+    le défaut que C24 a supprimé de la CI.
+    """
+
+    versions = REPOSITORY_ROOT / "backend" / "alembic" / "versions"
+    revisions: set[str] = set()
+    parents: set[str] = set()
+    for path in versions.glob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        for match in re.finditer(r"""^revision(?::\s*str)?\s*=\s*["']([0-9a-f]+)["']""", text, re.M):
+            revisions.add(match.group(1))
+        for match in re.finditer(r"""^down_revision(?::\s*[^=]+)?\s*=\s*["']([0-9a-f]+)["']""", text, re.M):
+            parents.add(match.group(1))
+    heads = revisions - parents
+    assert len(heads) == 1, f"la chaîne doit avoir exactement une tête, obtenu : {sorted(heads)}"
+    return heads.pop()
+
+
 def test_neon_runbook_documents_current_alembic_head() -> None:
     text = (REPOSITORY_ROOT / "infra" / "neon" / "README.md").read_text(encoding="utf-8")
 
-    assert "--expected-revision a7d4c9e2b510" in text
+    assert f"--expected-revision {_alembic_head()}" in text
     assert "e8f9a1b2c3d4" not in text
     assert "preflight_staging.py" in text
 
@@ -144,3 +167,47 @@ def test_runtime_verification_covers_every_rls_protected_table() -> None:
 
     missing = enabled - set(EXPECTED_RLS_TABLES)
     assert not missing, f"RLS-protected tables missing from runtime verification: {sorted(missing)}"
+
+
+def test_migration_workflows_never_allow_silent_schema_creation() -> None:
+    """A migration job must never be able to create schema implicitly.
+
+    The migration jobs run with APP_ENV=development so that Alembic can load
+    application settings without requiring unrelated production secrets. That
+    makes the permissive ``AUTO_CREATE_SCHEMA`` default apply, so every step
+    must pin it to false explicitly. This test is the guard that stops the pin
+    from being removed: without it, a shared database could be mutated outside
+    the reviewed Alembic chain.
+    """
+    for name in ("production-database-migration.yml", "staging-database-migration.yml"):
+        text = _workflow(name)
+        app_env_steps = text.count("APP_ENV: development")
+        pinned_steps = text.count('AUTO_CREATE_SCHEMA: "false"')
+
+        assert app_env_steps > 0, f"{name} no longer sets APP_ENV; revisit this guard"
+        assert pinned_steps >= app_env_steps, (
+            f"{name}: every step that sets APP_ENV must also pin "
+            f'AUTO_CREATE_SCHEMA: "false" (found {app_env_steps} APP_ENV steps '
+            f"but only {pinned_steps} pins)"
+        )
+        assert 'AUTO_CREATE_SCHEMA: "true"' not in text
+        assert "AUTO_CREATE_SCHEMA: true" not in text
+
+
+def test_deployment_platform_must_not_rely_on_the_default_app_env() -> None:
+    """The Vercel manifest must not silently serve the permissive default.
+
+    A missing APP_ENV on the platform boots the application as `development`,
+    which re-enables the credential-less pilot route and points at SQLite.
+    The application now refuses that combination at startup; this test records
+    the requirement on the deployment side too.
+    """
+    manifest = (REPOSITORY_ROOT / "vercel.json").read_text(encoding="utf-8")
+    assert "APP_ENV" not in manifest, (
+        "APP_ENV must be configured as a platform environment variable, not hardcoded in "
+        "vercel.json where it could drift from the actual target environment"
+    )
+    checklist = REPOSITORY_ROOT / "docs" / "operations" / "release-checklist.md"
+    assert checklist.exists(), "the release checklist is missing"
+    checklist_text = checklist.read_text(encoding="utf-8")
+    assert "APP_ENV" in checklist_text

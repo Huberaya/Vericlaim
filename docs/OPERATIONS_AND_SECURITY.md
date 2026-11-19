@@ -1,8 +1,8 @@
-# Manuel d'Exploitation & Référentiel Sécurité — VeriClaim AI
+# Manuel d'Exploitation & Référentiel Sécurité — VeriClaim
 
 ## 1. Vue d'Ensemble & Posture de Sécurité
 
-VeriClaim AI est conçu selon le principe de **Défense en Profondeur** (*Defense in Depth*) pour répondre aux exigences réglementaires européennes (RGPD, NIS 2, DORA) et aux standards d'audit SOC 2 Type II / ISO 27001.
+VeriClaim est conçu selon le principe de **Défense en Profondeur** (*Defense in Depth*) pour répondre aux exigences réglementaires européennes (RGPD, NIS 2, DORA) et aux standards d'audit SOC 2 Type II / ISO 27001.
 
 ---
 

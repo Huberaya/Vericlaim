@@ -2,7 +2,7 @@
 
 ## 1. Contexte et Objectifs Métier
 
-Le **Chantier 10** fournit le moteur de restitution documentaire certifié de **VeriClaim AI**, permettant aux directions juridiques, RSE et achats d'exporter :
+Le **Chantier 10** fournit le moteur de restitution documentaire certifié de **VeriClaim**, permettant aux directions juridiques, RSE et achats d'exporter :
 
 1. **Un Rapport PDF d'Audit Pré-Réglementaire Haute Fidélité** :
    - Mise en page normée A4 multipages avec en-têtes et pieds de page numérotés (« Page X / Y »).

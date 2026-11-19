@@ -16,6 +16,11 @@ class ClaimType(str, Enum):
     COMPARATIVE = "comparative"
     QUANTIFIED_CLIMATE = "quantified_climate"
     RECYCLABLE = "recyclable"
+    # Added by C9. The audit measured that no certification claim was detected at
+    # all, so the claim → evidence chain stayed empty for the most documented
+    # claims on the market (case A: "100 % de matière recyclée certifiée + ACV
+    # ISO 14044" produced zero detections).
+    CERTIFICATION = "certification"
 
 
 class Severity(str, Enum):
@@ -97,6 +102,11 @@ class DetectedClaim(BaseModel):
     has_specific_qualifier: bool = False
     numeric_value: Decimal | None = None
     numeric_unit: str | None = None
+    # Certification claims carry the three facts a verifier needs to check them.
+    # They are extracted verbatim; the engine never invents a scheme or a body.
+    certification_scheme: str | None = None
+    certification_reference: str | None = None
+    certification_body: str | None = None
     detection_method: str = "DETERMINISTIC_LEXICON"
 
 
@@ -255,6 +265,23 @@ class ExposureMatrix(BaseModel):
     calculation_notes: list[str] = Field(default_factory=list)
 
 
+class HumanReviewSummary(BaseModel):
+    """The recorded human decision attached to a verdict, if any.
+
+    A verdict can be contested or overridden, but only through the historised
+    ``validations`` table — never by a value supplied with a report request. The
+    report renders this so a reader can tell an engine verdict from a reviewed
+    one, and so an override is visible rather than silently replacing the rule
+    engine's output.
+    """
+
+    decision: Literal["pending", "validated", "contested", "overridden"]
+    reviewer_display_name: str | None = None
+    comment: str | None = None
+    rationale: str | None = None
+    decided_at: datetime | None = None
+
+
 class LegalAssessment(BaseModel):
     """One auditable decision for one detected claim and one formal rule."""
 
@@ -280,6 +307,9 @@ class LegalAssessment(BaseModel):
     remediation: Remediation
     sanction: SanctionProfile | None = None
     legal_caveat: str | None = None
+    # None means the verdict has not been reviewed by a human. Absent is not the
+    # same as approved, so the renderer says "non revu" rather than leaving a gap.
+    human_review: HumanReviewSummary | None = None
 
 
 class AuditTrail(BaseModel):

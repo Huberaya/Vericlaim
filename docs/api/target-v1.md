@@ -90,6 +90,6 @@ Le worker C5 réutilise `FactExtractor` **sur les `DocumentSegment` persistés**
     "input_manifest_sha256": "…",
     "result_sha256": "…"
   },
-  "disclaimer": "VeriClaim AI fournit une détection automatisée d’allégations pour le pré-audit et la gestion du risque. Ce résultat ne constitue pas un avis juridique, une certification ni une décision d’autorité."
+  "disclaimer": "VeriClaim fournit une détection automatisée d’allégations pour le pré-audit et la gestion du risque. Ce résultat ne constitue pas un avis juridique, une certification ni une décision d’autorité."
 }
 ```

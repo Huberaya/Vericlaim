@@ -292,7 +292,17 @@ def test_claim_evidence_linking_and_matrix_generation():
         )
         assert link_res.status_code == 201, link_res.text
         link_data = link_res.json()
-        assert link_data["coverage_status"] == "present"
+        # C17 — changement de comportement assumé : cette preuve de filière est rattachée à
+        # l'organisation mais à **aucun produit ni fournisseur** (périmètre en texte libre
+        # seulement), et l'analyse non plus n'a pas de produit. Le produit ne peut donc pas
+        # comparer les périmètres, et il ne prononce plus « present » : il dit « partial ».
+        # Avant C17, ce rattachement était enregistré « present » par défaut, c'est-à-dire
+        # déclaré utilisable sans qu'aucun périmètre n'ait été vérifié — précisément le cas E
+        # de l'audit. Le motif conserve la référence et l'émetteur de la pièce.
+        assert link_data["coverage_status"] == "pending", (
+            "aucune décision humaine déclarée : le lien ne se déclare pas couvrant"
+        )
+        assert link_data["observed_state"] == "partial"
         assert "Citeo" in link_data["rationale"]
 
         # Get Claim Links
@@ -310,10 +320,18 @@ def test_claim_evidence_linking_and_matrix_generation():
         assert len(matrix["matrix_rows"]) == 2
 
         # Check Claim 1 in matrix
+        #
+        # C17 — changement de comportement assumé, et visible : la matrice ne calcule plus
+        # selon sa propre règle. La pièce de filière est bien rattachée, mais ni elle ni
+        # l'analyse ne portent de produit ou de fournisseur : le périmètre n'est pas
+        # comparable, donc l'état est « partial » et non « present ». Avant C17, la matrice
+        # prononçait « present » sur la seule présence d'un lien marqué ainsi — le cas E de
+        # l'audit, où une pièce sans lien vérifiable était comptée comme couvrante.
         row_1 = next(r for r in matrix["matrix_rows"] if r["claim"]["id"] == str(claim_1_id))
-        assert row_1["coverage_status"] == "present"
-        assert row_1["is_sufficient"] is True
-        assert len(row_1["evidence_links"]) == 1
+        assert row_1["coverage_status"] == "partial"
+        assert row_1["is_sufficient"] is False
+        assert len(row_1["evidence_links"]) == 1, "la pièce reste rattachée et visible"
+        assert "périmètre" in row_1["explanation"] or "comparé" in row_1["explanation"]
 
         # Check Claim 2 in matrix (no evidence linked -> missing)
         row_2 = next(r for r in matrix["matrix_rows"] if r["claim"]["id"] == str(claim_2_id))

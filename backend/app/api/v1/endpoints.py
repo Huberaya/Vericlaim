@@ -22,6 +22,7 @@ from app.engine.risk_assessment import (
     derive_overall_status,
     derive_risk_score,
 )
+from app.engine.lexicon import LEXICON_VERSION
 from app.engine.rule_book import RULES, RULEBOOK_VERSION
 from app.models.legal_types import AuditTrail, EvidenceDossier, Verdict
 from app.models.schemas import AuditContext, EvaluationRequest, EvaluationResponse, RuleBookResponse, RuleSummary
@@ -139,6 +140,9 @@ async def _read_request(request: Request) -> tuple[EvaluationRequest, str, str |
 def _audit_limitations(evaluator_status: str) -> list[str]:
     return [
         "Le moteur applique un Rule Book explicite et versionné; sa couverture lexicale est limitée aux motifs configurés.",
+        f"Détection lexicale ({LEXICON_VERSION}): seules les formulations listées sont reconnues. Une allégation "
+        "implicite, une image, un pictogramme ou une formulation absente du lexique ne sont pas détectés, et leur "
+        "absence de détection ne vaut pas conformité.",
         "Les fichiers de preuve ne sont pas authentifiés ni analysés juridiquement par le moteur; les contrôles portent principalement sur des métadonnées.",
         "L'OCR peut altérer une négation, un chiffre, une unité ou un symbole. Relire le texte extrait sur le document original.",
         "La trace et les empreintes SHA-256 rendent les altérations détectables dans le registre, mais ne constituent ni signature qualifiée, ni horodatage qualifié, ni constat officiel, ni garantie d'opposabilité.",

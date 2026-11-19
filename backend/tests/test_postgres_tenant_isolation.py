@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import re
 import subprocess
 import sys
 import uuid
@@ -28,7 +29,29 @@ from psycopg import sql
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 BACKEND_ROOT = REPOSITORY_ROOT / "backend"
 NEON_ROOT = REPOSITORY_ROOT / "infra" / "neon"
-ALEMBIC_HEAD = "a7d4c9e2b510"
+def _alembic_head() -> str:
+    """La tête réelle, lue dans la chaîne de migrations.
+
+    Recopier un identifiant ici faisait échouer toute la preuve RLS sur une base
+    pourtant correctement migrée, dès qu'une migration était ajoutée : le test
+    mesurait la constance du fichier, pas l'état de la base.
+    """
+
+    versions = REPOSITORY_ROOT / "backend" / "alembic" / "versions"
+    revisions: set[str] = set()
+    parents: set[str] = set()
+    for path in versions.glob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        for match in re.finditer(r"""^revision(?::\s*str)?\s*=\s*["']([0-9a-f]+)["']""", text, re.M):
+            revisions.add(match.group(1))
+        for match in re.finditer(r"""^down_revision(?::\s*[^=]+)?\s*=\s*["']([0-9a-f]+)["']""", text, re.M):
+            parents.add(match.group(1))
+    heads = revisions - parents
+    assert len(heads) == 1, f"la chaîne doit avoir exactement une tête, obtenu : {sorted(heads)}"
+    return heads.pop()
+
+
+ALEMBIC_HEAD = _alembic_head()
 
 ADMIN_DSN = os.environ.get("VERICLAIM_TEST_POSTGRES_URL", "").strip()
 pytestmark = pytest.mark.skipif(
@@ -234,9 +257,14 @@ def _seed(cluster: Cluster) -> Tenants:
                 (product, organization, supplier, f"REF-{label}", f"Produit {label}"),
             )
             cursor.execute(
-                "INSERT INTO api_keys (id, organization_id, name, prefix, hashed_secret, scopes, created_at) "
+                # Noms de colonnes du schéma réel (`key_hash`, `scopes_json`) :
+                # `hashed_secret`/`scopes` n'existent pas et faisaient échouer la
+                # preuve RLS sur une base pourtant correctement migrée.
+                "INSERT INTO api_keys (id, organization_id, name, prefix, key_hash, scopes_json, created_at) "
                 "VALUES (%s, %s, %s, %s, %s, '[]', now())",
-                (key, organization, f"Clé {label}", f"prefix{label}", "0" * 64),
+                # `key_hash` est unique : une empreinte constante faisait échouer
+                # l'insertion de la deuxième organisation.
+                (key, organization, f"Clé {label}", f"prefix{label}", f"{key.hex}"[:64]),
             )
             cursor.execute(
                 "INSERT INTO legal_holds (id, organization_id, case_reference, reason, created_at) "

@@ -1,0 +1,71 @@
+{
+  "schema_version": "vericlaim-public-claims-v1",
+  "note": "Source unique des affirmations publiques du site. Chaque affirmation porte une clé de preuve machine (`evidence_key`). Le test backend tests/test_public_claims.py refuse toute clé inconnue : une affirmation sans preuve executable ne peut pas être publiée. Le site rend ces affirmations depuis ce fichier, donc la page et le test ne peuvent pas diverger.",
+  "legal_review_status": "à faire valider par un juriste avant publication commerciale (chantier C12)",
+  "claims": [
+    {
+      "id": "no_llm",
+      "text": "Aucun LLM, aucun modèle statistique : la détection des allégations est lexicale et déterministe.",
+      "evidence_key": "no_llm_dependency",
+      "detail": "Le moteur applique un lexique versionné, jamais un modèle. La même entrée produit toujours la même sortie."
+    },
+    {
+      "id": "no_third_party_transfer",
+      "text": "Vos documents ne sont envoyés à aucun service d'IA tiers.",
+      "evidence_key": "no_outbound_ai_transfer",
+      "detail": "Le traitement se fait dans votre instance : aucune dépendance à un fournisseur de modèle, aucun appel sortant depuis le moteur d'analyse."
+    },
+    {
+      "id": "deterministic_replay",
+      "text": "Une analyse peut être rejouée et doit redonner exactement les mêmes verdicts.",
+      "evidence_key": "replay_is_stable",
+      "detail": "Chaque version d'analyse conserve ses entrées gelées, son empreinte de résultat et ses verdicts : la reproductibilité est vérifiable, pas promise."
+    },
+    {
+      "id": "verifiable_report",
+      "text": "Chaque rapport porte une référence publique qu'un tiers peut vérifier.",
+      "evidence_key": "report_verifiable",
+      "detail": "Le rapport est signé (HMAC-SHA-256) et vérifiable via une référence non énumérable ; la vérification distingue « authentique », « analyse modifiée » et « signature invalide »."
+    },
+    {
+      "id": "published_detection_measure",
+      "text": "Taux de détection et taux de faux positifs publiés et mesurés à chaque exécution des tests.",
+      "evidence_key": "corpus_rates_match_published_facts",
+      "detail": "Mesure de non-régression sur un corpus de référence écrit par l'éditeur : elle ne garantit pas la couverture du marché, et c'est écrit sur cette page."
+    },
+    {
+      "id": "audit_trail",
+      "text": "Chaque action laisse une trace chaînée : une altération est détectée.",
+      "evidence_key": "audit_chain_verifiable",
+      "detail": "Les événements sont chaînés par empreinte et vérifiables ; la suppression d'un événement rompt la chaîne et est signalée comme telle."
+    },
+    {
+      "id": "confidence_and_review",
+      "text": "Chaque détection est publiée avec un niveau de confiance et, si nécessaire, une demande de revue humaine motivée.",
+      "evidence_key": "confidence_published",
+      "detail": "Quatre niveaux, quatre motifs de revue déterministes (OCR, extraction douteuse, polarité contradictoire, verdict à arbitrer). Le score n'est pas une probabilité."
+    },
+    {
+      "id": "no_legal_advice",
+      "text": "Le produit qualifie un risque, il ne rend pas un avis juridique.",
+      "evidence_key": "disclaimer_published",
+      "detail": "L'API et les rapports publient cette limite explicitement, ainsi que la couverture du lexique et la version des règles appliquées."
+    },
+    {
+      "id": "legal_transposition_unknown",
+      "text": "Quand l'état d'une transposition nationale n'est pas constaté, le moteur ne prononce pas de violation : il demande une revue.",
+      "evidence_key": "unknown_transposition_downgrades",
+      "detail": "Exemple mesuré : directive (UE) 2024/825, transposition française non vérifiée par le moteur, donc verdict « revue requise » et non « interdit »."
+    }
+  ],
+  "published_facts": {
+    "lexicon_version": "lexicon-2026-09-30.1",
+    "rulebook_version": "2026-09-30+fb7d21612765",
+    "rule_count": 9,
+    "corpus_positive_cases": 60,
+    "corpus_detection_rate": 1.0,
+    "corpus_negative_cases": 27,
+    "corpus_false_positive_rate": 0.0,
+    "corpus_note": "Corpus de référence écrit par l'éditeur (60 cas positifs, 26 négatifs dont 10 cas d'ambiguïté à tolérance nulle). Il mesure la non-régression, pas la couverture réelle du marché."
+  }
+}

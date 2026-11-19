@@ -7,11 +7,20 @@ promoted to a separate bucket after malware scanning.
 
 from __future__ import annotations
 
+import logging
 import re
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
-from app.core.config import Settings
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from app.core.config import Settings
+
+LOGGER = logging.getLogger("vericlaim.documents.storage")
+
+#: A readiness probe must not hang on a black-holed endpoint. botocore retries
+#: twice with its own backoff, so the budget is also expressed as a future timeout.
+PROBE_BUDGET_SECONDS = 3.0
 
 #: Préfixe d'objets accepté pour une libération par préfixe: un type d'objets, puis
 #: l'identifiant d'une seule organisation, puis au moins un segment de nom. La
@@ -105,6 +114,9 @@ class ObjectStorage(Protocol):
     def head(self, *, bucket: str, key: str) -> ObjectMetadata: ...
 
     def read_bytes(self, *, bucket: str, key: str, max_size_bytes: int, expected_etag: str | None = None) -> bytes: ...
+    def probe(self, *, bucket: str) -> tuple[bool, str]:
+        """Reachability probe used by /readyz: one HEAD on an existing bucket."""
+        ...
 
     def put_bytes(self, *, bucket: str, key: str, payload: bytes, content_type: str) -> None: ...
 
@@ -146,6 +158,12 @@ class DisabledObjectStorage:
         self._raise()
 
     def head(self, **_: object) -> ObjectMetadata:
+        self._raise()
+
+    def probe(self, **_: object) -> tuple[bool, str]:
+        # Readiness does not call this: a disabled backend is reported as `disabled`
+        # by the probe module itself. The method exists so that a caller which does
+        # ask for a probe receives a refusal rather than an AttributeError.
         self._raise()
 
     def read_bytes(self, **_: object) -> bytes:
@@ -267,6 +285,24 @@ class S3ObjectStorage:
         except Exception as exc:  # boto3's exception hierarchy is optional at import time.
             self._raise_storage_error(exc)
         return PresignedUpload(url=str(response["url"]), fields={str(k): str(v) for k, v in response["fields"].items()})
+
+    def probe(self, *, bucket: str) -> tuple[bool, str]:
+        """Verify the bucket is reachable and readable with the configured credentials.
+
+        A failing probe returns a *code*, not a message: bucket names and endpoints
+        must not travel back through an unauthenticated readiness endpoint. The full
+        error is logged.
+        """
+        try:
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                pool.submit(self._client.head_bucket, Bucket=bucket).result(timeout=PROBE_BUDGET_SECONDS)
+        except Exception as exc:  # noqa: BLE001 — reported as a failed probe
+            LOGGER.warning(
+                "Storage readiness probe failed",
+                extra={"event": "storage_probe_failed", "bucket": bucket, "error": repr(exc)},
+            )
+            return False, f"head_bucket: {type(exc).__name__}"
+        return True, "head_bucket: ok"
 
     def head(self, *, bucket: str, key: str) -> ObjectMetadata:
         try:

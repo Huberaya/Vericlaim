@@ -84,6 +84,11 @@ class DocumentResponse(BaseModel):
 
 class DocumentListResponse(BaseModel):
     """One page of the tenant vault; the cursor is opaque, like the catalogue's."""
+    """A page of documents plus the cursor for the next one (C18).
+
+    The cursor is opaque and must be passed back verbatim; `next_cursor: null` means
+    the caller has reached the end of the collection.
+    """
 
     items: list[DocumentResponse]
     next_cursor: str | None = None

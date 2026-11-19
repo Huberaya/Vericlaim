@@ -2,7 +2,7 @@
 
 ## Objet et Principes Directeurs
 
-Le **Chantier 7** établit la gouvernance, l'explicabilité et la traçabilité intégrale du référentiel juridique de VeriClaim AI.
+Le **Chantier 7** établit la gouvernance, l'explicabilité et la traçabilité intégrale du référentiel juridique de VeriClaim.
 
 Conformément à la directive européenne 2024/825 (EmpCo), à la loi AGEC, aux normes ISO et aux exigences de conformité du futur *AI Act* :
 1. **Zéro Hallucination & Citations Exactes** : Chaque règle s'appuie sur des citations littérales d'articles de loi et des liens hypertextes officiels vérifiables (Légifrance, EUR-Lex, ISO).

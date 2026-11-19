@@ -35,6 +35,11 @@ class InspectedDocument:
     content_type: str
     size_bytes: int
     sha256: str
+    #: Nombre de pages, quand il est connaissable **sans rendre** le document (PDF via
+    #: sa table de pages, image = 1). ``None`` quand seul le texte peut le dire. C21 en
+    #: a besoin : le quota de pages OCR décidait sur « 1 page » alors qu'un scan de 300
+    #: pages en consomme 300.
+    page_count: int | None = None
 
 
 def normalize_content_type(value: str | None) -> str:
@@ -125,7 +130,35 @@ def inspect_document_bytes(
         content_type=actual,
         size_bytes=len(payload),
         sha256=hashlib.sha256(payload).hexdigest(),
+        page_count=count_pages_without_rendering(payload, content_type=actual),
     )
+
+
+def count_pages_without_rendering(payload: bytes, *, content_type: str) -> int | None:
+    """Compte les pages sans rendre une seule image.
+
+    Un PDF : sa table de pages suffit (aucun rendu, aucun OCR). Une image : une page.
+    Tout autre format : ``None`` — on ne devine pas, et l'appelant décide quoi faire
+    d'une estimation inconnue plutôt que de la traiter comme certaine.
+    """
+
+    if content_type == "application/pdf":
+        try:
+            import fitz
+
+            document = fitz.open(stream=payload, filetype="pdf")
+            try:
+                # Un PDF sans page (0) n'est pas un compte : c'est un document que
+                # l'extraction refusera. Le compter « zéro page » ferait échouer la
+                # contrainte de base et ferait croire à un import gratuit.
+                return int(document.page_count) or None
+            finally:
+                document.close()
+        except Exception:  # noqa: BLE001 - un PDF illisible est refusé juste après
+            return None
+    if content_type in {"image/png", "image/jpeg", "image/tiff", "image/webp"}:
+        return 1
+    return None
 
 
 def is_sha256(value: str) -> bool:

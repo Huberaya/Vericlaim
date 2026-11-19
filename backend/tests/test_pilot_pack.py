@@ -201,7 +201,15 @@ def test_dossier_export_and_retention_policy():
         ret_res = client.get("/api/v1/pilot/retention-policy")
         assert ret_res.status_code == 200, ret_res.text
         ret_data = ret_res.json()
-        assert ret_data["documents_retention_years"] == 5
-        assert ret_data["audit_trail_retention_years"] == 10
-        assert "dpo@vericlaim.ai" in ret_data["gdpr_contact_email"]
-        assert "AES-256" in ret_data["encryption_standard"]
+        # C8: these values are no longer fabricated. An organization that has not
+        # declared a retention policy gets null and a non-contractual status, not
+        # the publisher's invented defaults.
+        assert ret_data["configured"] is False
+        assert ret_data["documents_retention_years"] is None
+        assert ret_data["audit_trail_retention_years"] is None
+        assert "non contractuel" in ret_data["status"]
+        assert ret_data["gdpr_contact_email"] is None
+        assert ret_data["storage_region"] is None
+        assert ret_data["automatic_deletion_implemented"] is False
+        assert ret_data["export_formats_supported"] == ["JSON", "CSV", "AUDIT_ZIP"]
+        assert ret_data["last_policy_review"] is None
