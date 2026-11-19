@@ -32,6 +32,26 @@ Une politique qui exigerait l'égalité stricte rendrait ces lignes invisibles a
 service lui-même, et l'application échouerait à réclamer un jeton qu'elle vient
 d'émettre — un correctif qui casse la connexion n'en est pas un.
 
+**La limite de cette politique, dite exactement.** Le prédicat autorise la ligne
+dès qu'elle n'a pas d'organisation, quel que soit le contexte. Conséquences
+mesurées (`test_postgres_tenant_isolation.py`) :
+
+* contexte posé sur l'organisation A : A voit ses lignes et les orphelines,
+  jamais celles de B — c'est la protection contre la lecture croisée entre
+  organisations authentifiées, et elle tient ;
+* aucun contexte posé : les orphelines **et** les lignes des organisations
+  déjà rattachées sont visibles. C'est ce que fait l'application pour consommer
+  un jeton, vérifier une adresse ou appliquer un webhook, opérations qui n'ont
+  pas d'organisation par construction.
+
+Ce second point n'est pas une protection, et il ne faut pas le lire comme telle.
+Il est inatteignable par l'API aujourd'hui — aucune route ne lit ces trois
+tables — mais il resterait vrai pour une requête oubliée. Une politique par
+utilisateur (`app.current_user_id` comparé à `identity_tokens.user_id`) ou une
+séparation des rôles lecture/écriture le fermerait ; ni l'une ni l'autre n'est
+introduite ici, faute de preuve de non-régression sur le verrouillage des
+tentatives de connexion, qui est indexé par adresse e-mail.
+
 ``FORCE ROW LEVEL SECURITY`` est appliqué partout : sans lui, le propriétaire de
 la table (le rôle de migration) contourne les politiques, et une preuve RLS
 exécutée avec ce rôle ne prouverait rien.

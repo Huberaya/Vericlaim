@@ -11,6 +11,7 @@ server the tests may administer (CI provides a throwaway service container).
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import os
 import re
@@ -228,11 +229,35 @@ def _seed(cluster: Cluster) -> Tenants:
     product_a, product_b = uuid.uuid4(), uuid.uuid4()
     key_a, key_b = uuid.uuid4(), uuid.uuid4()
     hold_a, hold_b = uuid.uuid4(), uuid.uuid4()
+    user_a, user_b = uuid.uuid4(), uuid.uuid4()
+    token_a, token_b = uuid.uuid4(), uuid.uuid4()
+    message_a, message_b = uuid.uuid4(), uuid.uuid4()
+    subscription_a, subscription_b = uuid.uuid4(), uuid.uuid4()
+    session_a, session_b = uuid.uuid4(), uuid.uuid4()
+    orphan_message, orphan_event = uuid.uuid4(), uuid.uuid4()
 
     with _connect(cluster.migrator_dsn) as connection, connection.cursor() as cursor:
-        for organization, supplier, product, key, hold, label in (
-            (organization_a, supplier_a, product_a, key_a, hold_a, "A"),
-            (organization_b, supplier_b, product_b, key_b, hold_b, "B"),
+        for (
+            organization,
+            supplier,
+            product,
+            key,
+            hold,
+            user,
+            token,
+            message,
+            subscription,
+            session,
+            label,
+        ) in (
+            (
+                organization_a, supplier_a, product_a, key_a, hold_a,
+                user_a, token_a, message_a, subscription_a, session_a, "A",
+            ),
+            (
+                organization_b, supplier_b, product_b, key_b, hold_b,
+                user_b, token_b, message_b, subscription_b, session_b, "B",
+            ),
         ):
             # FORCE RLS applies to the table owner as well: seeding must install
             # the same request context the application installs.
@@ -271,6 +296,61 @@ def _seed(cluster: Cluster) -> Tenants:
                 "VALUES (%s, %s, %s, %s, now())",
                 (hold, organization, f"CASE-{label}", f"Motif {label}"),
             )
+            cursor.execute(
+                "INSERT INTO users (id, email, display_name, status, created_at, updated_at) "
+                "VALUES (%s, %s, %s, 'active', now(), now())",
+                (user, f"utilisateur-{label.lower()}-{user.hex[:8]}@exemple.test", f"Utilisateur {label}"),
+            )
+            cursor.execute(
+                "INSERT INTO identity_tokens "
+                "(id, user_id, organization_id, purpose, token_hash, expires_at, created_at, updated_at) "
+                "VALUES (%s, %s, %s, 'email_verification', %s, now() + interval '1 day', now(), now())",
+                (token, user, organization, hashlib.sha256(f"{label}-{token}".encode()).hexdigest()),
+            )
+            cursor.execute(
+                "INSERT INTO email_messages "
+                "(id, organization_id, recipient_email, subject, body_text, purpose, status, created_at, updated_at) "
+                "VALUES (%s, %s, %s, %s, %s, 'transactional', 'queued', now(), now())",
+                (message, organization, f"destinataire-{label.lower()}-{message.hex[:8]}@exemple.test",
+                 f"Sujet {label}", "Corps du message"),
+            )
+            cursor.execute(
+                "INSERT INTO billing_subscriptions "
+                "(id, organization_id, plan_code, status, provider, current_period_start, "
+                " current_period_end, cancel_at_period_end, created_at, updated_at) "
+                "VALUES (%s, %s, 'starter', 'active', 'local', now(), now() + interval '30 days', "
+                "        false, now(), now())",
+                (subscription, organization),
+            )
+            cursor.execute(
+                "INSERT INTO billing_checkout_sessions "
+                "(id, organization_id, provider, provider_session_id, plan_code, status, url, "
+                " expires_at, created_at, updated_at) "
+                "VALUES (%s, %s, 'local', %s, 'starter', 'open', %s, now() + interval '1 hour', now(), now())",
+                (session, organization, f"session-{label}-{session.hex[:8]}", f"https://exemple.test/checkout/{label}"),
+            )
+        # Une ligne sans organisation : ce que laissent derrière elles une
+        # inscription interrompue et une notification globale. Elle doit rester
+        # lisible par le service (aucune organisation ne peut la revendiquer) et
+        # invisible à toute organisation.
+        cursor.execute(
+            "INSERT INTO email_messages "
+            "(id, organization_id, recipient_email, subject, body_text, purpose, status, created_at, updated_at) "
+            "VALUES (%s, NULL, %s, 'Sans organisation', 'Corps', "
+            "        'transactional', 'queued', now(), now())",
+            (orphan_message, f"orphelin-{orphan_message.hex[:8]}@exemple.test"),
+        )
+        # Un événement prestataire arrive **sans** organisation : elle n'est
+        # déduite qu'ensuite, du message lui-même. C'est exactement le cas que la
+        # politique doit laisser passer, et la raison d'être de la ligne orpheline.
+        cursor.execute(
+            "INSERT INTO billing_provider_events "
+            "(id, organization_id, provider, provider_event_id, event_type, payload_json, "
+            " signature_verified, received_at, applied, created_at, updated_at) "
+            "VALUES (%s, NULL, 'local', %s, 'invoice.paid', '{}'::json, "
+            "        true, now(), false, now(), now())",
+            (orphan_event, f"evt-{orphan_event.hex[:12]}"),
+        )
         connection.commit()
 
     return Tenants(
@@ -342,6 +422,136 @@ def test_each_tenant_only_reads_its_own_rows(cluster: Cluster, tenants: Tenants,
         _set_tenant(app_connection, tenants.organization_b)
         assert _count(app_connection, table) == 1
         assert _count(app_connection, table, tenants.organization_a) == 0
+
+
+IDENTITY_AND_BILLING_TABLES = (
+    "identity_tokens",
+    "email_messages",
+    "billing_subscriptions",
+    "billing_checkout_sessions",
+)
+# ``billing_provider_events`` reçoit son organisation *après* le message du
+# prestataire : ses lignes de test n'en ont pas, et la preuve de lecture croisée
+# la concernant se fait sur l'invisibilité des lignes d'autrui, plus bas.
+ORPHAN_CAPABLE_TABLES = (
+    "identity_tokens",
+    "email_messages",
+    "billing_provider_events",
+)
+
+
+def test_the_newly_protected_tables_carry_forced_row_level_security(cluster: Cluster) -> None:
+    """RLS forcée, pas seulement activée : le propriétaire y est soumis aussi."""
+    with _connect(cluster.app_dsn) as connection, connection.cursor() as cursor:
+        for table in IDENTITY_AND_BILLING_TABLES:
+            cursor.execute(
+                "SELECT relrowsecurity, relforcerowsecurity FROM pg_class WHERE relname = %s",
+                (table,),
+            )
+            row = cursor.fetchone()
+            assert row == (True, True), f"{table} : ENABLE/FORCE RLS attendu, obtenu {row}"
+            cursor.execute("SELECT count(*) FROM pg_policies WHERE tablename = %s", (table,))
+            assert int(cursor.fetchone()[0]) == 1, f"{table} doit porter exactement une politique"
+
+
+def test_each_organisation_only_reads_its_own_identity_and_billing_rows(
+    cluster: Cluster, tenants: Tenants, app_connection
+) -> None:
+    """Jetons, boîte d'envoi, abonnement et sessions de paiement : une seule organisation."""
+    for table in IDENTITY_AND_BILLING_TABLES:
+        _set_tenant(app_connection, tenants.organization_a)
+        assert _count(app_connection, table, tenants.organization_a) == 1
+        assert _count(app_connection, table, tenants.organization_b) == 0
+
+        _set_tenant(app_connection, tenants.organization_b)
+        assert _count(app_connection, table, tenants.organization_b) == 1
+        assert _count(app_connection, table, tenants.organization_a) == 0
+
+
+def test_rows_without_organisation_are_visible_to_the_service_alone(
+    cluster: Cluster, tenants: Tenants, app_connection
+) -> None:
+    """Mesure exacte d'une limite connue, pas une affirmation de sécurité.
+
+    Trois tables portent un ``organization_id`` nullable, et leur politique vaut
+    ``organization_id IS NULL OR organization_id = vericlaim_current_organization_id()``.
+    Conséquence, telle qu'elle est réellement :
+
+    * **sans aucun contexte d'organisation** (ce que fait l'application pour
+      consommer un jeton, vérifier une adresse ou appliquer un webhook), les
+      lignes orphelines *et* les lignes d'une organisation déjà rattachée sont
+      visibles ;
+    * **dès qu'un contexte d'organisation est posé**, une organisation ne voit
+      que ses propres lignes plus les orphelines — elle ne voit jamais les lignes
+      d'une autre organisation.
+
+    Autrement dit, la politique protège contre la lecture croisée *entre
+    organisations authentifiées*, et pas contre une requête oubliée qui
+    n'installe aucun contexte. Ce dernier cas est aujourd'hui inatteignable par
+    l'API : aucune route ne lit ces trois tables, et les chemins qui les
+    traversent (jeton, webhook) s'exécutent sans identité d'organisation par
+    construction.
+
+    Le test fixe la mesure pour que la situation ne puisse pas s'améliorer ou se
+    dégrader en silence. Une politique par utilisateur (``vericlaim_current_user_id``
+    sur ``identity_tokens.user_id``) ou une séparation des rôles lecture/écriture
+    la remplacerait avantageusement ; elle n'est pas introduite ici parce qu'elle
+    changerait le comportement des tentatives de connexion (verrouillage par
+    adresse e-mail) sans preuve de non-régression à cette échelle.
+    """
+    orphan_tables = ORPHAN_CAPABLE_TABLES
+
+    # 1. Avec un contexte, la lecture croisée est refusée.
+    for organisation, other in (
+        (tenants.organization_a, tenants.organization_b),
+        (tenants.organization_b, tenants.organization_a),
+    ):
+        _set_tenant(app_connection, organisation)
+        assert _count(app_connection, orphan_tables[0], organisation) == 1
+        assert _count(app_connection, orphan_tables[0], other) == 0
+        with app_connection.cursor() as cursor:
+            for table in orphan_tables:
+                cursor.execute(
+                    sql.SQL(
+                        "SELECT count(*) FROM {} WHERE organization_id = %s"
+                    ).format(sql.Identifier(table)),
+                    (other,),
+                )
+                assert int(cursor.fetchone()[0]) == 0, (
+                    f"{table} : une organisation ne doit jamais lire les lignes d'une autre"
+                )
+
+    # 2. Sans aucun contexte, le service voit ce qu'il doit voir — et c'est
+    #    aussi la limite : tout y est visible, orphelins compris.
+    service = psycopg.connect(cluster.app_dsn)
+    try:
+        _set_tenant(service, None)
+        for table in ("email_messages", "billing_provider_events"):
+            visible = _count(service, table)
+            assert visible >= 1, (
+                f"{table} : le service sans contexte doit pouvoir traiter ses lignes "
+                "(consommation de jeton, envoi d'e-mail, webhook), sinon le correctif "
+                "casserait l'authentification au lieu de la protéger"
+            )
+    finally:
+        service.close()
+
+
+def test_an_organisation_cannot_write_a_row_for_another_one(
+    cluster: Cluster, tenants: Tenants, app_connection
+) -> None:
+    """Le ``WITH CHECK`` refuse l'écriture, pas seulement la lecture d'autrui."""
+    _set_tenant(app_connection, tenants.organization_a)
+    with pytest.raises(psycopg.errors.InsufficientPrivilege):
+        with app_connection.cursor() as cursor:
+            cursor.execute(
+                "INSERT INTO billing_subscriptions "
+                "(id, organization_id, plan_code, status, provider, current_period_start, "
+                " current_period_end, cancel_at_period_end, created_at, updated_at) "
+                "VALUES (%s, %s, 'starter', 'active', 'local', now(), now(), false, now(), now())",
+                (uuid.uuid4(), tenants.organization_b),
+            )
+    app_connection.rollback()
 
 
 def test_cross_tenant_insert_is_refused(cluster: Cluster, tenants: Tenants, app_connection) -> None:
