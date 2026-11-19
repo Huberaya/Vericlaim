@@ -172,7 +172,7 @@ avec leurs attributs de moindre privilège réaffirmés :
 
 | Preuve | Résultat |
 | --- | --- |
-| Tête de migration atteinte | `a1b9c7e34d52` |
+| Tête de migration atteinte | `a1b9c7e34d52` lors de cette revue ; `c5f1a8e37b910` après la mission 10 |
 | Vérificateur `verify_runtime` sur base saine | aucun échec |
 | Aucune ligne visible sans contexte | vert |
 | Lecture limitée à sa propre organisation | vert |

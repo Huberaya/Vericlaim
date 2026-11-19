@@ -81,7 +81,7 @@ Valeurs sorties de commandes rejouables. Commit de référence : `ba933b3`.
 | Recette de qualification (plan de données réel) | **54/54** |
 | Répétition de restauration PostgreSQL | **`FAILURES: none`** (38 tables RLS, `rows_visible_without_tenant_context: 0`) |
 | Surface sans identité (113 chemins interrogés) | 20 routes justifiées, 0 ouverte par inadvertance |
-| Discipline de migration | tête unique `a1b9c7e34d52`, 19 révisions linéaires |
+| Discipline de migration | tête unique `c5f1a8e37b910`, 21 révisions linéaires |
 | Jobs CI | 5/5 verts : backend, frontend, RLS, recette, restauration |
 
 Les 9 tests ignorés sous PostgreSQL (40 sous SQLite) exigent des services

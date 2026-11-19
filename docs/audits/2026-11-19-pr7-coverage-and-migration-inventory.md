@@ -42,9 +42,10 @@ utilisés sans import).
 
 ## 2. Inventaire des migrations
 
-La mission annonçait huit migrations. Il y en a **onze** apportées par cette
-branche, et **dix-neuf** au total dans la chaîne, dont la tête est
-`a1b9c7e34d52`. L'écart n'est pas cosmétique : deux migrations supplémentaires
+La mission annonçait huit migrations. Il y en a **douze** apportées par cette
+branche, et **vingt et une** au total dans la chaîne, dont la tête est
+`c5f1a8e37b910` (ajoutée en mission 10 : séparation entre accès locataire et
+accès système pour l'identité). L'écart n'est pas cosmétique : deux migrations supplémentaires
 sont des corrections de parité de schéma et de contraintes, découvertes en
 comparant une base créée par `create_all` à une base migrée.
 
@@ -124,8 +125,8 @@ politiques RLS.
 | Application des migrations sur Neon | Interdiction d'intervention sur la base de production ; aucune base de ce type accessible ici | Une fenêtre de maintenance et une sauvegarde vérifiée |
 | Stockage S3 réel | Services externes bloqués | Un compartiment de test avec credentials dédiés |
 | ClamAV réel | Idem | Un démon accessible depuis l'environnement de test |
-| Planification des sauvegardes | Le plan Vercel Hobby refuse les tâches planifiées | Un plan supérieur, ou un ordonnanceur externe |
-| Déploiement Vercel | Échoue en 0 s, avant compilation ; le connecteur Vercel répond « Access denied » | Vérifier le jeton et la portée d'équipe côté fournisseur |
+| Planification des sauvegardes | Aucun ordonnanceur ne déclenche de sauvegarde : les `crons` déclarés le 19/11 concernent les workers, en cadence quotidienne | Un ordonnanceur dédié, ou un plan supérieur |
+| Déploiement Vercel | **Résolu le 19/11** : l'échec venait d'un `crons` en `* * * * *`, refusé par Hobby au déploiement. Déploiement `success` au SHA final ; Preview READY | Reste à l'ouvrir depuis un accès autorisé (TLS bloqué ici) |
 | Validation juridique | Aucun juriste n'a relu | Une revue externe |
 | Encaissement réel | Aucun paiement n'a été fait ni simulé | Un compte de test chez le prestataire |
 
