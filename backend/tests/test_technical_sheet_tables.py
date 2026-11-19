@@ -348,7 +348,7 @@ def test_a_claim_detected_in_a_table_row_is_cited_cell_by_cell():
     # complète (extraction → tableau structuré → détection → citation) est exercée.
     result = DocumentTextExtractor().extract_result("fiche.txt", "text/plain", TECHNICAL_SHEET)
     table_segment = next(segment for segment in result.segments if segment.segment_type == "table")
-    text_segment = next(
+    next(
         segment for segment in result.segments if "contient 62 %" in segment.text
     )
 

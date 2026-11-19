@@ -95,7 +95,6 @@ class PostgresCluster:
     evidence: dict[str, object] = field(default_factory=dict)
 
     def _dsn(self, *, user: str, password: str) -> str:
-        params = psycopg.conninfo.conninfo_to_dict(self.admin_dsn)
         return psycopg.conninfo.make_conninfo(self.admin_dsn, user=user, password=password, dbname=self.database)
 
     @staticmethod

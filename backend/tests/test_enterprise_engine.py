@@ -10,8 +10,8 @@ from tests.auth_support import authenticate_client
 
 def test_api_key_lifecycle_and_tenant_isolation():
     with TestClient(app) as client, TestClient(app) as foreign_client:
-        identity = authenticate_client(client, role_code="owner")
-        foreign_identity = authenticate_client(foreign_client, role_code="owner")
+        authenticate_client(client, role_code="owner")
+        authenticate_client(foreign_client, role_code="owner")
 
         # 1. Create API Key
         res = client.post(

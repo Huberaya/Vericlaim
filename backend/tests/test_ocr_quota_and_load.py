@@ -368,7 +368,7 @@ def test_a_native_pdf_is_charged_its_real_number_of_pages():
     application, storage, _scanner, old_storage, old_scanner = _install_document_fakes()
     try:
         with TestClient(application) as client:
-            identity = authenticate_client(client, role_code="owner")
+            authenticate_client(client, role_code="owner")
             _subscribe(client, plan_code="starter")
             document = _create_document(client, title="PDF natif")
             instruction = _request_upload(

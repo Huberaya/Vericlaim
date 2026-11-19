@@ -105,7 +105,7 @@ def test_tamper_detection_on_event_deletion():
 def test_multi_tenant_chain_isolation():
     client_a = TestClient(app)
     client_a.__enter__()
-    identity_a = authenticate_client(client_a, role_code="analyst", email=f"a.{uuid4().hex[:8]}@example.com")
+    authenticate_client(client_a, role_code="analyst", email=f"a.{uuid4().hex[:8]}@example.com")
     _create_events(client_a, 2)
 
     client_b = TestClient(app)

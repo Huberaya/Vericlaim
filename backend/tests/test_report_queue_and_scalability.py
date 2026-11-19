@@ -351,7 +351,7 @@ def test_an_artifact_larger_than_the_download_cap_is_refused_not_truncated():
 
 
 def test_a_second_request_while_pending_reuses_the_same_job():
-    with TestClient(app) as client, report_storage() as storage:
+    with TestClient(app) as client, report_storage():
         identity = authenticate_client(client, role_code="analyst")
         analysis_id, _ = _persisted_analysis(client, identity)
 
@@ -393,7 +393,7 @@ def test_a_request_after_readiness_creates_a_new_version_with_its_own_reference(
 
 
 def test_the_queue_refuses_a_request_when_the_organization_is_already_backed_up():
-    with TestClient(app) as client, report_storage() as storage:
+    with TestClient(app) as client, report_storage():
         identity = authenticate_client(client, role_code="analyst")
         analysis_id, _ = _persisted_analysis(client, identity)
 
@@ -417,7 +417,7 @@ def test_the_queue_refuses_a_request_when_the_organization_is_already_backed_up(
 def test_backpressure_uses_the_configured_limit_and_not_a_hardcoded_one():
     """La limite vient de la configuration, elle est donc publiée et ajustable."""
 
-    with TestClient(app) as client, report_storage() as storage:
+    with TestClient(app) as client, report_storage():
         identity = authenticate_client(client, role_code="analyst")
         analysis_id, _ = _persisted_analysis(client, identity)
         _fill_queue(identity.organization_id, 1)
@@ -639,7 +639,7 @@ def test_a_failed_report_does_not_block_a_new_request():
 
 
 def test_the_queue_state_is_readable_and_only_for_its_own_tenant():
-    with TestClient(app) as client, TestClient(app) as foreign, report_storage() as storage:
+    with TestClient(app) as client, TestClient(app) as foreign, report_storage():
         identity = authenticate_client(client, role_code="analyst")
         authenticate_client(foreign, role_code="analyst")
         analysis_id, _ = _persisted_analysis(client, identity)

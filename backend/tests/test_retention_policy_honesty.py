@@ -78,7 +78,7 @@ def test_an_organization_that_declared_nothing_gets_nothing():
 def test_no_fabricated_compliance_value_is_ever_returned():
     """The four literal values that made this endpoint false, and nowhere to hide."""
     with TestClient(app) as client:
-        identity = authenticate_client(client, role_code="owner")
+        authenticate_client(client, role_code="owner")
         response = client.get(RETENTION_PATH)
         body = response.text
         for fabricated in FABRICATED_VALUES:
@@ -100,7 +100,7 @@ def test_the_hosting_region_is_not_asserted_by_the_platform():
 def test_a_declared_policy_is_returned_with_its_author():
     """When a client does declare one, the declaration is stored and attributed."""
     with TestClient(app) as client:
-        identity = authenticate_client(client, role_code="owner")
+        authenticate_client(client, role_code="owner")
         declared = {
             "documents_retention_years": 7,
             "audit_trail_retention_years": 12,
@@ -168,7 +168,7 @@ def test_declaring_a_policy_requires_the_management_permission():
 def test_a_partial_declaration_does_not_erase_what_was_already_declared():
     """A partial update must not silently drop an agreed duration."""
     with TestClient(app) as client:
-        identity = authenticate_client(client, role_code="owner")
+        authenticate_client(client, role_code="owner")
         first = client.put(
             RETENTION_PATH,
             json={"documents_retention_years": 6, "gdpr_contact_email": "dpo@client.example"},

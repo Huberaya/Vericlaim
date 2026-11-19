@@ -401,8 +401,6 @@ class RecetteRun:
     def execute(self) -> dict[str, Any]:
         import httpx
 
-        t = self.transcript
-        stack = self.stack
         try:
             return self._execute_journey(httpx)
         finally:
@@ -417,7 +415,6 @@ class RecetteRun:
 
     def _execute_journey(self, httpx: Any) -> dict[str, Any]:
         t = self.transcript
-        stack = self.stack
         self.make_fixtures()
         t.mark("fixtures generated")
 
@@ -911,7 +908,6 @@ class RecetteRun:
         if instruction.status_code != 201:
             return {"ok": False, "status_code": instruction.status_code, "detail": instruction.text[:300]}
         body = instruction.json()
-        files = {name: (None, value) for name, value in body["upload_fields"].items()}
         put = httpx.post(
             browser.abs_url(body["upload_url"]),
             data=body["upload_fields"],

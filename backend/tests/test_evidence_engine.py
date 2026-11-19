@@ -45,7 +45,7 @@ def test_evidence_crud_and_tenant_isolation():
 
     with TestClient(app) as client, TestClient(app) as foreign_client, TestClient(app) as viewer_client:
         identity = authenticate_client(client, role_code="analyst")
-        foreign_identity = authenticate_client(foreign_client, role_code="analyst")
+        authenticate_client(foreign_client, role_code="analyst")
         viewer_client_identity = authenticate_client(viewer_client, role_code="viewer")
 
         # Create Supplier and Product in identity's tenant

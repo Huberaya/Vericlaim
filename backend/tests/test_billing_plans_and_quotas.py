@@ -555,7 +555,7 @@ def test_the_seat_quota_refuses_the_invitation_that_would_exceed_the_plan():
 
 def test_an_upgrade_applies_immediately_and_the_new_period_restores_the_quota():
     with TestClient(app) as client:
-        identity = authenticate_client(client, role_code="owner")
+        authenticate_client(client, role_code="owner")
         _subscribe(client, plan_code="starter")
         for index in range(30):
             _create_document(client, title=f"Saturation {index}")
@@ -610,7 +610,7 @@ def test_the_upgrade_response_names_the_plan_the_organization_is_leaving():
 
 def test_a_downgrade_is_scheduled_for_the_end_of_the_paid_period_and_not_applied_now():
     with TestClient(app) as client:
-        identity = authenticate_client(client, role_code="owner")
+        authenticate_client(client, role_code="owner")
         _subscribe(client, plan_code="pro")
 
         downgrade = client.post("/api/v1/billing/subscription/plan", json={"plan_code": "starter"})
@@ -901,7 +901,7 @@ def test_the_webhook_only_answers_for_the_provider_that_is_configured():
 
 def test_the_retention_actually_applied_is_capped_by_the_plan():
     with TestClient(app) as client_essai:
-        identity = authenticate_client(client_essai, role_code="owner")
+        authenticate_client(client_essai, role_code="owner")
         document = _create_document(client_essai, title="Document ancien sous essai Pro")
         _backdate_document(document["id"], days=365 * 2)
         declared = client_essai.put(
@@ -927,7 +927,7 @@ def test_the_retention_actually_applied_is_capped_by_the_plan():
         )
 
     with TestClient(app) as client_starter:
-        identity = authenticate_client(client_starter, role_code="owner")
+        authenticate_client(client_starter, role_code="owner")
         _subscribe(client_starter, plan_code="starter")
         document = _create_document(client_starter, title="Document ancien sous Starter")
         _backdate_document(document["id"], days=365 * 2)
@@ -1269,7 +1269,7 @@ def test_the_stripe_provider_requires_both_keys(tmp_path):
 
 def test_the_portal_reports_the_usage_of_the_period_and_the_provider_in_force():
     with TestClient(app) as client:
-        identity = authenticate_client(client, role_code="owner")
+        authenticate_client(client, role_code="owner")
         _subscribe(client, plan_code="starter")
         _create_document(client, title="Un document pour l'affichage")
         usage = client.get("/api/v1/billing/usage").json()

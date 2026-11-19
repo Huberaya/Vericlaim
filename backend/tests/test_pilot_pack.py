@@ -27,7 +27,7 @@ def _hash(char: str = "c") -> str:
 def test_pilot_overview_and_kpis():
     with TestClient(app) as client, TestClient(app) as foreign_client:
         identity = authenticate_client(client, role_code="analyst")
-        foreign_identity = authenticate_client(foreign_client, role_code="analyst")
+        authenticate_client(foreign_client, role_code="analyst")
 
         with SessionLocal() as db:
             # Seed suppliers, products, and claims

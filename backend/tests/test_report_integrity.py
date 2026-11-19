@@ -372,7 +372,7 @@ def test_the_report_is_still_refused_when_the_version_has_no_verdicts():
     """Signing must not become a way to make an empty analysis look provable."""
     from tests.test_pdf_reporting import _seed_analysable_document
 
-    with TestClient(app) as client, report_storage() as storage:
+    with TestClient(app) as client, report_storage():
         identity = authenticate_client(client, role_code="analyst")
         version_id = _seed_analysable_document(identity.organization_id)
         created = client.post(

@@ -302,7 +302,7 @@ def test_cited_text_comes_from_persisted_segments():
 
 def test_client_supplied_verdicts_are_rejected():
     with TestClient(app) as client:
-        identity = authenticate_client(client, role_code="analyst")
+        authenticate_client(client, role_code="analyst")
         forged = {
             "analysis_id": str(uuid4()),
             "evaluation_response": {
@@ -338,7 +338,7 @@ def test_client_supplied_verdicts_are_rejected():
 
 def test_analysis_id_is_mandatory():
     with TestClient(app) as client:
-        identity = authenticate_client(client, role_code="analyst")
+        authenticate_client(client, role_code="analyst")
         response = client.post("/api/v1/reports/pdf", json={"document_title": "sans analyse"})
         assert response.status_code == 422, response.text
 
