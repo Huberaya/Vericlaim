@@ -86,6 +86,15 @@ jobs:
           fi
           echo "Suite de tests verte."
 
+      - name: Vérifier que la surface sans identité reste fermée
+        run: |
+          set -euo pipefail
+          # Le contrôle interroge l'application réelle, sans session, route par
+          # route, et exige que chaque réponse non authentifiée soit déclarée.
+          # Une route métier ajoutée sans garde fait échouer cette étape.
+          cd backend
+          PYTHONPATH=. python ../scripts/ci/check_public_surface.py
+
       - name: Contrôler la discipline de migration
         run: |
           set -euo pipefail
