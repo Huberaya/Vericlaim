@@ -111,7 +111,7 @@ script audité, avec le même appel `psql` qu'en production. Job **vert** depuis
 
 | Suite | Résultat |
 | --- | --- |
-| SQLite complet | **706 passed**, 0 failed |
+| SQLite complet | **687 passed**, 0 failed — six exécutions consécutives le 19/11 au soir |
 | PostgreSQL complet (rôles réels) | **746 passed**, 9 skipped, 0 failed |
 | Preuves d'identité PostgreSQL (`test_postgres_identity_flows.py`) | **9/9** |
 | Preuves d'isolation (`test_postgres_tenant_isolation.py`) | **15/15** |
@@ -119,6 +119,13 @@ script audité, avec le même appel `psql` qu'en production. Job **vert** depuis
 | `tsc --noEmit` + `npm run build` | verts |
 | Discipline des migrations | une seule tête, `c5f1a8e37b910` |
 | Surface publique | 113 chemins inspectés, 20 sans identité toutes justifiées |
+
+**Un incident d'exécution, mentionné plutôt que tu.** Une exécution de la suite
+SQLite a échoué sur `test_a07_scanner_readiness.py` avec
+`sqlite3.OperationalError: disk I/O error`. Le disque n'était pas plein (18 %), le
+test passe seul, et six exécutions complètes consécutives ont ensuite été vertes.
+Je le classe comme défaillance d'entrée-sortie de la machine de test, pas comme
+défaut produit — mais je ne peux pas le prouver, seulement l'observer.
 
 **Validation par mutation** — les tests échouent si l'on réintroduit le défaut :
 
