@@ -56,9 +56,41 @@ jobs:
       - name: Run isolated backend tests
         working-directory: backend
         run: |
-          set -euo pipefail
+          set -uo pipefail
           rm -f /tmp/vericlaim-ci.db
-          python -m pytest -q
+          python -m pytest -q --junitxml=/tmp/vericlaim-junit.xml
+          echo "pytest_exit=$?" >> "${GITHUB_ENV}"
+
+      - name: Publier les échecs en annotations
+        if: always()
+        run: |
+          set -uo pipefail
+          if [ ! -f /tmp/vericlaim-junit.xml ]; then
+            echo "::error::Aucun rapport JUnit : la suite n'a pas démarré."
+            exit 1
+          fi
+          python - <<'EOF'
+          import xml.etree.ElementTree as ET
+
+          root = ET.parse("/tmp/vericlaim-junit.xml").getroot()
+          failures = 0
+          for case in root.iter("testcase"):
+              problems = [n for n in case if n.tag in ("failure", "error")]
+              if not problems:
+                  continue
+              failures += 1
+              for node in problems:
+                  message = (node.get("message") or node.text or "").strip().replace("\n", " ")
+                  print(
+                      "::error file={},line=1,title={}::{}".format(
+                          case.get("file") or "backend",
+                          case.get("name"),
+                          message[:900],
+                      )
+                  )
+          print(f"{failures} test(s) en échec.")
+          raise SystemExit(1 if failures else 0)
+          EOF
 
       - name: Contrôler la discipline de migration
         run: |
