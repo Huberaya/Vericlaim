@@ -187,7 +187,7 @@ refuse plus d'une exécution par jour, **au déploiement**, avant compilation :
 chaque Preview échouait en 0 s. Cadence passée au quotidien ; déploiement
 `success` au SHA final.
 
-**Preview :** https://vericlaim-9ij6zkgcy-baya-ibraimmayoanouedu-8164s-projects.vercel.app
+**Preview :** https://vericlaim-3no3ylyw5-baya-ibraimmayoanouedu-8164s-projects.vercel.app
 — état Vercel `success`. Elle n'a **pas été ouverte** : `curl` vers
 `*.vercel.app` échoue à la poignée de main TLS depuis cet environnement, et le
 connecteur Vercel répond « Access denied ». Le statut prouve que le build a
