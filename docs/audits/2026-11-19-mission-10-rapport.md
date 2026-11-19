@@ -132,7 +132,7 @@ script audité, avec le même appel `psql` qu'en production. Job **vert** depuis
 
 ## 4. État de la CI et de Vercel au SHA final
 
-**SHA final : `d148be7`**
+**SHA final : `6ca68e5`**
 
 | Contrôle | État |
 | --- | --- |
@@ -144,8 +144,8 @@ script audité, avec le même appel `psql` qu'en production. Job **vert** depuis
 | Vercel (déploiement) | ✅ success — Preview READY |
 | Chemins sensibles modifiés | ❌ **volontaire** (label absent) |
 
-**Preview :** `https://vericlaim-iv18g2723-baya-ibraimmayoanouedu-8164s-projects.vercel.app`
-— état Vercel `success`, SHA `d148be7`.
+**Preview :** `https://vericlaim-9ij6zkgcy-baya-ibraimmayoanouedu-8164s-projects.vercel.app`
+— état Vercel `success`, SHA `6ca68e5`.
 
 **Ce que cette Preview ne prouve pas.** Elle n'a pas été ouverte. Depuis cet
 environnement, `curl` vers `*.vercel.app` échoue à la poignée de main TLS
