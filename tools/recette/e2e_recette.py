@@ -431,13 +431,26 @@ class RecetteRun:
             "processus vivant",
         )
         ready = httpx.get(f"{self.server.base_url}/readyz", timeout=30)
+        ready_body = ready.json()
+        # Contrat A-10 : un contrôle nommé par dépendance (`checks`) et une
+        # synthèse booléenne (`capabilities`). La forme ancienne — un champ
+        # `database` et un `document_import` textuels — n'existe plus ; la
+        # recette la lisait encore et s'arrêtait sur un KeyError.
+        def _check_status(name: str) -> str | None:
+            for check in ready_body.get("checks", []):
+                if check.get("name") == name:
+                    return check.get("status")
+            return None
+
         t.check(
             "readyz expose la base et les deux dépendances documentaires",
             ready.status_code == 200
-            and ready.json()["database"] == "ok"
-            and ready.json()["document_import"] == "enabled",
-            f"{ready.status_code} {ready.json()}",
-            body=ready.json(),
+            and _check_status("database") == "ok"
+            and ready_body.get("capabilities", {}).get("database") is True
+            and ready_body.get("capabilities", {}).get("document_storage") is True
+            and ready_body.get("capabilities", {}).get("malware_scanning") is True,
+            f"{ready.status_code} {ready_body}",
+            body=ready_body,
         )
         status = httpx.get(f"{self.server.base_url}/api/v1/auth/status", timeout=10).json()
         t.check(
@@ -733,19 +746,31 @@ class RecetteRun:
                 f"HTTP {detail.status_code}, statut={latest.get('status')}",
                 claim_count=len((latest or {}).get("claims") or []),
             )
-            pdf = alice.get(f"/api/v1/reports/analyses/{analysis_id}/pdf")
+            # C22 : le rapport n'est plus rendu dans la requête. La recette suit
+            # donc le vrai chemin — mise en file, worker réel, puis téléchargement.
+            # L'ancien appel direct (`GET .../pdf`) répond désormais 409 avec la
+            # route à utiliser : c'est le contrat, pas une panne. Appeler ce GET et
+            # attendre un 200 mesurerait l'ancien comportement, pas le nouveau.
+            pdf = self._render_report_via_worker(
+                alice, analysis_id, report_format="pdf", label="rapport PDF"
+            )
             t.check(
                 "rapport PDF généré et récupéré",
-                pdf.status_code == 200 and pdf.content.startswith(b"%PDF"),
-                f"HTTP {pdf.status_code}, {len(pdf.content)} octets",
+                pdf["status_code"] == 200 and pdf["content"].startswith(b"%PDF"),
+                pdf["detail"],
+                evidence=pdf.get("evidence", {}),
             )
-            if pdf.status_code == 200:
-                (ARTIFACTS / "rapport-analyse.pdf").write_bytes(pdf.content)
-            dossier = alice.get(f"/api/v1/reports/analyses/{analysis_id}/dossier")
+            if pdf["status_code"] == 200:
+                (ARTIFACTS / "rapport-analyse.pdf").write_bytes(pdf["content"])
+
+            dossier = self._render_report_via_worker(
+                alice, analysis_id, report_format="dossier_zip", label="dossier probatoire ZIP"
+            )
             t.check(
                 "dossier probatoire ZIP généré et récupéré",
-                dossier.status_code == 200 and dossier.content.startswith(b"PK"),
-                f"HTTP {dossier.status_code}, {len(dossier.content)} octets",
+                dossier["status_code"] == 200 and dossier["content"].startswith(b"PK"),
+                dossier["detail"],
+                evidence=dossier.get("evidence", {}),
             )
 
         audit = alice.get("/api/v1/audit/verify")
@@ -968,6 +993,54 @@ class RecetteRun:
                 except subprocess.TimeoutExpired:
                     process.kill()
         return reached, log_path.read_text(errors="replace")[-1200:], exit_note
+
+    def _render_report_via_worker(
+        self, client, analysis_id: str, *, report_format: str, label: str
+    ) -> dict[str, Any]:
+        """Met le rapport en file, laisse le **vrai** worker le rendre, puis télécharge.
+
+        Ce que cette étape prouve : le rendu est exécuté par un processus séparé,
+        depuis les lignes persistées, et le fichier récupéré est bien l'artefact
+        signé — pas une réponse construite dans la requête HTTP.
+        """
+
+        route = "/api/v1/reports/pdf" if report_format == "pdf" else "/api/v1/reports/dossier"
+        queued = client.post(route, json={"analysis_id": analysis_id})
+        if queued.status_code != 202:
+            return {
+                "status_code": queued.status_code,
+                "content": b"",
+                "detail": f"{label} : mise en file HTTP {queued.status_code} {queued.text[:160]}",
+            }
+        job_id = queued.json()["job_id"]
+        reached, log, exit_note = self._run_worker(
+            "app.workers.report_generation_worker",
+            until=lambda: (alice_job := client.get(f"/api/v1/reports/jobs/{job_id}")).status_code == 200
+            and alice_job.json().get("job_status") in {"completed", "failed"},
+            timeout=90,
+        )
+        job = client.get(f"/api/v1/reports/jobs/{job_id}").json()
+        report_id = job.get("report_id")
+        if not report_id:
+            return {
+                "status_code": 0,
+                "content": b"",
+                "detail": (
+                    f"{label} : aucun rapport — job={job.get('job_status')} "
+                    f"tentatives={job.get('attempt_count')} | {exit_note} | log={log[-320:]}"
+                ),
+                "evidence": job,
+            }
+        download = client.get(f"/api/v1/reports/{report_id}/download")
+        return {
+            "status_code": download.status_code,
+            "content": download.content,
+            "detail": (
+                f"job={job.get('job_status')} rapport={job.get('report_status')} "
+                f"HTTP {download.status_code}, {len(download.content)} octets"
+            ),
+            "evidence": job,
+        }
 
     def _run_extraction_worker_until(
         self, version_id: str | None, organization_id: str | None, *, label: str, expect_work: bool = True
