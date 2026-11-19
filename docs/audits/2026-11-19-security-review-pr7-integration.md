@@ -91,42 +91,76 @@ faille est réintroduite :
 
 ---
 
-## 2. La limite qui compte le plus : lignes sans organisation
+## 2. Lignes sans organisation : corrigé le 19 novembre 2026
 
-Trois tables (`identity_tokens`, `email_messages`, `billing_provider_events`)
-portent un `organization_id` nullable, et leur politique vaut :
+**État antérieur (mesuré, et défaut réel).** Trois tables (`identity_tokens`,
+`email_messages`, `billing_provider_events`) portent un `organization_id`
+nullable, et leur politique valait :
 
 ```
 organization_id IS NULL OR organization_id = vericlaim_current_organization_id()
 ```
 
-Mesuré avec le rôle applicatif (`vericlaim_app`, `NOBYPASSRLS`) sur PostgreSQL
-16.2 :
+Conséquences mesurées avec le rôle applicatif (`vericlaim_app`, `NOBYPASSRLS`)
+sur PostgreSQL 16.2 :
 
-* contexte posé sur l'organisation A → A voit ses lignes et les orphelines,
-  jamais celles de B. **La lecture croisée entre organisations est refusée.**
-* aucun contexte → les orphelines **et** les lignes des organisations déjà
-  rattachées sont visibles. C'est ce que fait l'application pour consommer un
-  jeton, vérifier une adresse ou appliquer un webhook.
+* contexte posé sur l'organisation A → A voyait ses lignes **et les orphelines**,
+  donc le jeton de réinitialisation d'un utilisateur rattaché à B s'il avait été
+  émis avant le rattachement ;
+* aucun contexte → les orphelines étaient visibles, ce qui est voulu pour le
+  service, mais aussi les lignes des organisations déjà rattachées ;
+* l'inscription **échouait** : écrire une ligne rattachée sans contexte est
+  refusé par `WITH CHECK` (« new row violates row-level security policy »).
 
-Pourquoi cette forme : exiger l'égalité stricte rendrait les jetons invisibles au
-service qui vient de les émettre, et casserait l'authentification. Le compromis
-retenu — prédicat strict en lecture, permissif sur l'orphelin — est le moins
-mauvais à coût constant.
+Le troisième point n'avait pas été remarqué lors de la revue : la suite
+PostgreSQL tournait avec le rôle `postgres`, qui contourne la RLS. Elle validait
+donc l'application sur une base qui ne se comportait pas comme la production.
 
-Pourquoi ce n'est pas exploitable aujourd'hui : aucune route n'expose ces trois
-tables. Les chemins qui les traversent n'ont pas d'organisation par construction.
+**Correction.** La séparation n'est plus faite par un prédicat permissif mais par
+**identité** :
 
-Pourquoi ce n'est pas corrigé ici : une politique par utilisateur demanderait
-`app.current_user_id` comparé à `identity_tokens.user_id`, un contexte que le
-schéma ne pose pas encore sur ces chemins. Le changement toucherait le
-verrouillage des tentatives de connexion, indexé par adresse e-mail, pour lequel
-il n'existe pas de preuve de non-régression à cette échelle. La préférence a été
-de **mesurer et documenter** plutôt que de livrer une correction non prouvée qui
-casserait la connexion.
+* un rôle dédié `vericlaim_system`, provisionné hors migration par
+  `infra/neon/04_system_role.sql`, porte les parcours qui n'ont pas
+  d'organisation par construction (inscription, vérification d'adresse,
+  réinitialisation, invitation, webhook) ;
+* ses droits sont accordés **par colonne** par la migration
+  `c5f1a8e37b910_tenant_and_system_access_separation` : il ne lit ni le corps,
+  ni le sujet, ni le destinataire d'un e-mail, et aucune table métier ; il ne
+  peut pas supprimer un jeton ni réécrire l'audit ;
+* le rôle applicatif ne voit **plus aucune** ligne sans organisation, et la
+  politique devient une politique unique `FOR ALL` avec `USING` **et**
+  `WITH CHECK` stricts, ce que `verify_runtime.py` exige.
 
-Le test `test_rows_without_organisation_are_visible_to_the_service_alone` fixe
-cette mesure : la situation ne peut ni s'améliorer ni se dégrader en silence.
+**Preuves exécutées** (PostgreSQL 16.2, rôles réels, chaîne Alembic réelle) :
+
+| Preuve | Fichier | Résultat |
+| --- | --- | --- |
+| Inscription sous le rôle applicatif | `test_postgres_identity_flows.py` | vert |
+| Vérification d'adresse | idem | vert |
+| Réinitialisation + révocation des sessions | idem | vert |
+| Acceptation d'invitation (adhésion + session) | idem | vert |
+| Jeton orphelin illisible par une organisation étrangère, lisible par le système | idem | vert |
+| `WITH CHECK` refuse l'écriture croisée | idem | vert |
+| Rôle système aveugle aux corps d'e-mail et aux tables métier | idem | vert |
+| Audit en ajout seul (ni UPDATE ni DELETE) | idem | vert |
+| 4 inscriptions concurrentes → 4 organisations distinctes | idem | vert |
+| Aucune organisation ne lit une ligne sans organisation | `test_postgres_tenant_isolation.py` | vert |
+
+**Validation par mutation**, pour que ces tests ne soient pas décoratifs :
+repasser les parcours sur le rôle applicatif produit **6 échecs** ; rétablir la
+politique permissive en produit **1** ; accorder `SELECT` global au rôle système
+en produit **1**.
+
+**Capacités résiduelles du rôle système, à connaître.** Il peut lire le nombre de
+lignes d'`audit_events` (nécessaire au chaînage de hachage) et créer une
+organisation (l'inscription la crée). Aucune des deux n'ouvre la lecture des
+données d'un autre locataire, mais elles dépassent le strict périmètre
+« identité » ; elles sont consignées plutôt que passées sous silence.
+
+**Ce qui reste hors de portée de cette preuve.** La RLS est vérifiée sur une base
+construite localement à partir de la chaîne Alembic, pas sur Neon. Un écart entre
+les deux (paramètre de connexion, rôle propriétaire des tables) ne serait pas vu
+ici.
 
 ---
 
