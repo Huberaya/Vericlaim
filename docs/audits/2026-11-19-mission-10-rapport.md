@@ -1,207 +1,217 @@
-## Objet
+# Mission 10 — lever les blocages de sécurité et préparer la fusion
 
-Récupérer l'ensemble des fonctionnalités de la PR #7 sur `main` actuel (`6f2cade`),
-corriger les incompatibilités, et livrer **une seule branche fusionnable**.
+**Date :** 19 novembre 2026
+**Branche :** `arena/2d0b984d-vericlaim` · **PR :** #17
+**Périmètre :** trois points seulement — RLS d'identité, blocage Vercel, revue et CI.
+Aucune intervention sur `main`, sur la production, sur Neon production, sur Clerk,
+ni sur les secrets. Aucune migration appliquée à une base réelle. PR non fusionnée.
 
-La PR #7 n'est pas fusionnée : ses fichiers ont été réintégrés un par un, les
-corrections des PR #14, #15 et #16 sont conservées, et aucun conflit n'a été
-arbitré « au plus récent » sans lecture.
+---
 
-## Ce que fait la branche
+## 1. Défauts corrigés
 
-Moteur de détection et couverture probatoire · verdicts réglementaires et
-traçabilité des règles · coffre documentaire (extraction, antivirus, rétention) ·
-analyses persistées immuables · rapports signés et file de génération asynchrone ·
-droits RGPD et effacement · identité self-service · support et observabilité ·
-abonnements, plans, quotas et journal d'usage · revue humaine, matrice de preuves,
-pages publiques.
+### 1.1 La RLS d'identité empêchait l'inscription et laissait fuiter les jetons orphelins
 
-## Défauts réels trouvés et corrigés
+Les deux défauts ont été **mesurés** sur PostgreSQL 16.2 avec les rôles réels, pas
+déduits de la lecture du code :
 
-Ce sont des défauts présents dans la PR #7 telle qu'elle était, pas des
-préférences de style.
+* l'inscription échouait sous `vericlaim_app` — « new row violates row-level
+  security policy », `WITH CHECK` refusant une ligne rattachée sans contexte ;
+* la politique permissive (`organization_id IS NULL OR …`) laissait l'organisation
+  A lire le jeton de réinitialisation d'un utilisateur rattaché à B, dès lors que
+  le jeton avait été émis avant le rattachement.
 
-**1. Trou d'isolation entre organisations.** Cinq tables portant `organization_id`
-n'avaient **aucune** politique RLS : `identity_tokens`, `email_messages`,
-`billing_subscriptions`, `billing_provider_events`, `billing_checkout_sessions`.
-Ce sont des jetons d'authentification, une boîte d'envoi et l'état commercial.
-`infra/neon/verify_runtime.py` le signalait déjà ; la vérification exécutée contre
-un PostgreSQL jetable listait exactement ces cinq noms. Migration `a1b9c7e34d52`.
-Les trois tables dont la colonne est nullable conservent une politique permissive
-sur les lignes **sans** organisation (un jeton émis avant rattachement doit rester
-utilisable) et interdisent la lecture des lignes d'une autre organisation.
+Le constat de départ (« sans contexte, les lignes d'autres organisations sont
+visibles ») est en revanche **faux** : vérifié, non reproduit. Ce qui était
+visible sans contexte, c'était les lignes sans organisation, plus les lignes de
+l'organisation courante. La correction ne prétend donc pas avoir réparé un défaut
+qui n'existait pas.
 
-**2. Garde d'abonnement inerte.** `documents.py` montait
-`Depends(require_active_subscription)` — la fabrique, pas la dépendance. La garde
-n'était donc jamais évaluée sur l'import de documents ni la création de versions,
-alors que les tests la croyaient active. `route_has_billing_gate` a été écrit pour
-détecter exactement ce cas et le test de facturation l'a confirmé.
+**Correction — séparation par identité, pas par exception**
 
-**3. Deux drapeaux pour une seule route pilote.** `ENABLE_DEV_LOGIN` conditionnait
-l'enregistrement, `AUTH_DEV_LOGIN_ENABLED` le gestionnaire. Quand ils divergeaient,
-la route disparaissait alors que le gestionnaire l'autorisait encore — un écart de
-configuration invisible. Le drapeau unique de `main` est retenu, avec un opt-in
-explicite même en développement (fail closed).
+| Élément | Rôle |
+| --- | --- |
+| `infra/neon/04_system_role.sql` | provisionne `vericlaim_system` (LOGIN, BYPASSRLS), refuse un mot de passe court ou une identité privilégiée |
+| `c5f1a8e37b910_tenant_and_system_access_separation` | politique unique `FOR ALL`, `USING` **et** `WITH CHECK` stricts ; droits système par colonne |
+| `app/core/database.py` | `SystemEngine`, `SystemSessionLocal`, `system_session()`, refus au démarrage si `SYSTEM_DATABASE_URL` manque hors développement |
+| `app/identity/self_service.py` | quatre parcours transverses exécutés sur l'identité système |
 
-**4. Code mort et imports manquants dans `reports.py`.** Quatre symboles de
-signature (`new_verification_reference`, `key_id`, `file_sha256`,
-`SIGNATURE_SCHEMA_VERSION`) étaient utilisés sans import, et des blocs de rendu
-synchrone — remplacés par la file C22 — traînaient au milieu de docstrings.
+Droits du rôle système, **découverts en exécutant** chaque parcours (chacun a
+d'abord échoué, puis a conduit à un droit) :
 
-**5. Doublons de fusion.** Deux blocs entiers dupliqués dans `core/metrics.py`
-(la seconde copie écrasait la première, et supprimer la mauvaise faisait
-disparaître les jauges métier), `get_db` importé deux fois dans `reports.py`,
-`read_bytes` déclaré deux fois dans le protocole de stockage.
+* `SELECT` ciblé : `users`, `organizations`, `memberships`, `roles`,
+  `auth_sessions`, `password_login_attempts`, `identity_tokens`, `email_messages`
+  (sans corps, sujet ni destinataire), `billing_provider_events` ;
+* `INSERT` : `users`, `organizations`, `memberships`, `identity_tokens`,
+  `email_messages`, `billing_provider_events`, `password_login_attempts`,
+  `audit_events` ;
+* `UPDATE` : `identity_tokens`, `email_messages`, `billing_provider_events`,
+  `users`, `memberships`, `password_login_attempts` ; et `revoked_at` **seul**
+  sur `auth_sessions` — sans quoi un lien volé laisserait l'attaquant connecté.
 
-**6. Contacts RGPD et support lus puis jetés.** Les variables étaient lues dans
-`get_settings()` mais jamais transmises au `Settings` : les endpoints publiaient
-une adresse vide, et une demande de droits devenait impossible à adresser.
+Un point de méthode : PostgreSQL n'a pas de privilège `INSERT`/`UPDATE` par
+colonne. La granularité réelle ne porte que sur les **lectures** ; l'énoncer
+autrement aurait été une affirmation fausse.
 
-**7. Tests qui mesuraient autre chose que le comportement.**
-`test_runtime_environment_safety.py` exigeait le repli SQLite que `main` a supprimé
-(ADR-002 : il contourne la RLS) — il verrouille désormais l'invariant inverse.
-`test_schema_parity.py` rechargeait le module de configuration **dans le
-processus**, laissant deux configurations coexister, d'où des 401 sur des requêtes
-pourtant authentifiées ; les migrations s'exécutent maintenant dans un
-sous-processus, sans état partagé. La CI comparait la tête Alembic à un identifiant
-écrit en dur.
+### 1.2 L'acceptation d'invitation écrivait la session sans contexte
 
-## Preuves exécutées
+Défaut trouvé en écrivant le test, pas en relisant le code : l'activation de
+l'adhésion écrivait `memberships` sans droit système (« permission denied »),
+donc l'invité ne pouvait pas entrer.
 
-Valeurs sorties de commandes rejouables. Commit de référence : `ba933b3`.
+La correction scinde le parcours. Consommation du jeton et activation de
+l'adhésion sur l'identité système ; ouverture de session sur la session
+applicative, `auth_sessions` étant hors RLS — c'est déjà ainsi que la connexion
+par mot de passe ouvre la sienne. Accorder `INSERT` sur les sessions au rôle
+système aurait été une capacité sans besoin, refusée.
 
-| Vérification | Résultat |
-|---|---|
-| Suite backend, PostgreSQL 16.2 jetable | **737 passed, 9 skipped, 0 failed** |
-| Suite backend, environnement de la CI (SQLite) | **706 passed, 40 skipped, 0 failed** |
-| Preuves RLS inter-organisations (rôle applicatif réel) | **15/15**, dont 4 nouvelles |
-| Typecheck frontend (`tsc --noEmit`) | vert |
-| Build frontend (`npm run build`) | vert, 12 pages |
-| Ruff (`F811,F841,F821,E9`) | **aucune erreur** — mesuré, pas supposé |
-| Recette de qualification (plan de données réel) | **54/54** |
-| Répétition de restauration PostgreSQL | **`FAILURES: none`** (38 tables RLS, `rows_visible_without_tenant_context: 0`) |
-| Surface sans identité (113 chemins interrogés) | 20 routes justifiées, 0 ouverte par inadvertance |
-| Discipline de migration | tête unique `c5f1a8e37b910`, 21 révisions linéaires |
-| Jobs CI | 5/5 verts : backend, frontend, RLS, recette, restauration |
+### 1.3 Le blocage Vercel était une cadence de cron, pas un défaut de build
 
-Les 9 tests ignorés sous PostgreSQL (40 sous SQLite) exigent des services
-externes — S3 réel, ClamAV, base Neon — et ne sont pas présentés comme exécutés.
+`vercel.json` déclarait trois `crons` en `* * * * *`. Vercel refuse plus d'une
+exécution par jour sur un compte Hobby, **au déploiement**, avant compilation :
+chaque Preview échouait en 0 s.
 
-**Aucune migration n'a été appliquée à une base réelle.** `alembic_version` n'a
-pas été modifié, l'historique n'a pas été réécrit.
+La régression vient de l'intégration de la PR #7 (`b30de3a`) : `main` ne
+déclarait aucun `crons`. La cadence passe au quotidien (`0 3`, `15 3`, `30 3`).
+La route appelée existe, est idempotente et **échoue visiblement** sans
+`CRON_SECRET` (503) au lieu de ne rien faire.
 
-Deux corrections de cette passe méritent d'être signalées, parce qu'elles portent
-sur des affirmations fausses de la description précédente :
+Ce que cela ne corrige pas, et qui est écrit tel quel dans la documentation : un
+environnement sans serveur n'exécute une fonction que pendant sa requête. La
+planification est un rattrapage, pas un drainage continu ; A-06 reste ouverte
+sur ce point, l'option recommandée pour un pilote restant le worker hors Vercel.
 
-- elle annonçait « Ruff — aucun » alors qu'il restait 42 variables mortes. Le
-  chiffre a été mesuré, puis corrigé (42 retraits, aucun changement de
-  comportement) ;
-- elle annonçait la recette à 54/54 et la restauration à `FAILURES: none` sans
-  que la restauration soit effectivement verte à ce moment-là : le vérificateur
-  de chaîne d'audit ne reconnaissait qu'un des trois schémas de hachage acceptés
-  par l'application, et déclarait falsifiée une chaîne saine.
+### 1.4 Deux tests dépendaient de l'ordre des lignes
 
-## Revue de sécurité
+`test_technical_sheet_tables.py` désignait une allégation par son rang
+(`paragraph_claims[0]`). SQL ne garantit aucun ordre : le test échouait sous
+PostgreSQL et passait sous SQLite. Il désigne désormais l'allégation par son
+contenu et vérifie qu'il en existe exactement une — contrôle plus fort.
 
-`docs/audits/2026-11-19-security-review-pr7-integration.md` déroule la liste de
-contrôle de `SECURITY.md` §5 point par point, en distinguant **vérifié**,
-**non couvert** et **limite connue**. Le label `security-reviewed` n'est pas
-apposé : cette revue fournit les constats pour qu'un tiers puisse la faire, elle
-ne s'auto-certifie pas.
+### 1.5 La répétition de restauration ne provisionnait pas l'identité système
 
-Le constat le plus important de cette revue concerne les trois tables dont
-`organization_id` est nullable. Leur politique vaut
-`organization_id IS NULL OR organization_id = contexte`. Mesuré avec le rôle
-applicatif :
+Le job passait à `ba933b3` et échouait à `2afe0c6` : la migration exige le rôle
+`vericlaim_system`, que ce job ne créait pas. Une étape exécute désormais le
+script audité, avec le même appel `psql` qu'en production. Job **vert** depuis.
 
-- contexte posé → une organisation ne voit que ses lignes et les orphelines,
-  jamais celles d'une autre : **la lecture croisée entre organisations est
-  refusée** ;
-- aucun contexte → les orphelines et les lignes déjà rattachées sont visibles.
-  C'est ce que fait l'application pour consommer un jeton ou appliquer un
-  webhook.
+---
 
-Ce second point n'est **pas** une protection, et il est désormais écrit comme tel
-dans la migration et fixé par un test. Il est inatteignable par l'API — aucune
-route ne lit ces trois tables — et il n'a pas été « corrigé » à la hâte : une
-politique par utilisateur toucherait le verrouillage des tentatives de connexion,
-sans preuve de non-régression disponible à cette échelle.
+## 2. Commits de la mission
 
-## Réserves — à ne pas confondre avec des bloqueurs de fusion
+| Commit | Contenu |
+| --- | --- |
+| `2afe0c6` | séparation locataire / système, rôle dédié, migration, 9 preuves PostgreSQL, recette branchée sur le script audité |
+| `e9a2765` | `vercel.json` en cadence quotidienne, documentation A-06, 01, 04, 08 |
+| `e836431` | provisionnement de l'identité système dans la répétition de restauration |
+| `d148be7` | test de revendications indépendant de l'ordre des lignes |
 
-Aucun de ces points ne bloque la fusion ; aucun ne doit être lu comme résolu.
+---
 
-1. **Planification des sauvegardes non prouvée.** La restauration est prouvée
-   contre moto, pas contre un stockage S3 réel. RPO/RTO restent non mesurés. Les
-   crons d'exécution des workers sont désormais déclarés en cadence quotidienne
-   (seule acceptée par Hobby) et ne valent que comme rattrapage : un cycle ne
-   dure que le temps de la requête.
-2. **Preuve TLS non exécutée.** La vérification runtime contrôle les rôles et la
-   RLS, pas la terminaison TLS du fournisseur.
-3. **Validation juridique externe non réalisée.** Les verdicts réglementaires
-   s'appuient sur un référentiel interne ; aucune revue par un juriste n'a eu lieu.
-4. **Paiement non encaissé.** Aucun encaissement réel n'a été simulé ni effectué ;
-   l'adaptateur « local » refuse de démarrer en production.
-5. **Revue de sécurité à faire.** Cette PR ne porte pas l'étiquette
-   `security-reviewed`. Les preuves ci-dessus sont fournies pour qu'une revue
-   réelle puisse être conduite ; elle n'a pas été faite.
+## 3. Tests exécutés et résultats
 
-## Hors périmètre volontaire
+| Suite | Résultat |
+| --- | --- |
+| SQLite complet | **706 passed**, 0 failed |
+| PostgreSQL complet (rôles réels) | **746 passed**, 9 skipped, 0 failed |
+| Preuves d'identité PostgreSQL (`test_postgres_identity_flows.py`) | **9/9** |
+| Preuves d'isolation (`test_postgres_tenant_isolation.py`) | **15/15** |
+| Recette de bout en bout | **54/54** |
+| `tsc --noEmit` + `npm run build` | verts |
+| Discipline des migrations | une seule tête, `c5f1a8e37b910` |
+| Surface publique | 113 chemins inspectés, 20 sans identité toutes justifiées |
 
-La PR #15 n'est pas rouverte. Aucune intervention sur Neon, Clerk, Vercel, les
-secrets, les variables d'environnement ou les paramètres de production.
+**Validation par mutation** — les tests échouent si l'on réintroduit le défaut :
 
-## Mission 10 — blocages de sécurité levés (19 novembre 2026)
+| Mutation | Effet |
+| --- | --- |
+| Parcours repassés sur le rôle applicatif | **6 échecs** |
+| Politique permissive rétablie | **1 échec** |
+| `SELECT` global accordé au rôle système | **1 échec** |
 
-**Dernier commit de code : `d148be7`** (rapport et corrections éditoriales après, sans changement de code) · rapport complet : `docs/audits/2026-11-19-mission-10-rapport.md`
+---
 
-### RLS d'identité : deux défauts mesurés, corrigés
+## 4. État de la CI et de Vercel au SHA final
 
-La suite PostgreSQL tournait avec le rôle `postgres`, qui **contourne la RLS** :
-elle validait l'application sur une base qui ne se comportait pas comme la
-production. Sous les rôles réels, deux défauts apparaissaient, et un reproche
-supposé n'apparaissait pas :
+**Dernier commit de code : `6ca68e5`** — les corrections éditoriales qui suivent ne
+changent aucun code.
 
-- l'**inscription échouait** (`new row violates row-level security policy`) ;
-- une organisation pouvait lire le **jeton orphelin** d'un utilisateur d'une
-  autre organisation ;
-- le constat « sans contexte, toutes les lignes sont visibles » est en revanche
-  **faux** : vérifié, non reproduit.
+| Contrôle | État |
+| --- | --- |
+| Backend verification | ✅ |
+| Frontend verification | ✅ |
+| PostgreSQL tenant isolation (RLS) | ✅ |
+| Recette qualification (real data plane) | ✅ |
+| Répétition de restauration | ✅ |
+| Vercel (déploiement) | ✅ success — Preview READY |
+| Chemins sensibles modifiés | ❌ **volontaire** (label absent) |
 
-Correction par **séparation d'identité**, pas par politique permissive : rôle
-`vericlaim_system` provisionné hors migration (`infra/neon/04_system_role.sql`),
-droits accordés **par colonne**, aveugle aux corps d'e-mail et aux tables métier,
-incapable de supprimer un jeton ou de réécrire l'audit. Côté applicatif, une
-politique unique `FOR ALL` avec `USING` **et** `WITH CHECK` stricts : plus aucune
-ligne sans organisation n'est visible d'une organisation.
+**Preview :** `https://vericlaim-3no3ylyw5-baya-ibraimmayoanouedu-8164s-projects.vercel.app`
+— état Vercel `success`, SHA `6ca68e5` (dernier commit de code).
 
-Preuves : **9 tests PostgreSQL** sur les rôles réels (dont invitation, écriture
-croisée refusée, audit en ajout seul) et **15 preuves d'isolation**. Éprouvées
-par mutation : 6 échecs si les parcours repassent sur le rôle applicatif, 1 si la
-politique redevient permissive, 1 si le rôle système reçoit un `SELECT` global.
+**Ce que cette Preview ne prouve pas.** Elle n'a pas été ouverte. Depuis cet
+environnement, `curl` vers `*.vercel.app` échoue à la poignée de main TLS
+(`SSL_ERROR_SYSCALL`, code 35) ; le connecteur Vercel répond « Access denied »
+(token sans les permissions requises). Le statut `success` établit que le build
+et le déploiement ont abouti, **pas** qu'un parcours utilisateur fonctionne.
+Cette vérification reste à faire par une personne ayant accès à la Preview.
 
-### Vercel : le blocage était une cadence de cron
+---
 
-Trois `crons` en `* * * * *`, introduits par l'intégration de la PR #7. Hobby
-refuse plus d'une exécution par jour, **au déploiement**, avant compilation :
-chaque Preview échouait en 0 s. Cadence passée au quotidien ; déploiement
-`success` au SHA final.
+## 5. Revue de sécurité (`SECURITY.md` §5)
 
-**Preview :** https://vericlaim-3no3ylyw5-baya-ibraimmayoanouedu-8164s-projects.vercel.app
-— état Vercel `success`. Elle n'a **pas été ouverte** : `curl` vers
-`*.vercel.app` échoue à la poignée de main TLS depuis cet environnement, et le
-connecteur Vercel répond « Access denied ». Le statut prouve que le build a
-abouti, pas qu'un parcours fonctionne.
+Chaque point, avec ce qui a été **exécuté** et ce qui reste une **affirmation**.
 
-### CI au SHA final
+| Point de la checklist | Statut | Preuve ou réserve |
+| --- | --- | --- |
+| Aucun chemin ne crée d'identité sans identité vérifiée | prouvé | 113 chemins interrogés sans session ; 20 sans identité, toutes déclarées et justifiées (`check_public_surface.py`) |
+| Route authentifiée **et** autorisée | prouvé | `test_public_surface_is_closed.py`, `test_catalog.py` (RBAC), `test_identity_tenancy.py` |
+| Mutation protégée par CSRF | prouvé | `test_identity_tenancy.py:63`, `test_self_service_identity.py:511`, `test_data_subject_rights.py:338` (403 sans jeton) |
+| Requêtes tenant scopées par `organization_id` | prouvé | 15 preuves RLS + revue des dépôts ; aucun accès inter-organisation mesuré |
+| Nouvelle table tenant → politique RLS | prouvé | `verify_runtime.py` refuse une table oubliée ; tête `c5f1a8e37b910` validée |
+| Pas de donnée sensible dans logs, erreurs, réponses | **partiellement prouvé** | tests de non-fuite sur les réponses d'API ; pas d'audit exhaustif de tous les `logger.*` |
+| Aucun secret en dur | **partiellement prouvé** | scripts de provisionnement refusent un mot de passe court ; aucun scanner de secrets (gitleaks/trufflehog) dans la CI — **non couvert** |
+| Entrées non fiables validées | prouvé | schémas Pydantic, `test_secure_documents.py`, verdicts ClamAV indéterminés |
+| Échec de dépendance externe → échoue fermé | prouvé | `test_a07_scanner_readiness.py`, `test_clamav_indeterminate_verdicts.py`, route de cycle en 503 sans secret |
+| Test de non-régression couvre la propriété | prouvé | 24 preuves PostgreSQL dédiées |
+| Test éprouvé par mutation | prouvé | 3 mutations, 8 échecs au total (tableau §3) |
 
-Backend, Frontend, RLS, Recette, Répétition de restauration, Vercel : **verts**.
-« Chemins sensibles modifiés » : **rouge volontairement** — le label
-`security-reviewed` exige une revue humaine qui n'a pas eu lieu.
-
-### Verdict : NO-GO pour la fusion
-
-Les trois points techniques sont traités et prouvés. Ce qui manque n'est pas un
-correctif : c'est une **revue humaine réelle** et une **ouverture de la Preview**
-par quelqu'un qui y a accès. Poser le label sans revue reviendrait à simuler une
+**Revue indépendante : non réalisée.** Aucun humain n'a relu ce lot. Le label
+`security-reviewed` reste donc **absent**, et le contrôle « Chemins sensibles »
+reste rouge **volontairement** : c'est le signal prévu par le dépôt, pas un
+échec à contourner. Poser le label sans revue reviendrait à simuler une
 approbation.
+
+---
+
+## 6. Blocages restants
+
+1. **Revue humaine indépendante** — requise avant fusion. C'est le blocage
+   principal, et il ne dépend pas de moi.
+2. **Preview non ouverte** — statut Vercel `success`, contenu invérifiable
+   depuis cet environnement (TLS réinitialisé, connecteur sans permission).
+3. **Capacités résiduelles du rôle système** — `count(*)` sur `audit_events`,
+   `INSERT` sur `organizations`. Nécessaires, mais plus larges que « identité ».
+4. **A-06 (drainage des files)** — atténuée, non résolue : la planification
+   quotidienne est un rattrapage, pas un traitement continu.
+5. **Neon non vérifié** — toute la preuve RLS vient d'une base construite
+   localement ; un écart de configuration avec Neon échapperait à ces tests.
+6. **TLS non rejoué localement** — le binaire PostgreSQL disponible est compilé
+   sans SSL, donc l'étape `rehearse_restore` n'a pas pu être rejouée ici ; elle
+   est verte en CI, ce qui est la seule preuve dont je dispose.
+
+---
+
+## 7. Verdict
+
+**NO-GO pour la fusion.**
+
+Les trois points techniques de la mission sont traités et prouvés : la RLS est
+corrigée par une séparation d'identité vérifiée par mutation, le déploiement
+Vercel aboutit au SHA final, et la CI technique est verte. Mais la condition
+explicite de la mission — une revue humaine réelle et documentée — n'est pas
+remplie, et je ne la remplacerai pas par une affirmation.
+
+**GO dès que** : un relecteur humain a examiné les commits `2afe0c6` à
+`d148be7` et posé `security-reviewed` en connaissance de cause, et la Preview a
+été ouverte une fois par une personne qui y a accès. Les deux sont des actions
+humaines, pas des correctifs restants.
