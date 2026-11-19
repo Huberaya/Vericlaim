@@ -466,7 +466,15 @@ def test_a_claim_detected_in_a_table_row_is_cited_cell_by_cell():
     assert all(
         claim.attributes_json["table_citation"] is None for claim in paragraph_claims
     )
-    assert "62 %" in paragraph_claims[0].claim_text
+    # On désigne l'allégation par son contenu, pas par son rang : l'ordre des
+    # lignes rendues n'est pas garanti par SQL, et ``paragraph_claims[0]``
+    # dépendait donc du plan d'exécution — le test échouait sous PostgreSQL en
+    # passant sous SQLite, ce qui n'apprenait rien sur le produit.
+    comment_claims = [c for c in paragraph_claims if "62 %" in c.claim_text]
+    assert len(comment_claims) == 1, (
+        "la phrase de commentaire doit produire exactement une allégation citée par "
+        f"paragraphe, obtenu : {[c.claim_text for c in paragraph_claims]}"
+    )
 
     # L'allégation trouvée dans une ligne de tableau porte la cellule et la ligne lue.
     assert table_claims, "aucune allégation de tableau : la citation cellule n'est pas exercée"
