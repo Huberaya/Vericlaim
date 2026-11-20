@@ -424,14 +424,19 @@ def get_settings() -> Settings:
     # vérification d'adresse, réinitialisation, webhook) doivent retomber sur le
     # rôle applicatif — ce qui n'est correct que là où la RLS n'existe pas
     # (SQLite, tests). En production, son absence est signalée au démarrage.
-    # A branch-scoped override avoids Neon integration-managed DATABASE_URL values\n    # silently replacing the isolated PR Preview connection. It is intentionally\n    # honored only in Preview; staging/production keep their established variables.\n    preview_system_database_url = _optional_env("VERICLAIM_PREVIEW_SYSTEM_DATABASE_URL") if environment == "preview" else None\n    system_database_url = preview_system_database_url or _optional_env("SYSTEM_DATABASE_URL")
+    # A branch-scoped override avoids Neon integration-managed DATABASE_URL values
+    # silently replacing the isolated PR Preview connection. It is intentionally
+    # honored only in Preview; staging/production keep their established variables.
+    preview_system_database_url = _optional_env("VERICLAIM_PREVIEW_SYSTEM_DATABASE_URL") if environment == "preview" else None
+    system_database_url = preview_system_database_url or _optional_env("SYSTEM_DATABASE_URL")
     if system_database_url:
         if system_database_url.startswith("postgres://"):
             system_database_url = "postgresql+psycopg://" + system_database_url[len("postgres://"):]
         elif system_database_url.startswith("postgresql://") and not system_database_url.startswith("postgresql+"):
             system_database_url = "postgresql+psycopg://" + system_database_url[len("postgresql://"):]
 
-    preview_database_url = _optional_env("VERICLAIM_PREVIEW_DATABASE_URL") if environment == "preview" else None\n    database_url = preview_database_url or _optional_env("DATABASE_URL")
+    preview_database_url = _optional_env("VERICLAIM_PREVIEW_DATABASE_URL") if environment == "preview" else None
+    database_url = preview_database_url or _optional_env("DATABASE_URL")
     if not database_url:
         # A process running on a managed platform (Vercel sets ``VERCEL=1``) is a
         # deployment, whatever APP_ENV claims. Falling back to the SQLite
