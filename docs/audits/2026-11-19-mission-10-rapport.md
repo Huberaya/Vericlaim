@@ -214,44 +214,56 @@ approbation.
 
 Les trois points techniques de la mission sont traités et prouvés : la RLS est
 corrigée par une séparation d'identité vérifiée par mutation, le déploiement
-Vercel aboutit au SHA final, et la CI technique est verte. Mais la condition
+Vercel aboutit au SHA final, et la CI technique est verte. Le contrôle instable
+qui faisait douter de cette CI est élucidé : c'était un défaut de déterminisme
+du rejeu, corrigé avec un test qui échoue sans le correctif (§8). Mais la condition
 explicite de la mission — une revue humaine réelle et documentée — n'est pas
 remplie, et je ne la remplacerai pas par une affirmation.
 
 **GO dès que** : un relecteur humain a examiné les commits `2afe0c6` à
-`d148be7` et posé `security-reviewed` en connaissance de cause, et la Preview a
-été ouverte une fois par une personne qui y a accès. Les deux sont des actions
-humaines, pas des correctifs restants.
+`d148be7` (plus le correctif de déterminisme du §8) et posé `security-reviewed`
+en connaissance de cause, et la Preview a été ouverte une fois par une personne
+qui y a accès. Les deux sont des actions humaines, pas des correctifs restants.
 
 ---
 
-## 8. Un contrôle instable, non expliqué
+## 8. Un contrôle instable, élucidé et corrigé
 
-Deux exécutions du job « Backend verification » ont échoué sur des assertions
-que je n'ai pas pu reproduire localement, alors que la même révision passait, et
-que la relance à l'identique (`gh run rerun`) est repassée **verte**.
+`Backend verification` a échoué trois fois, dont deux sur des commits **de
+documentation** (`508c162`, `47bc0f4`) qui ne touchent ni le moteur ni les
+règles. La relance passait. Le diagnostic tient en trois mesures.
 
-| Exécution | Assertion en échec |
-| --- | --- |
-| `d148be7` (1ʳᵉ) | vert |
-| `508c162` | `assert 'RULE_ISO_REC…' == 'RULE_FR_CARB…'` (moteur réglementaire) |
-| `508c162` (relance) | vert |
+**Assertion réelle.** Les annotations GitHub — et non l'extrait tronqué du
+rapport JUnit — donnent le message complet :
+`rejouer la version persistée ne reproduit pas les verdicts stockés`,
+`tests/test_analysis_regulatory_verdicts.py:365`. Une exécution antérieure avait
+échoué sur `assert '62 %' in 'Son emballage est entièrement recyclable et pèse 24 g.'`,
+soit une autre assertion : deux tests distincts, pas un unique coupable.
 
-**Ce que j'ai vérifié, et qui n'explique pas l'écart.** Le moteur est
-déterministe : `evaluate_claim_all` trie les règles par `(priority, rule_id)`,
-sans cache ni mutation du corpus. Les deux règles concernées ne partagent aucun
-`claim_type` (`recyclable` → priorité 40 ; `carbon_neutrality` → priorité 4),
-donc elles ne peuvent pas se disputer la première place pour la même allégation.
-J'ai exécuté la suite complète **seize fois** (6 avec l'environnement exact de la
-CI, base fraîche à chaque fois) : aucune reproduction.
+**Cause, reproduite.** La version est publiée dans **une seule transaction** :
+toutes ses allégations partagent donc le même `created_at`, à la résolution que
+la base conserve. Le rejeu ordonnait ces allégations par
+`(created_at, id)` — or `id` est un `uuid4`. À horodatages égaux, l'ordre de
+rejeu se décidait donc sur un tirage aléatoire, alors que les verdicts stockés
+portent le `sequence_number` de la publication. Reproduction délibérée, en
+forçant un horodatage unique et des UUID réattribués : les mêmes verdicts
+ressortent **dans un autre ordre**.
 
-**Ce que je n'ai pas pu faire.** Les journaux de la CI ne sont pas téléchargeables
-depuis cet environnement (`EOF` sur l'URL signée), seule l'annotation du rapport
-JUnit est lisible. Sans la trace complète, je ne peux pas nommer le test fautif
-ni la séquence qui le fait échouer. Je ne vais donc pas modifier le moteur ou les
-assertions sur une hypothèse.
+**Correctif.** L'ordre de détection est désormais écrit avec l'allégation
+(`attributes_json.detection_sequence`, dans `app/analyses/service.py`), et le
+rejeu trie sur cette clé (`_persisted_claim_order`). Aucune migration : la clé
+vit dans la provenance déjà persistée. Les versions antérieures, qui n'en ont
+pas, retombent explicitement sur l'ordre historique — le repli est écrit, pas
+supposé.
 
-**Conséquence pour la fusion.** Un contrôle qui échoue une fois sur deux
-exécutions sans cause identifiée n'est pas une preuve de vert. Il devra être
-élucidé — par quelqu'un qui peut lire les journaux — avant de considérer la CI
-comme fiable, même si le voyant est vert au moment de la fusion.
+**Preuves.** Une base où tous les horodatages coïncident donne des ordres
+identiques après correctif, divergents avant. Le nouveau test
+`test_the_replay_order_survives_identical_timestamps` échoue sans le correctif
+et passe avec. Suites complètes : **688 passed / 68 skipped** sur SQLite et
+**688 passed / 68 skipped** sur PostgreSQL.
+
+**Ce que cela change pour la fusion.** La CI redevient une preuve : l'échec
+n'était pas un aléa de plateforme mais un défaut de déterminisme du rejeu, qui
+pouvait aussi faire échouer une vérification d'audit en production. Il reste
+qu'un voyant vert obtenu par relance ne prouvait rien — c'est précisément ce qui
+a retardé le diagnostic.
