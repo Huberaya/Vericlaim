@@ -1269,6 +1269,7 @@ def _provenance_for_fact(
     segment: DocumentSegment,
     document_version: DocumentVersion,
     fact: Any,
+    detection_sequence: int,
 ) -> tuple[int, int, dict[str, Any]]:
     segment_start = segment.start_offset
     sentence_start = fact.start_offset
@@ -1312,6 +1313,11 @@ def _provenance_for_fact(
             "segment_end_offset_in_document": segment.end_offset,
             "segment_source_sha256": segment.source_sha256,
             "source_is_ocr": _segment_type_is_ocr(segment),
+            # Position de détection dans la version, figée ici : c'est la seule
+            # clé qui permette au rejeu de retrouver l'ordre de publication, les
+            # horodatages d'une même transaction étant identiques et les UUID
+            # étant tirés au hasard.
+            "detection_sequence": detection_sequence,
             # C23 — présent seulement quand la citation tombe dans un tableau lu.
             "table_citation": _citation_cell(
                 segment=segment,
@@ -1375,11 +1381,12 @@ def _detect_claim_records(
             conflicting_types = polarity_conflicts(
                 [(_enum_value(fact.claim_type), bool(fact.affirmative)) for fact in facts]
             )
-            for fact in facts:
+            for fact_index, fact in enumerate(facts):
                 start_offset, end_offset, provenance = _provenance_for_fact(
                     segment=segment,
                     document_version=document_version,
                     fact=fact,
+                    detection_sequence=len(claim_records),
                 )
                 # Deterministic rubric, published with its factors: the caller
                 # can see why a detection is solid or fragile. Never a model.
@@ -1892,6 +1899,23 @@ def process_claimed_analysis_detection(
     )
 
 
+def _persisted_claim_order(claim: Claim) -> tuple:
+    """Ordre de publication d'une allégation persistée, reconstitué exactement.
+
+    ``detection_sequence`` est écrite à la publication. Les versions antérieures
+    à son introduction n'en ont pas : on retombe alors sur l'ordre de lecture
+    historique, sans prétendre mieux faire.
+    """
+    provenance = claim.attributes_json or {}
+    sequence = provenance.get("detection_sequence")
+    return (
+        0 if isinstance(sequence, int) else 1,
+        sequence if isinstance(sequence, int) else 0,
+        claim.created_at,
+        str(claim.id),
+    )
+
+
 def replay_persisted_version_verdicts(
     db: Session,
     *,
@@ -1921,14 +1945,17 @@ def replay_persisted_version_verdicts(
 
     claims = list(
         db.scalars(
-            select(Claim)
-            .where(
+            select(Claim).where(
                 Claim.organization_id == organization_id,
                 Claim.analysis_version_id == version.id,
             )
-            .order_by(Claim.created_at.asc(), Claim.id.asc())
         ).all()
     )
+    # L'ordre de publication est celui de la détection, figé dans la provenance.
+    # Se rabattre sur ``(created_at, id)`` produisait un ordre différent de celui
+    # des lignes stockées dès que les horodatages coïncidaient — ce qui est la
+    # règle et non l'exception, puisqu'une version est publiée en une transaction.
+    claims.sort(key=_persisted_claim_order)
     claim_records = [
         {
             "id": claim.id,

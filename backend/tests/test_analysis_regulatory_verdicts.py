@@ -366,6 +366,64 @@ def test_the_evaluation_context_is_frozen_and_not_read_at_worker_time():
     )
 
 
+def test_the_replay_order_survives_identical_timestamps():
+    """The replay order must come from the data, not from luck.
+
+    A version is published in one transaction, so every claim of that version
+    carries the same ``created_at`` to the resolution the database keeps.
+    Ordering the replay by ``(created_at, id)`` then falls back to a random
+    UUID: in CI this produced the right verdicts in the wrong order, and the
+    frozen-context test above failed on a documentation-only commit.
+
+    ``detection_sequence`` is written with the claim, so the replay order is
+    recoverable. This test forces the pathological case — one timestamp for
+    every claim, UUIDs reassigned — instead of waiting for it to happen.
+    """
+    from datetime import datetime, timezone
+
+    from sqlalchemy import update
+
+    from app.models.domain import Claim
+
+    engine = _engine()
+    tenant = _seed_tenant(engine, slug="c5-replay-order")
+    _, version_id, _ = _run_analysis(engine, tenant, key="c5-replay-order")
+
+    stored = _verdicts(engine, organization_id=tenant.organization_id, version_id=version_id)
+    assert len(stored) > 1, "le cas ne se pose qu'à partir de deux verdicts"
+
+    with Session(engine) as db:
+        claims = list(
+            db.scalars(select(Claim).where(Claim.analysis_version_id == version_id)).all()
+        )
+        assert all(
+            isinstance((claim.attributes_json or {}).get("detection_sequence"), int)
+            for claim in claims
+        ), "la position de détection doit être persistée avec l'allégation"
+        same_instant = datetime(2026, 11, 20, tzinfo=timezone.utc)
+        # Les verdicts et les liens citent l'allégation : l'identifiant ne peut
+        # pas être réattribué seul sans casser les clés étrangères. On aligne
+        # d'abord la date, qui suffit à faire tomber l'ancien tri sur l'UUID.
+        db.execute(
+            update(Claim)
+            .where(Claim.analysis_version_id == version_id)
+            .values(created_at=same_instant)
+        )
+        db.commit()
+
+    with Session(engine, expire_on_commit=False) as db:
+        set_db_request_context(db, user_id=tenant.user_id, organization_id=tenant.organization_id)
+        replayed = replay_persisted_version_verdicts(
+            db,
+            settings=settings,
+            organization_id=tenant.organization_id,
+            analysis_version_id=version_id,
+        )
+
+    assert [r["claim_text"] for r in replayed] == [v.claim_text for v in stored]
+    assert [r["rule_id"] for r in replayed] == [v.rule_id for v in stored]
+
+
 # --------------------------------------------------------------------------- #
 # Acceptance C5.3 — tenant isolation
 # --------------------------------------------------------------------------- #
