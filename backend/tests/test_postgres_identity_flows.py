@@ -128,7 +128,21 @@ def roles() -> Iterator[Roles]:
                 )
             )
 
-    with psycopg.connect(_dsn_for(ADMIN_DSN, dbname=database, user="postgres", password=""), autocommit=True) as owner, owner.cursor() as cursor:
+    # Le mot de passe vient du DSN fourni. Le forcer à vide ne marchait que sur un
+    # serveur en `trust` : en CI, il exige un mot de passe, et l'erreur
+    # (« fe_sendauth: no password supplied ») apparaissait à la construction de la
+    # base, donc en erreur de fixture pour chaque test, jamais comme un échec de
+    # test. Le DSN d'administration est la seule source de vérité.
+    owner_credentials = psycopg.conninfo.conninfo_to_dict(ADMIN_DSN)
+    with psycopg.connect(
+        _dsn_for(
+            ADMIN_DSN,
+            dbname=database,
+            user=owner_credentials.get("user", "postgres"),
+            password=owner_credentials.get("password", "") or "",
+        ),
+        autocommit=True,
+    ) as owner, owner.cursor() as cursor:
         cursor.execute("REVOKE CREATE ON SCHEMA public FROM PUBLIC")
         cursor.execute(f"GRANT USAGE, CREATE ON SCHEMA public TO {MIGRATOR_ROLE}")
         cursor.execute(f"GRANT USAGE ON SCHEMA public TO {APP_ROLE}")
