@@ -171,6 +171,64 @@ def test_preview_platform_accepts_staging():
         assert get_settings().environment == "staging"
 
 
+def test_preview_profile_keeps_shared_runtime_controls_without_prod_services():
+    preview = {
+        **PRODUCTION_ENV,
+        "APP_ENV": "preview",
+        "SYSTEM_DATABASE_URL": "postgresql+psycopg://vericlaim_system:password@db.internal:5432/vericlaim",
+    }
+    for key in (
+        "OIDC_ISSUER", "OIDC_CLIENT_ID", "OIDC_REDIRECT_URI",
+        "DOCUMENT_STORAGE_BACKEND", "DOCUMENT_STORAGE_ENDPOINT",
+        "DOCUMENT_STORAGE_PUBLIC_ENDPOINT", "DOCUMENT_STORAGE_SSE_MODE",
+        "DOCUMENT_QUARANTINE_BUCKET", "DOCUMENT_CLEAN_BUCKET",
+        "DOCUMENT_SCANNER_MODE", "DOCUMENT_CLAMAV_HOST",
+    ):
+        preview.pop(key, None)
+    with patch.dict(os.environ, {**preview, "VERCEL_ENV": "preview"}, clear=True):
+        settings = get_settings()
+    assert settings.environment == "preview"
+    assert settings.is_shared_environment is True
+    assert settings.is_production_like is False
+    assert settings.database_url.startswith("postgresql+")
+    assert settings.document_storage_backend == "disabled"
+    assert settings.document_scanner_mode == "disabled"
+    assert settings.oidc_configured is False
+    assert settings.auth_cookie_secure is True
+    assert settings.auth_dev_login_enabled is False
+    assert settings.billing_provider == "disabled"
+
+
+def test_preview_profile_refuses_insecure_cookies():
+    preview = {**PRODUCTION_ENV, "APP_ENV": "preview", "AUTH_COOKIE_SECURE": "false"}
+    with patch.dict(os.environ, {**preview, "VERCEL_ENV": "preview"}, clear=True):
+        with pytest.raises(RuntimeError, match="AUTH_COOKIE_SECURE"):
+            get_settings()
+
+
+def test_preview_profile_refuses_credentialless_admin_login():
+    preview = {**PRODUCTION_ENV, "APP_ENV": "preview", "AUTH_DEV_LOGIN_ENABLED": "true"}
+    with patch.dict(os.environ, {**preview, "VERCEL_ENV": "preview"}, clear=True):
+        with pytest.raises(RuntimeError, match="AUTH_DEV_LOGIN_ENABLED"):
+            get_settings()
+
+
+def test_preview_profile_requires_a_dedicated_session_secret():
+    preview = {**PRODUCTION_ENV, "APP_ENV": "preview"}
+    preview.pop("AUTH_SESSION_SECRET")
+    with patch.dict(os.environ, {**preview, "VERCEL_ENV": "preview"}, clear=True):
+        with pytest.raises(RuntimeError, match="AUTH_SESSION_SECRET"):
+            get_settings()
+
+
+def test_preview_profile_requires_a_dedicated_report_signing_key():
+    preview = {**PRODUCTION_ENV, "APP_ENV": "preview"}
+    preview.pop("REPORT_SIGNING_KEY")
+    with patch.dict(os.environ, {**preview, "VERCEL_ENV": "preview"}, clear=True):
+        with pytest.raises(RuntimeError, match="REPORT_SIGNING_KEY"):
+            get_settings()
+
+
 def test_preview_platform_refuses_development():
     with patch.dict(
         os.environ,
@@ -260,6 +318,16 @@ def test_local_sqlite_fallback_is_refused_on_a_shared_platform():
     ):
         with pytest.raises(RuntimeError, match="ALLOW_LOCAL_SQLITE_FALLBACK"):
             get_settings()
+
+
+def test_preview_requires_a_separate_system_database_role(monkeypatch):
+    monkeypatch.setattr(
+        database,
+        "settings",
+        replace(database.settings, environment="preview", database_url="postgresql+psycopg://app@db.invalid/vericlaim", system_database_url=None),
+    )
+    with pytest.raises(RuntimeError, match="SYSTEM_DATABASE_URL"):
+        database._assert_system_access_configured()
 
 
 # --------------------------------------------------------------------------- #
