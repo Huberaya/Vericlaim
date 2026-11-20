@@ -120,7 +120,7 @@ def _assert_system_access_configured() -> None:
     seulement pour les nouveaux comptes. Un refus au démarrage est visible ; une
     inscription cassée ne l'est pas.
     """
-    if not settings.is_production_like:
+    if not settings.is_shared_environment:
         return
     if settings.database_url.startswith("sqlite"):
         return
