@@ -53,6 +53,19 @@ def test_get_db_fails_closed_and_creates_no_fallback_file(monkeypatch: pytest.Mo
     FALLBACK_DB_PATH.unlink(missing_ok=True)
 
 
+def test_api_startup_refuses_without_system_database_role(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Shared runtimes must fail at boot if identity cannot safely cross RLS."""
+    import app.main as main_module
+
+    def _missing_role() -> None:
+        raise RuntimeError("SYSTEM_DATABASE_URL is absent")
+
+    monkeypatch.setattr(main_module, "_assert_system_access_configured", _missing_role)
+    with pytest.raises(RuntimeError, match="SYSTEM_DATABASE_URL"):
+        with TestClient(main_module.app):
+            pass
+
+
 def test_api_startup_refuses_to_serve_without_a_verified_schema(monkeypatch: pytest.MonkeyPatch) -> None:
     """A failed schema check must abort startup in every environment.
 
