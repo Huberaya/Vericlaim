@@ -7,7 +7,10 @@ from urllib.parse import urlparse
 
 
 PRODUCTION_LIKE_ENVIRONMENTS = frozenset({"staging", "production"})
-KNOWN_ENVIRONMENTS = frozenset({"development", "test", *PRODUCTION_LIKE_ENVIRONMENTS})
+# Preview is a shared, HTTPS-only runtime with PostgreSQL/RLS and dedicated
+# secrets, but without pretending production-only external services are provisioned.
+SHARED_ENVIRONMENTS = frozenset({"preview", *PRODUCTION_LIKE_ENVIRONMENTS})
+KNOWN_ENVIRONMENTS = frozenset({"development", "test", *SHARED_ENVIRONMENTS})
 
 
 def _ephemeral_dev_session_secret() -> str:
@@ -47,7 +50,7 @@ PLATFORM_ENVIRONMENT_VARIABLE = "VERCEL_ENV"
 PLATFORM_PRESENCE_VARIABLES = ("VERCEL", "VERCEL_ENV")
 APP_ENV_FOR_PLATFORM_ENVIRONMENT = {
     "production": frozenset({"production"}),
-    "preview": frozenset({"staging", "production"}),
+    "preview": frozenset({"preview", "staging", "production"}),
     "development": frozenset({"development", "test"}),
 }
 MAX_DOCUMENT_BYTES = 50 * 1024 * 1024
@@ -213,6 +216,11 @@ class Settings:
     def is_production_like(self) -> bool:
         return self.environment in PRODUCTION_LIKE_ENVIRONMENTS
 
+    @property
+    def is_shared_environment(self) -> bool:
+        """A deployed, multi-user runtime that must retain database and session controls."""
+        return self.environment in SHARED_ENVIRONMENTS
+
     def describe_runtime(self) -> dict[str, str | bool | None]:
         """Non-secret summary of the resolved runtime, for structured startup logs."""
         return {
@@ -369,12 +377,13 @@ def get_settings() -> Settings:
 
     environment = raw_app_env.lower() or "development"
     if environment not in KNOWN_ENVIRONMENTS:
-        raise RuntimeError("APP_ENV must be one of development, test, staging or production.")
+        raise RuntimeError("APP_ENV must be one of development, test, preview, staging or production.")
     is_production_like = environment in PRODUCTION_LIKE_ENVIRONMENTS
+    is_shared_environment = environment in SHARED_ENVIRONMENTS
     frontend_url = _validate_url(
         "FRONTEND_URL",
         _normalise_base_url(os.getenv("FRONTEND_URL", "http://localhost:3000").strip()),
-        require_https=is_production_like,
+        require_https=is_shared_environment,
     )
     origins = tuple(
         origin.strip()
@@ -384,7 +393,7 @@ def get_settings() -> Settings:
     if not origins or "*" in origins:
         raise RuntimeError("CORS_ORIGINS must contain explicit origins; wildcard origins are unsafe with session cookies.")
     for origin in origins:
-        _validate_url("CORS_ORIGINS", origin, require_https=is_production_like)
+        _validate_url("CORS_ORIGINS", origin, require_https=is_shared_environment)
     status = os.getenv("EU_2024_825_FR_TRANSPOSITION_STATUS", "unknown").strip().lower()
     if status not in {"unknown", "implemented", "not_implemented"}:
         status = "unknown"
@@ -461,9 +470,9 @@ def get_settings() -> Settings:
         )
 
 
-    if is_production_like and not database_url.startswith(("postgresql://", "postgresql+")):
+    if is_shared_environment and not database_url.startswith(("postgresql://", "postgresql+")):
         raise RuntimeError(
-            "DATABASE_URL must use PostgreSQL in staging/production so tenant RLS is enforceable."
+            "DATABASE_URL must use PostgreSQL in preview/staging/production so tenant RLS is enforceable."
         )
     if allow_local_sqlite_fallback and environment not in {"development", "test"}:
         raise RuntimeError(
@@ -485,14 +494,14 @@ def get_settings() -> Settings:
         document_storage_endpoint = _validate_url(
             "DOCUMENT_STORAGE_ENDPOINT",
             _normalise_base_url(document_storage_endpoint),
-            require_https=is_production_like,
+            require_https=is_shared_environment,
         )
     document_storage_public_endpoint = _optional_env("DOCUMENT_STORAGE_PUBLIC_ENDPOINT")
     if document_storage_public_endpoint:
         document_storage_public_endpoint = _validate_url(
             "DOCUMENT_STORAGE_PUBLIC_ENDPOINT",
             _normalise_base_url(document_storage_public_endpoint),
-            require_https=is_production_like,
+            require_https=is_shared_environment,
         )
     # The storage adapter speaks the S3 protocol, but the selected deployment
     # infrastructure is MinIO. Requiring explicit endpoints outside local/test
@@ -577,16 +586,16 @@ def get_settings() -> Settings:
     support_contact_email = (os.getenv("SUPPORT_CONTACT_EMAIL") or "").strip()
     report_signing_key = _optional_env("REPORT_SIGNING_KEY")
     if not report_signing_key:
-        if is_production_like:
+        if is_shared_environment:
             raise RuntimeError(
-                "REPORT_SIGNING_KEY must be configured in staging/production: without it a report "
+                "REPORT_SIGNING_KEY must be configured in preview/staging/production: without it a report "
                 "cannot be bound to the analysis it describes."
             )
         report_signing_key = DEV_REPORT_SIGNING_KEY
-    if is_production_like and not _is_strong_secret(report_signing_key):
+    if is_shared_environment and not _is_strong_secret(report_signing_key):
         raise RuntimeError(
             "REPORT_SIGNING_KEY must be a random value of at least 32 characters, with no "
-            "placeholder marker and at least 16 distinct characters, in staging/production."
+            "placeholder marker and at least 16 distinct characters, in preview/staging/production."
         )
 
     email_backend = (_optional_env("EMAIL_BACKEND") or "outbox").strip().lower()
@@ -595,7 +604,7 @@ def get_settings() -> Settings:
     smtp_host = _optional_env("SMTP_HOST")
     if email_backend == "smtp" and not smtp_host:
         raise RuntimeError("EMAIL_BACKEND=smtp requires SMTP_HOST to be configured.")
-    if email_backend == "smtp" and is_production_like and not _optional_env("SMTP_USERNAME"):
+    if email_backend == "smtp" and is_shared_environment and not _optional_env("SMTP_USERNAME"):
         raise RuntimeError(
             "EMAIL_BACKEND=smtp requires SMTP_USERNAME in staging/production: an "
             "unauthenticated relay is not an acceptable production transport."
@@ -603,14 +612,14 @@ def get_settings() -> Settings:
 
     auth_session_secret = _optional_env("AUTH_SESSION_SECRET")
     if not auth_session_secret:
-        if is_production_like:
-            raise RuntimeError("AUTH_SESSION_SECRET must be configured in staging/production.")
+        if is_shared_environment:
+            raise RuntimeError("AUTH_SESSION_SECRET must be configured in preview/staging/production.")
         auth_session_secret = DEV_SESSION_SECRET
-    if is_production_like and (
+    if is_shared_environment and (
         len(auth_session_secret) < 32 or auth_session_secret.lower().startswith(("replace-", "change-", "dev-"))
     ):
         raise RuntimeError(
-            "AUTH_SESSION_SECRET must be a non-placeholder value of at least 32 characters in staging/production."
+            "AUTH_SESSION_SECRET must be a non-placeholder value of at least 32 characters in preview/staging/production."
         )
 
     # --- C13: qui encaisse ----------------------------------------------------
@@ -627,7 +636,7 @@ def get_settings() -> Settings:
             "BILLING_PROVIDER must be one of local, stripe or disabled "
             f"(received {billing_provider!r})."
         )
-    if is_production_like and billing_provider == "local":
+    if is_shared_environment and billing_provider == "local":
         raise RuntimeError(
             "BILLING_PROVIDER=local is refused in staging/production: no payment is ever collected "
             "while plans are granted. Set BILLING_PROVIDER=stripe, or 'disabled' to stop selling."
@@ -642,7 +651,7 @@ def get_settings() -> Settings:
     stripe_api_base = _validate_url(
         "STRIPE_API_BASE",
         _normalise_base_url(os.getenv("STRIPE_API_BASE", "https://api.stripe.com").strip()),
-        require_https=is_production_like,
+        require_https=is_shared_environment,
     )
     billing_local_webhook_secret = (
         _optional_env("BILLING_LOCAL_WEBHOOK_SECRET") or DEV_BILLING_WEBHOOK_SECRET
@@ -657,11 +666,11 @@ def get_settings() -> Settings:
     if oidc_issuer and not oidc_discovery_url:
         oidc_discovery_url = f"{oidc_issuer}/.well-known/openid-configuration"
     if oidc_issuer:
-        oidc_issuer = _validate_url("OIDC_ISSUER", oidc_issuer, require_https=is_production_like)
+        oidc_issuer = _validate_url("OIDC_ISSUER", oidc_issuer, require_https=is_shared_environment)
     if oidc_discovery_url:
-        oidc_discovery_url = _validate_url("OIDC_DISCOVERY_URL", oidc_discovery_url, require_https=is_production_like)
+        oidc_discovery_url = _validate_url("OIDC_DISCOVERY_URL", oidc_discovery_url, require_https=is_shared_environment)
     if oidc_redirect_uri:
-        oidc_redirect_uri = _validate_url("OIDC_REDIRECT_URI", oidc_redirect_uri, require_https=is_production_like)
+        oidc_redirect_uri = _validate_url("OIDC_REDIRECT_URI", oidc_redirect_uri, require_https=is_shared_environment)
         if urlparse(oidc_redirect_uri).hostname != urlparse(frontend_url).hostname:
             raise RuntimeError(
                 "OIDC_REDIRECT_URI must use the frontend host so session and CSRF cookies remain same-origin."
@@ -676,16 +685,16 @@ def get_settings() -> Settings:
     if is_production_like and not all(configured_identity_fields):
         raise RuntimeError("OIDC SSO must be configured in staging/production.")
 
-    auth_cookie_secure = _bool_from_env(os.getenv("AUTH_COOKIE_SECURE"), default=is_production_like)
-    if is_production_like and not auth_cookie_secure:
-        raise RuntimeError("AUTH_COOKIE_SECURE cannot be disabled in staging/production.")
+    auth_cookie_secure = _bool_from_env(os.getenv("AUTH_COOKIE_SECURE"), default=is_shared_environment)
+    if is_shared_environment and not auth_cookie_secure:
+        raise RuntimeError("AUTH_COOKIE_SECURE cannot be disabled in preview/staging/production.")
 
     # Default-off credential-free login. Refuse the configuration outright in
     # production-like environments instead of silently ignoring it, so a
     # misconfigured deployment fails at startup rather than at request time.
     auth_dev_login_enabled = _bool_from_env(os.getenv("AUTH_DEV_LOGIN_ENABLED"), default=False)
-    if is_production_like and auth_dev_login_enabled:
-        raise RuntimeError("AUTH_DEV_LOGIN_ENABLED cannot be enabled in staging/production.")
+    if is_shared_environment and auth_dev_login_enabled:
+        raise RuntimeError("AUTH_DEV_LOGIN_ENABLED cannot be enabled in preview/staging/production.")
 
     max_upload_bytes = _positive_int_from_env("MAX_UPLOAD_BYTES", 15 * 1024 * 1024, 1024)
     if max_upload_bytes > MAX_DOCUMENT_BYTES:
