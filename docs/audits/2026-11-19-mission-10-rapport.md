@@ -222,3 +222,36 @@ remplie, et je ne la remplacerai pas par une affirmation.
 `d148be7` et posé `security-reviewed` en connaissance de cause, et la Preview a
 été ouverte une fois par une personne qui y a accès. Les deux sont des actions
 humaines, pas des correctifs restants.
+
+---
+
+## 8. Un contrôle instable, non expliqué
+
+Deux exécutions du job « Backend verification » ont échoué sur des assertions
+que je n'ai pas pu reproduire localement, alors que la même révision passait, et
+que la relance à l'identique (`gh run rerun`) est repassée **verte**.
+
+| Exécution | Assertion en échec |
+| --- | --- |
+| `d148be7` (1ʳᵉ) | vert |
+| `508c162` | `assert 'RULE_ISO_REC…' == 'RULE_FR_CARB…'` (moteur réglementaire) |
+| `508c162` (relance) | vert |
+
+**Ce que j'ai vérifié, et qui n'explique pas l'écart.** Le moteur est
+déterministe : `evaluate_claim_all` trie les règles par `(priority, rule_id)`,
+sans cache ni mutation du corpus. Les deux règles concernées ne partagent aucun
+`claim_type` (`recyclable` → priorité 40 ; `carbon_neutrality` → priorité 4),
+donc elles ne peuvent pas se disputer la première place pour la même allégation.
+J'ai exécuté la suite complète **seize fois** (6 avec l'environnement exact de la
+CI, base fraîche à chaque fois) : aucune reproduction.
+
+**Ce que je n'ai pas pu faire.** Les journaux de la CI ne sont pas téléchargeables
+depuis cet environnement (`EOF` sur l'URL signée), seule l'annotation du rapport
+JUnit est lisible. Sans la trace complète, je ne peux pas nommer le test fautif
+ni la séquence qui le fait échouer. Je ne vais donc pas modifier le moteur ou les
+assertions sur une hypothèse.
+
+**Conséquence pour la fusion.** Un contrôle qui échoue une fois sur deux
+exécutions sans cause identifiée n'est pas une preuve de vert. Il devra être
+élucidé — par quelqu'un qui peut lire les journaux — avant de considérer la CI
+comme fiable, même si le voyant est vert au moment de la fusion.
