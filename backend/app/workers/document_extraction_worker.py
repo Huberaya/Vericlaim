@@ -208,9 +208,35 @@ class DocumentExtractionWorker:
                 )
             except DocumentExtractionTerminalError as exc:
                 db.rollback()
+                # Un travail qui échoue doit laisser une ligne lisible dans le flux
+                # de journaux, pas seulement une ligne en base : sinon l'opérateur
+                # voit un worker parfaitement silencieux pendant que des documents
+                # échouent.
+                logger.error(
+                    "Document extraction failed definitively",
+                    extra={
+                        "event": "job_failed",
+                        "job_id": str(claim.id),
+                        "organization_id": str(claim.organization_id),
+                        "document_version_id": str(claim.document_version_id),
+                        "error_code": exc.code,
+                        "retryable": False,
+                    },
+                )
                 self._record_failure(claim, error_code=exc.code, retryable=False)
             except DocumentExtractionRetryableError as exc:
                 db.rollback()
+                logger.warning(
+                    "Document extraction failed, will be retried",
+                    extra={
+                        "event": "job_failed",
+                        "job_id": str(claim.id),
+                        "organization_id": str(claim.organization_id),
+                        "document_version_id": str(claim.document_version_id),
+                        "error_code": exc.code,
+                        "retryable": True,
+                    },
+                )
                 self._record_failure(claim, error_code=exc.code, retryable=True)
             except DocumentExtractionConflictError:
                 # A lease can legitimately be recovered by another worker after
@@ -219,7 +245,15 @@ class DocumentExtractionWorker:
                 logger.warning("Document extraction lease was lost", extra={"job_id": str(claim.id)})
             except Exception:
                 db.rollback()
-                logger.exception("Unexpected document extraction worker error", extra={"job_id": str(claim.id)})
+                logger.exception(
+                    "Unexpected document extraction worker error",
+                    extra={
+                        "event": "job_failed",
+                        "job_id": str(claim.id),
+                        "organization_id": str(claim.organization_id),
+                        "retryable": True,
+                    },
+                )
                 self._record_failure(claim, error_code="unexpected_worker_error", retryable=True)
 
     def run_once(self) -> bool:

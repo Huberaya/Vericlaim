@@ -20,6 +20,17 @@ type Props = {
   onClose: () => void;
 };
 
+// C17 — vocabulaire du **constat** de couverture (ce que les faits disent), distinct du
+// statut déclaré par un relecteur affiché juste à côté.
+const OBSERVED_STATE_LABELS: Record<string, string> = {
+  covered: "couvre l'allégation",
+  partial: "portée non établie",
+  expired: "périmée à la date de l'audit",
+  out_of_scope: "hors du périmètre de l'audit",
+  not_covering: "famille d'allégation non couverte",
+  missing: "aucune pièce",
+};
+
 const COVERAGE_STATUS_BADGES: Record<
   PersistentEvidenceStatus,
   { label: string; badge: string; icon: string }
@@ -315,10 +326,15 @@ export default function EvidenceMatrixModal({
                                       {ev?.issuer ? `Émis par ${ev.issuer}` : "Auto-déclaré"}
                                       {ev?.expires_on ? ` · Valide jusqu'au ${ev.expires_on}` : ""}
                                     </div>
-                                    <div className="mt-1">
+                                    <div className="mt-1 flex flex-wrap items-center gap-1">
                                       <span className={`inline-block px-2 py-0.5 rounded text-[10px] border ${lnkStatus.badge}`}>
                                         {lnkStatus.label}
                                       </span>
+                                      {lnk.observed_state && (
+                                        <span className="inline-block px-2 py-0.5 rounded text-[10px] border border-slate-700 bg-slate-950 text-slate-300">
+                                          Constat : {OBSERVED_STATE_LABELS[lnk.observed_state] ?? lnk.observed_state}
+                                        </span>
+                                      )}
                                     </div>
                                   </div>
                                   {canManage && (
@@ -348,7 +364,7 @@ export default function EvidenceMatrixModal({
         <div className="pt-4 border-t border-slate-800 flex flex-col md:flex-row justify-between items-center gap-3 text-xs text-slate-500">
           <p className="max-w-2xl text-[11px] leading-relaxed">
             {matrix?.disclaimer ||
-              "VeriClaim AI fournit une aide au pré-audit. Les résultats ne constituent pas un avis juridique et doivent être validés par une personne compétente."}
+              "VeriClaim fournit une aide au pré-audit. Les résultats ne constituent pas un avis juridique et doivent être validés par une personne compétente."}
           </p>
           <button
             onClick={onClose}

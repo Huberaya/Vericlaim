@@ -15,9 +15,10 @@ import warnings
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, Mapping
 
 from app.core.config import settings
+from app.engine.table_reader import parse_page_tables
 
 
 class DocumentExtractionError(ValueError):
@@ -38,6 +39,9 @@ class ExtractedSegment:
     text: str
     start_offset: int
     end_offset: int
+    #: C23 — pour un segment de type tableau, la lecture structurée des lignes
+    #: (critère / valeur / unité, avec les offsets de chaque cellule). Vide sinon.
+    table: Mapping[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -50,6 +54,48 @@ class ExtractionResult:
     pages: tuple[ExtractedPage, ...]
     segments: tuple[ExtractedSegment, ...]
     requires_human_review: bool
+
+
+def table_payload(table: object) -> dict[str, object]:
+    """La lecture d'un tableau, sous une forme sérialisable et stable.
+
+    C'est cette charge utile qui est écrite en base (`bounding_box_json`) et publiée par
+    l'API : les offsets de chaque cellule permettent de citer « la valeur 62 de la ligne
+    *Taux de matière recyclée* » au lieu du bloc entier.
+    """
+
+    from app.engine.table_reader import StructuredTable
+
+    assert isinstance(table, StructuredTable)
+    return {
+        "kind": "structured_table",
+        "page_number": table.page_number,
+        "start_offset": table.start_offset,
+        "end_offset": table.end_offset,
+        "separator": table.separator,
+        "columns": list(table.columns),
+        "has_header": table.has_header,
+        "rows": [
+            {
+                "index": row.index,
+                "is_header": row.is_header,
+                "start_offset": row.start_offset,
+                "end_offset": row.end_offset,
+                "cells": [
+                    {
+                        "column_index": cell.column_index,
+                        "role": cell.role,
+                        "text": cell.text,
+                        "start_offset": cell.start_offset,
+                        "end_offset": cell.end_offset,
+                    }
+                    for cell in row.cells
+                ],
+            }
+            for row in table.rows
+        ],
+        "entries": [entry.as_dict() for entry in table.entries],
+    }
 
 
 class DocumentTextExtractor:
@@ -265,20 +311,84 @@ class DocumentTextExtractor:
             document_parts.append(normalized)
             current_offset += len(normalized)
             segment_type = "image_ocr" if page.used_ocr else "paragraph"
+
+            # C23 — les lignes tabulaires sortent de la segmentation par paragraphes.
+            #
+            # Sans cela, un tableau était à la fois un segment `paragraph` (le bloc entier)
+            # et, après ce chantier, un segment `table` : la même allégation aurait eu deux
+            # citations concurrentes, et la « citation cellule » n'aurait rien changé.
+            tables = parse_page_tables(
+                normalized, page_number=page.page_number, page_offset=page_offset
+            )
+            table_spans = [(table.start_offset, table.end_offset) for table in tables]
+            page_segments: list[ExtractedSegment] = []
+            for table in tables:
+                table_text = normalized[
+                    table.start_offset - page_offset : table.end_offset - page_offset
+                ]
+                if not table_text:
+                    continue
+                page_segments.append(
+                    ExtractedSegment(
+                        page_number=page.page_number,
+                        segment_type="table",
+                        text=table_text,
+                        start_offset=table.start_offset,
+                        end_offset=table.end_offset,
+                        table=table_payload(table),
+                    )
+                )
+
             for start, end in self._paragraph_ranges(normalized):
-                for chunk_start, chunk_end in self._chunk_range(normalized, start, end):
-                    segment_text = normalized[chunk_start:chunk_end]
-                    if segment_text:
-                        segments.append(
-                            ExtractedSegment(
-                                page_number=page.page_number,
-                                segment_type=segment_type,
-                                text=segment_text,
-                                start_offset=page_offset + chunk_start,
-                                end_offset=page_offset + chunk_end,
+                # On **retranche** les tableaux du paragraphe, on ne jette pas le
+                # paragraphe entier : un en-tête de fiche et la phrase qui suit un tableau
+                # appartiennent au même bloc de lignes consécutives. Les écarter faisait
+                # disparaître du texte le titre du produit et l'allégation qui le commente
+                # (constaté en branchant ce chantier : 3 lignes perdues sur 7).
+                for piece_start, piece_end in self._subtract_spans(
+                    page_offset + start, page_offset + end, table_spans
+                ):
+                    local_start = piece_start - page_offset
+                    local_end = piece_end - page_offset
+                    for chunk_start, chunk_end in self._chunk_range(normalized, local_start, local_end):
+                        segment_text = normalized[chunk_start:chunk_end]
+                        if segment_text:
+                            page_segments.append(
+                                ExtractedSegment(
+                                    page_number=page.page_number,
+                                    segment_type=segment_type,
+                                    text=segment_text,
+                                    start_offset=page_offset + chunk_start,
+                                    end_offset=page_offset + chunk_end,
+                                )
                             )
-                        )
+
+            # Les segments sortent dans l'ordre du document. Le premier essai les
+            # ajoutait tableau d'abord : les numéros de séquence (contrainte unique par
+            # version) ne suivaient plus la lecture, et l'empreinte du manifeste d'analyse
+            # dépendait de l'ordre de construction plutôt que du contenu.
+            page_segments.sort(key=lambda segment: segment.start_offset)
+            segments.extend(page_segments)
         return "".join(document_parts), segments
+
+    @staticmethod
+    def _subtract_spans(start: int, end: int, spans: list[tuple[int, int]]):
+        """Les parties de ``[start, end)`` qui ne sont dans aucun des ``spans``.
+
+        Les spans sont supposés triés et disjoints (ils viennent du même parcours de page).
+        """
+
+        cursor = start
+        for span_start, span_end in sorted(spans):
+            if span_end <= cursor or span_start >= end:
+                continue
+            if span_start > cursor:
+                yield cursor, min(span_start, end)
+            cursor = max(cursor, span_end)
+            if cursor >= end:
+                return
+        if cursor < end:
+            yield cursor, end
 
     @staticmethod
     def _paragraph_ranges(value: str):

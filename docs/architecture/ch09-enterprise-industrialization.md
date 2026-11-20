@@ -2,7 +2,7 @@
 
 ## 1. Contexte et Objectifs
 
-Le Chantier 9 dote **VeriClaim AI** des capacités d'exploitation et de gouvernance requises par les grands comptes (ETI & CAC40 / SBF120) et leurs départements conformité, juridique et DSI :
+Le Chantier 9 dote **VeriClaim** des capacités d'exploitation et de gouvernance requises par les grands comptes (ETI & CAC40 / SBF120) et leurs départements conformité, juridique et DSI :
 
 1. **Sécurité & Accès Machine-to-Machine (M2M)** : Authentification par clés d'API partenaires hachées (SHA-256 + salt), portées par des scopes granulaires (`audit:run`, `catalog:read`, `evidence:manage`, etc.) et associées à des quotas de requêtes stricts (Rate Limiting).
 2. **Observabilité & Métriques d'Exploitation (SLA)** : Surveillance en temps réel du temps de disponibilité (Uptime), de la latence d'analyse déterministe, des volumes d'appels API, des taux d'erreur, et flux d'alertes sécurité/système.
@@ -82,7 +82,7 @@ CREATE POLICY p_legal_holds_tenant ON legal_holds
 
 ## 4. Architecture de la Synchronisation SCIM 2.0
 
-VeriClaim AI implémente les spécifications RFC 7643 et RFC 7644 :
+VeriClaim implémente les spécifications RFC 7643 et RFC 7644 :
 - **Schemas supportés** : `urn:ietf:params:scim:schemas:core:2.0:User`
 - **Mappage de rôles** : Les groupes IdP sont traduits de manière déterministe vers les rôles RBAC VeriClaim (`analyst`, `viewer`, `admin`).
 - **Idempotence & Sécurité** : La création ou mise à jour vérifie l'existence préalable de l'adresse email et rattache l'utilisateur à l'organisation cible avec isolation stricte.

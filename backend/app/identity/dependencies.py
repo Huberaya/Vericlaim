@@ -45,6 +45,11 @@ class TenantPrincipal(AuthenticatedPrincipal):
     def permissions(self) -> frozenset[str]:
         return frozenset(str(permission) for permission in self.membership_view.role.permissions_json)
 
+    @property
+    def email(self) -> str:
+        """Adresse de l'utilisateur courant : l'adresse de réponse d'une demande de support."""
+        return str(self.current.user.email)
+
 
 def get_authenticated_principal(
     request: Request,
@@ -97,6 +102,16 @@ def require_csrf_authenticated_principal(
 
 def require_permission(permission: str, *, csrf_protected: bool = False) -> Callable[..., TenantPrincipal]:
     def dependency(request: Request, principal: TenantPrincipal = Depends(get_tenant_principal)) -> TenantPrincipal:
+        # C16: from here on, every log line of this request carries the tenant and the
+        # user, including lines emitted by services that never see the request. Doing
+        # it in the permission dependency rather than in each endpoint means a new
+        # endpoint cannot forget it.
+        from app.core.logging import bind_log_context
+
+        bind_log_context(
+            organization_id=str(principal.organization_id),
+            user_id=str(principal.user_id),
+        )
         if csrf_protected:
             _require_csrf(request, principal)
         if permission not in principal.permissions:

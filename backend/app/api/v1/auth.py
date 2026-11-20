@@ -53,6 +53,10 @@ from app.models.identity_schemas import (
 
 
 router = APIRouter(prefix="/api/v1/auth", tags=["authentication"])
+# Local pilot helper, registered ONLY when settings.auth_dev_login_enabled is true.
+# Kept on its own router so a deployment can omit the route entirely instead of
+# relying on an in-handler check alone; the handler keeps its own guard too.
+dev_router = APIRouter(prefix="/api/v1/auth", tags=["authentication"], include_in_schema=False)
 
 
 def _live_settings(request: Request | None) -> Settings:
@@ -75,7 +79,7 @@ def dev_login_allowed(current_settings: Settings | None = None) -> bool:
     """
 
     active = current_settings or settings
-    if active.is_production_like:
+    if active.is_shared_environment:
         return False
     return bool(active.auth_dev_login_enabled)
 
@@ -215,7 +219,7 @@ def switch_active_organization(
     return present_membership(membership)
 
 
-@router.post("/dev-login", response_model=AuthMeResponse, include_in_schema=False)
+@dev_router.post("/dev-login", response_model=AuthMeResponse, include_in_schema=False)
 def dev_login(
     request: Request,
     response: Response,
@@ -226,6 +230,10 @@ def dev_login(
         # This bypass creates an administrator membership, so it must not be
         # reachable once the application runs in a production-like environment.
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
+    # Défense en profondeur : le routeur n'est normalement pas enregistré hors
+    # development/test, mais ce contrôle s'exécute de toute façon en premier,
+    # afin qu'une erreur d'enregistrement n'expose jamais une session owner
+    # sans authentification. 404 (et non 403) : ne pas confirmer la route.
     user = db.scalar(select(User).where(User.email == "pilote@vericlaim.ai"))
     if not user:
         user = User(

@@ -247,41 +247,87 @@ export function EnterpriseAdminPanel({ canManage = false }: EnterpriseAdminPanel
       {/* Tab 2: Metrics & Observability */}
       {activeTab === "metrics" && metrics && (
         <div className="space-y-4">
+          {/* What the instance can affirm, and why. The status word is never shown
+              without its justification: that was the defect this chantier fixed. */}
+          <div
+            className={
+              "rounded-xl border p-3 text-xs " +
+              (metrics.service_status === "healthy"
+                ? "border-emerald-200 bg-emerald-50 dark:border-emerald-900 dark:bg-emerald-950/40"
+                : metrics.service_status === "degraded"
+                  ? "border-amber-200 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/40"
+                  : "border-rose-200 bg-rose-50 dark:border-rose-900 dark:bg-rose-950/40")
+            }
+          >
+            <div className="flex items-center gap-2">
+              <span className="font-bold text-slate-900 dark:text-white uppercase tracking-wide">
+                État du service : {metrics.service_status}
+              </span>
+              <span className="text-[10px] text-slate-500">
+                base {metrics.database_status} · stockage {metrics.storage_status} · workers {metrics.workers_status}
+              </span>
+            </div>
+            {metrics.status_reasons.length > 0 && (
+              <ul className="mt-1 list-disc list-inside text-slate-600 dark:text-slate-300">
+                {metrics.status_reasons.map((reason) => (
+                  <li key={reason}>{reason}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900 shadow-sm">
-              <span className="text-[10px] font-semibold text-slate-500 uppercase">Disponibilité (Uptime)</span>
+              <span className="text-[10px] font-semibold text-slate-500 uppercase">Processus en marche depuis</span>
               <div className="text-xl font-bold text-slate-900 dark:text-white mt-1">
                 {Math.floor(metrics.uptime_seconds / 3600)}h {Math.floor((metrics.uptime_seconds % 3600) / 60)}m
               </div>
-              <span className="inline-block mt-1 text-[10px] font-bold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded">
-                ● 99.98% SLA
+              {/* The previous badge announced "● 99,98% SLA" — a figure measured
+                  nowhere, on a product that publishes no availability commitment.
+                  Uptime of this process is what is actually known. */}
+              <span className="text-[10px] text-slate-400">Mesure locale, remise à zéro au redémarrage</span>
+            </div>
+
+            <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900 shadow-sm">
+              <span className="text-[10px] font-semibold text-slate-500 uppercase">Requêtes HTTP traitées</span>
+              <div className="text-xl font-bold text-slate-900 dark:text-white mt-1">
+                {metrics.total_api_requests.toLocaleString("fr-FR")}
+              </div>
+              <span className="text-[10px] text-slate-500">
+                Erreurs 5xx : {metrics.error_rate_percent}% · Latence moyenne des requêtes :{" "}
+                {metrics.average_analysis_latency_ms === null
+                  ? "non mesurée"
+                  : `${metrics.average_analysis_latency_ms} ms`}
               </span>
             </div>
 
             <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900 shadow-sm">
-              <span className="text-[10px] font-semibold text-slate-500 uppercase">Latence Moyenne Analyse</span>
-              <div className="text-xl font-bold text-indigo-600 dark:text-indigo-400 mt-1">
-                {metrics.average_analysis_latency_ms} ms
+              <span className="text-[10px] font-semibold text-slate-500 uppercase">Empreinte du processus API</span>
+              <div className="text-xl font-bold text-slate-900 dark:text-white mt-1">
+                {metrics.memory_usage_mb === null ? "non mesuré" : `${metrics.memory_usage_mb} MB`}
               </div>
-              <span className="text-[10px] text-slate-400">Worker déterministe</span>
+              <span className="text-[10px] text-slate-500">
+                CPU : {metrics.cpu_utilization_percent === null ? "non mesuré" : `${metrics.cpu_utilization_percent}%`}
+              </span>
             </div>
 
             <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900 shadow-sm">
-              <span className="text-[10px] font-semibold text-slate-500 uppercase">Requêtes Traitées</span>
+              <span className="text-[10px] font-semibold text-slate-500 uppercase">Activité de votre organisation</span>
               <div className="text-xl font-bold text-slate-900 dark:text-white mt-1">
-                {metrics.total_api_requests.toLocaleString("fr-FR")}
+                {metrics.total_analyses_completed} analyses
               </div>
-              <span className="text-[10px] text-emerald-600">Erreurs : {metrics.error_rate_percent}%</span>
-            </div>
-
-            <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900 shadow-sm">
-              <span className="text-[10px] font-semibold text-slate-500 uppercase">Empreinte Mémoire / CPU</span>
-              <div className="text-xl font-bold text-slate-900 dark:text-white mt-1">
-                {metrics.memory_usage_mb} MB
-              </div>
-              <span className="text-[10px] text-slate-500">CPU : {metrics.cpu_utilization_percent}%</span>
+              <span className="text-[10px] text-slate-500">
+                {metrics.tenant_audit_events} événements d&apos;audit · {metrics.open_alerts_count} alerte(s) ouverte(s)
+              </span>
             </div>
           </div>
+
+          {metrics.not_measured.length > 0 && (
+            <p className="text-[10px] text-slate-500 dark:text-slate-400">
+              Non mesuré par cette instance : {metrics.not_measured.join(", ")}.
+            </p>
+          )}
+          <p className="text-[10px] text-slate-400 dark:text-slate-500">{metrics.metrics_note}</p>
 
           {/* System Alerts */}
           <div className="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900 shadow-sm space-y-3">
@@ -289,6 +335,11 @@ export function EnterpriseAdminPanel({ canManage = false }: EnterpriseAdminPanel
               <span>🔔</span> Alertes Système &amp; Sécurité ({alerts.length})
             </h3>
             <div className="space-y-2">
+              {alerts.length === 0 && (
+                <p className="text-[11px] text-slate-500">
+                  Aucune alerte : aucun des seuils surveillés n&apos;est franchi, et les dépendances répondent.
+                </p>
+              )}
               {alerts.map((al) => (
                 <div
                   key={al.id}
@@ -296,6 +347,18 @@ export function EnterpriseAdminPanel({ canManage = false }: EnterpriseAdminPanel
                 >
                   <div className="space-y-0.5">
                     <div className="flex items-center gap-2">
+                      <span
+                        className={
+                          "rounded px-1.5 py-0.2 text-[10px] font-bold uppercase " +
+                          (al.severity === "critical"
+                            ? "bg-rose-100 text-rose-800"
+                            : al.severity === "warning"
+                              ? "bg-amber-100 text-amber-800"
+                              : "bg-slate-200 text-slate-700")
+                        }
+                      >
+                        {al.severity}
+                      </span>
                       <span className="font-bold text-slate-900 dark:text-white">{al.title}</span>
                       <span className="rounded bg-indigo-100 text-indigo-800 px-1.5 py-0.2 text-[10px] font-mono">
                         {al.category}
@@ -309,6 +372,13 @@ export function EnterpriseAdminPanel({ canManage = false }: EnterpriseAdminPanel
                 </div>
               ))}
             </div>
+            {alerts.length > 0 && (
+              <p className="text-[10px] text-slate-400">
+                Alertes calculées à l&apos;instant à partir de vos données et de l&apos;état de l&apos;instance.
+                Aucune n&apos;est acquittée automatiquement : l&apos;acquittement est un acte humain, et ce produit
+                n&apos;en enregistre pas encore.
+              </p>
+            )}
           </div>
         </div>
       )}
@@ -406,7 +476,7 @@ export function EnterpriseAdminPanel({ canManage = false }: EnterpriseAdminPanel
           </div>
 
           <p className="text-slate-600 dark:text-slate-300 leading-relaxed">
-            VeriClaim AI supporte l&apos;authentification unique (SSO OIDC / SAML) et le provisionnement automatique d&apos;utilisateurs via le protocole standard <strong>SCIM 2.0 (RFC 7644)</strong>.
+            VeriClaim supporte l&apos;authentification unique (SSO OIDC / SAML) et le provisionnement automatique d&apos;utilisateurs via le protocole standard <strong>SCIM 2.0 (RFC 7644)</strong>.
           </p>
 
           <div className="space-y-2 font-mono text-[11px] bg-slate-50 p-4 rounded-lg border border-slate-200 dark:bg-slate-800 dark:border-slate-700 text-slate-800 dark:text-slate-200">

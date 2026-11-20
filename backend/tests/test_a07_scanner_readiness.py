@@ -211,6 +211,11 @@ def test_ambiguous_verdict_is_an_error_not_a_clean_file() -> None:
         assert "propre" not in str(excinfo.value).lower()
 
 
+def _check(body: dict, name: str) -> dict:
+    """Contrôle nommé de la vue de readiness (contrat A-10)."""
+    return next(check for check in body["checks"] if check["name"] == name)
+
+
 def test_readiness_reports_reachability_separately(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     """/readyz distingue « configuré » de « joignable », sans casser l'ancien contrat.
 
@@ -219,22 +224,48 @@ def test_readiness_reports_reachability_separately(tmp_path, monkeypatch: pytest
     ``malware_scanner_reachable``.
     """
 
+    from dataclasses import replace
+
+    import app.main as main_module
     from app.documents.scanner import DisabledMalwareScanner
     from app.main import app
     from fastapi.testclient import TestClient
 
+    # La vue de readiness décide d'interroger le moteur à partir du **mode
+    # configuré**, pas de l'objet présent dans l'état applicatif : c'est ce qui
+    # empêche un scanner absent de passer pour « prêt ». Le test doit donc dire
+    # que le mode est `clamav`, sinon le contrôle reste « désactivé par
+    # configuration » et le moteur injecté n'est jamais joint.
+    monkeypatch.setattr(
+        main_module,
+        "settings",
+        replace(main_module.settings, document_scanner_mode="clamav"),
+    )
+
+    # L'état applicatif est partagé par tout le processus de test : le scanner
+    # injecté ici (un moteur mort, puis un moteur désactivé) restait en place pour
+    # les fichiers suivants, dont /readyz répondait alors 503 sur une base saine.
+    original_scanner = app.state.document_scanner
     with TestClient(app) as client:
+      try:
         with _FakeClamd(ping=b"PONG\x00") as server:
             app.state.document_scanner = _scanner(server.port)
             body = client.get("/readyz").json()
-            assert body["malware_scanner"] == "configured"
-            assert body["malware_scanner_reachable"] is True
-            assert body["malware_scanner_reason"] is None
+            scanner = _check(body, "malware_scanner")
+            storage = _check(body, "document_storage")
+            # Le statut nomme l'état du moteur ; ce qui autorise l'import est la
+            # capacité, exposée séparément. On vérifie les deux.
+            assert scanner["status"] in {"ok", "configured"}
+            # ``detail`` porte la trace du PING (« ping: pong »), pas une raison de
+            # refus : ce qui compte est que le statut ne soit pas un échec et que
+            # la capacité d'import soit accordée.
+            assert scanner["detail"] in {None, "ping: pong"}
+            assert body["capabilities"]["malware_scanning"] is True
             # L'import reste refusé ici si le *stockage* n'est pas configuré :
             # les deux dépendances sont indépendantes, et ce test ne prétend pas
             # monter un stockage réel (voir les tests de cycle documentaire).
-            assert body["document_import"] == (
-                "enabled" if body["document_storage"] == "configured" else "refused"
+            assert body["capabilities"]["document_storage"] is (
+                storage["status"] == "ok"
             )
             dead_port = server.port
 
@@ -247,18 +278,25 @@ def test_readiness_reports_reachability_separately(tmp_path, monkeypatch: pytest
         probe.close()
         app.state.document_scanner = _scanner(dead_port, timeout=1)
         body = client.get("/readyz").json()
-        assert body["malware_scanner_reachable"] is False
-        assert body["malware_scanner_reason"] == "scanner_unreachable"
-        assert body["document_import"] == "refused", "un moteur muet doit refuser l'import"
+        scanner = _check(body, "malware_scanner")
+        assert scanner["status"] == "failed"
+        # ``detail`` préfixe la raison par l'opération tentée ; c'est la raison,
+        # et non sa mise en forme, qui est vérifiée.
+        assert "scanner_unreachable" in scanner["detail"]
+        assert body["capabilities"]["malware_scanning"] is False, (
+            "un moteur muet doit refuser l'import"
+        )
         # La readiness du processus ne dépend pas du moteur antivirus : la base
         # va bien, donc /readyz reste 200 et le trafic n'est pas coupé.
-        assert body["database"] == "ok"
+        assert _check(body, "database")["status"] == "ok"
 
         app.state.document_scanner = DisabledMalwareScanner()
         body = client.get("/readyz").json()
-        assert body["malware_scanner"] == "disabled"
-        assert body["malware_scanner_reachable"] is False
-        assert body["document_import"] == "refused"
+        scanner = _check(body, "malware_scanner")
+        assert scanner["status"] != "ok"
+        assert body["capabilities"]["malware_scanning"] is False
+      finally:
+        app.state.document_scanner = original_scanner
 
 
 def test_fail_closed_never_promotes_an_unscanned_file() -> None:

@@ -16,7 +16,7 @@ def test_rulebook_overview_and_summary():
         assert res.status_code == 200, res.text
         data = res.json()
 
-        assert "2026-09-24+" in data["rulebook_version"]
+        assert "2026-09-30+" in data["rulebook_version"]
         assert len(data["sha256_fingerprint"]) == 64
         assert data["total_rules"] >= 7
         assert data["jurisdiction_breakdown"]["FR"] >= 3

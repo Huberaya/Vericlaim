@@ -1,9 +1,12 @@
 from __future__ import annotations
 
-import hashlib
 import textwrap
-from datetime import datetime, timezone
-from typing import Any, List, Optional, Union
+
+# NOTE: this module deliberately imports neither ``hashlib`` nor ``datetime``.
+# It must never derive a value that a reader could mistake for stored evidence;
+# every fingerprint it prints comes from the audit trail it was handed.
+from typing import Any, Optional
+
 import fitz  # PyMuPDF
 
 from app.models.schemas import EvaluationResponse
@@ -42,8 +45,19 @@ class RegulatoryPdfReportGenerator:
         surface: str = "packaging",
         include_evidence_matrix: bool = True,
         include_remediation_clauses: bool = True,
+        signature_reference: str | None = None,
+        signature_value: str | None = None,
+        signature_key_id: str | None = None,
+        deprecated_reasons: Optional[list[str]] = None,
     ):
         self.report = report
+        # C7: a report that cannot name the analysis and the key that produced it
+        # is not verifiable by a third party, so these are rendered when present
+        # and explicitly reported as absent when not.
+        self.signature_reference = signature_reference
+        self.signature_value = signature_value
+        self.signature_key_id = signature_key_id
+        self.deprecated_reasons = list(deprecated_reasons or [])
         self.organization_name = organization_name
         self.document_title = document_title
         self.product_identifier = product_identifier or "SKU-PROD-001"
@@ -54,6 +68,84 @@ class RegulatoryPdfReportGenerator:
         self.doc = fitz.open()
         self.current_page: Optional[fitz.Page] = None
         self.current_y = 50.0
+
+    @staticmethod
+    def _fit(text: str, *, fontsize: float, start_x: float | None = None) -> str:
+        """Truncate a single-line string to the width actually available.
+
+        ``insert_text`` does not wrap and does not warn: anything past
+        ``MARGIN_RIGHT`` is visually clipped while remaining extractable from the
+        content stream, so an automated check that reads the PDF text cannot see
+        the defect. Widths are measured with the real font metrics rather than
+        estimated from a character budget, because the left column starts at a
+        different offset than a right-aligned label.
+        """
+        value = str(text)
+        left = MARGIN_LEFT + 12 if start_x is None else start_x
+        # ``get_text_length`` measures slightly less than the renderer draws
+        # (measured ~1.2% short on accented Latin text), so the budget keeps a
+        # margin. Being a little conservative costs a few characters; being
+        # optimistic silently removes words from the document.
+        available = (MARGIN_RIGHT - left) * 0.95
+        if available <= 0:
+            return ""
+        if fitz.get_text_length(value, fontname="helv", fontsize=fontsize) <= available:
+            return value
+        # ASCII "..." rather than U+2026: the base-14 Helvetica encoding used by
+        # "helv" has no ellipsis glyph and substitutes a middle dot, so a
+        # truncated line read like a stray separator instead of a truncation.
+        ellipsis = "..."
+        budget = available - fitz.get_text_length(ellipsis, fontname="helv", fontsize=fontsize)
+        truncated = value
+        while truncated and fitz.get_text_length(truncated, fontname="helv", fontsize=fontsize) > budget:
+            truncated = truncated[:-1]
+        return truncated.rstrip() + ellipsis
+
+    @staticmethod
+    def _truncate_to_width(text: str, *, fontsize: float, width: float) -> str:
+        ellipsis = "..."
+        budget = width - fitz.get_text_length(ellipsis, fontname="helv", fontsize=fontsize)
+        value = str(text)
+        while value and fitz.get_text_length(value, fontname="helv", fontsize=fontsize) > budget:
+            value = value[:-1]
+        return value.rstrip() + ellipsis
+
+    @staticmethod
+    def _wrap(text: str, *, fontsize: float, max_lines: int, start_x: float | None = None) -> list[str]:
+        """Wrap on measured width, never on an estimated character count."""
+        left = MARGIN_LEFT + 12 if start_x is None else start_x
+        available = (MARGIN_RIGHT - left) * 0.95
+        words = str(text).split()
+        lines: list[str] = []
+        current = ""
+        for word in words:
+            candidate = f"{current} {word}".strip()
+            if fitz.get_text_length(candidate, fontname="helv", fontsize=fontsize) <= available:
+                current = candidate
+                continue
+            if current:
+                lines.append(current)
+            current = word
+            if len(lines) == max_lines:
+                break
+        else:
+            if current:
+                lines.append(current)
+            return lines[:max_lines]
+
+        # Content remains: mark the last line as truncated rather than dropping
+        # the tail silently.
+        lines = lines[:max_lines]
+        if lines:
+            lines[-1] = RegulatoryPdfReportGenerator._truncate_to_width(
+                lines[-1], fontsize=fontsize, width=available
+            )
+        return lines
+
+    @staticmethod
+    def _right_aligned_x(text: str, *, fontsize: float) -> float:
+        width = fitz.get_text_length(str(text), fontname="helv", fontsize=fontsize)
+        return max(MARGIN_LEFT + 12, MARGIN_RIGHT - width)
 
     def _new_page(self) -> fitz.Page:
         page = self.doc.new_page(width=PAGE_WIDTH, height=PAGE_HEIGHT)
@@ -161,6 +253,32 @@ class RegulatoryPdfReportGenerator:
         )
         self.current_y += 55
 
+        if self.deprecated_reasons:
+            self._render_deprecation_banner()
+
+    def _render_deprecation_banner(self) -> None:
+        """Make a superseded analysis impossible to mistake for a current one."""
+        page = self.current_page
+        assert page is not None
+        lines = ["RAPPORT ÉMIS SOUS UN PIPELINE OU UN RULE BOOK DÉPRÉCIÉ"]
+        lines.extend(f"· {reason}" for reason in self.deprecated_reasons)
+        height = 14 + 11 * len(lines)
+        self._ensure_space(height + 6)
+        page = self.current_page
+        assert page is not None
+
+        rect = fitz.Rect(MARGIN_LEFT, self.current_y, MARGIN_RIGHT, self.current_y + height)
+        page.draw_rect(rect, color=COLOR_WARNING, fill=(1.0, 0.96, 0.88), width=1)
+        for offset, line in enumerate(lines):
+            page.insert_text(
+                fitz.Point(MARGIN_LEFT + 10, self.current_y + 14 + 11 * offset),
+                self._fit(line, fontsize=7.5 if offset == 0 else 7, start_x=MARGIN_LEFT + 10),
+                fontsize=7.5 if offset == 0 else 7,
+                color=COLOR_WARNING if offset == 0 else COLOR_TEXT_MUTED,
+                fontname="helv",
+            )
+        self.current_y += height + 12
+
     def _render_metadata_box(self) -> None:
         page = self.current_page
         assert page is not None
@@ -169,7 +287,10 @@ class RegulatoryPdfReportGenerator:
         box_rect = fitz.Rect(MARGIN_LEFT, self.current_y, MARGIN_RIGHT, self.current_y + 65)
         page.draw_rect(box_rect, color=COLOR_BORDER, fill=COLOR_BG_CARD, width=0.8)
 
-        now_str = datetime.now(timezone.utc).strftime("%d/%m/%Y à %H:%M UTC")
+        # The report date is the date the analysis was evaluated, not the date a
+        # file was downloaded: a report must not appear to be a fresh audit.
+        trail = self.report.audit_trail
+        analysed_str = trail.evaluated_at_utc.strftime("%d/%m/%Y à %H:%M UTC")
 
         # Colonne 1
         page.insert_text(fitz.Point(MARGIN_LEFT + 12, self.current_y + 16), "ORGANISATION :", fontsize=7.5, color=COLOR_TEXT_MUTED, fontname="helv")
@@ -183,13 +304,13 @@ class RegulatoryPdfReportGenerator:
 
         # Colonne 2
         page.insert_text(fitz.Point(MARGIN_LEFT + 280, self.current_y + 16), "DATE D'ANALYSE :", fontsize=7.5, color=COLOR_TEXT_MUTED, fontname="helv")
-        page.insert_text(fitz.Point(MARGIN_LEFT + 365, self.current_y + 16), now_str, fontsize=8, color=COLOR_PRIMARY_DARK, fontname="helv")
+        page.insert_text(fitz.Point(MARGIN_LEFT + 365, self.current_y + 16), analysed_str, fontsize=8, color=COLOR_PRIMARY_DARK, fontname="helv")
 
-        page.insert_text(fitz.Point(MARGIN_LEFT + 280, self.current_y + 32), "JURIDICTION CIBLE :", fontsize=7.5, color=COLOR_TEXT_MUTED, fontname="helv")
-        page.insert_text(fitz.Point(MARGIN_LEFT + 365, self.current_y + 32), "FRANCE (FR) & UNION EUROPÉENNE (UE)", fontsize=8, color=COLOR_PRIMARY_DARK, fontname="helv")
+        page.insert_text(fitz.Point(MARGIN_LEFT + 280, self.current_y + 32), "JURIDICTION / DATE D'ANALYSE :", fontsize=7.5, color=COLOR_TEXT_MUTED, fontname="helv")
+        page.insert_text(fitz.Point(MARGIN_LEFT + 365, self.current_y + 32), f"{str(trail.as_of_date.isoformat())} — réf. temporelle du verdict", fontsize=8, color=COLOR_PRIMARY_DARK, fontname="helv")
 
         page.insert_text(fitz.Point(MARGIN_LEFT + 280, self.current_y + 48), "MOTEUR D'ANALYSE :", fontsize=7.5, color=COLOR_TEXT_MUTED, fontname="helv")
-        page.insert_text(fitz.Point(MARGIN_LEFT + 365, self.current_y + 48), "Rule Engine v1.0.0 (Déterministe)", fontsize=8, color=COLOR_PRIMARY_DARK, fontname="helv")
+        page.insert_text(fitz.Point(MARGIN_LEFT + 365, self.current_y + 48), str(trail.engine_version)[:44], fontsize=8, color=COLOR_PRIMARY_DARK, fontname="helv")
 
         self.current_y += 75
 
@@ -292,7 +413,7 @@ class RegulatoryPdfReportGenerator:
 
     def _render_single_evaluation(self, item: LegalAssessment, index: int) -> None:
         # Estimation de la hauteur de la carte
-        est_height = 110.0
+        est_height = 132.0
         remediation_text = getattr(item.remediation, "recommended_rewrite", "") if hasattr(item, "remediation") else ""
         if self.include_remediation_clauses and remediation_text:
             est_height += 35.0
@@ -310,50 +431,82 @@ class RegulatoryPdfReportGenerator:
         side_strip = fitz.Rect(MARGIN_LEFT, self.current_y, MARGIN_LEFT + 4, self.current_y + est_height - 10)
         page.draw_rect(side_strip, color=card_border, fill=card_border, width=0)
 
-        # Ligne 1: Titre de la règle & Verdict
+        # Ligne 1: intitulé de la décision & verdict
         page.insert_text(
             fitz.Point(MARGIN_LEFT + 12, self.current_y + 15),
-            f"#{index} · {item.rule_title} ({item.rule_id})",
+            f"#{index} · DÉCISION DU RULE BOOK",
             fontsize=8.5,
             color=COLOR_PRIMARY_DARK,
             fontname="helv",
         )
+        verdict_label = self._fit(f"VERDICT : {verdict_str}", fontsize=8, start_x=MARGIN_LEFT + 200)
         page.insert_text(
-            fitz.Point(MARGIN_RIGHT - 110, self.current_y + 15),
-            f"VERDICT : {verdict_str}",
+            fitz.Point(self._right_aligned_x(verdict_label, fontsize=8), self.current_y + 15),
+            verdict_label,
             fontsize=8,
             color=card_border,
             fontname="helv",
         )
 
-        # Ligne 2: Allégation extraite (en italique ou guillemets)
-        wrapped_claim = textwrap.shorten(f"« {item.claim_text} »", width=95, placeholder="...")
+        # Ligne 2: intitulé de la règle, sur sa propre ligne et tronqué si besoin.
         page.insert_text(
             fitz.Point(MARGIN_LEFT + 12, self.current_y + 28),
+            self._fit(item.rule_title, fontsize=8),
+            fontsize=8,
+            color=COLOR_PRIMARY_DARK,
+            fontname="helv",
+        )
+
+        # Ligne 3: identifiant de règle + sévérité + force normative. Ces trois
+        # valeurs sont ce qui rend le verdict vérifiable, elles ne doivent jamais
+        # pouvoir être poussées hors du document.
+        severity_str = str(getattr(item.severity, "value", item.severity))
+        force_str = str(getattr(item.legal_force, "value", item.legal_force))
+        page.insert_text(
+            fitz.Point(MARGIN_LEFT + 12, self.current_y + 40),
+            self._fit(
+                f"Règle : {item.rule_id} · Sévérité : {severity_str} · Force : {force_str}",
+                fontsize=7,
+                start_x=MARGIN_LEFT + 12,
+            ),
+            fontsize=7,
+            color=COLOR_TEXT_MUTED,
+            fontname="helv",
+        )
+
+        # Ligne 4: Allégation extraite (telle qu'elle est stockée)
+        wrapped_claim = self._fit(f"« {item.claim_text} »", fontsize=8, start_x=MARGIN_LEFT + 118)
+        page.insert_text(
+            fitz.Point(MARGIN_LEFT + 12, self.current_y + 53),
             f"Allégation analysée : {wrapped_claim}",
             fontsize=8,
             color=COLOR_PRIMARY_BLUE,
             fontname="helv",
         )
 
-        # Ligne 3: Citation juridique officielle
+        # Ligne 5: Citation juridique officielle, repliée sur deux lignes plutôt
+        # que tronquée : la référence légale est le contenu probant du rapport.
         citation_text = f"Fondement juridique : {getattr(item, 'law_reference', item.rule_title)}"
-        wrapped_citation = textwrap.shorten(citation_text, width=105, placeholder="...")
-        page.insert_text(
-            fitz.Point(MARGIN_LEFT + 12, self.current_y + 42),
-            wrapped_citation,
-            fontsize=7.5,
-            color=COLOR_TEXT_MUTED,
-            fontname="helv",
-        )
+        citation_lines = textwrap.wrap(citation_text, width=118) or [citation_text]
+        citation_lines = citation_lines[:2]
+        citation_y = self.current_y + 66
+        for citation_line in citation_lines:
+            page.insert_text(
+                fitz.Point(MARGIN_LEFT + 12, citation_y),
+                self._fit(citation_line, fontsize=7.5, start_x=MARGIN_LEFT + 12),
+                fontsize=7.5,
+                color=COLOR_TEXT_MUTED,
+                fontname="helv",
+            )
+            citation_y += 10
 
-        # Ligne 4: Explication / Motif légal (from buyer_explanation or steps)
+        # Ligne 6: Explication / Motif légal (from buyer_explanation or steps)
         explanation = getattr(item.remediation, "buyer_explanation", "") if hasattr(item, "remediation") else ""
         if not explanation and hasattr(item, "reasoning_steps") and item.reasoning_steps:
             explanation = " · ".join([s.finding for s in item.reasoning_steps[:2]])
 
-        wrapped_exp = textwrap.wrap(explanation or "Conformité validée au regard des critères du Rule Book.", width=95)
-        exp_y = self.current_y + 55
+        wrapped_exp = textwrap.wrap(explanation or "Aucun motif de remédiation persisté pour cette décision.", width=118)
+        exp_y = self.current_y + 66 + 10 * len(citation_lines) + 3
         for exp_line in wrapped_exp[:2]:
             page.insert_text(
                 fitz.Point(MARGIN_LEFT + 12, exp_y),
@@ -364,7 +517,28 @@ class RegulatoryPdfReportGenerator:
             )
             exp_y += 11
 
-        # Ligne 5: Clause de remédiation
+        # Ligne 6: Revue humaine historisée. Un lecteur doit voir qu'un verdict a été
+        # contesté ou revu, jamais le découvrir ailleurs :
+        # voir qu'un verdict a été contesté ou revu, jamais le découvrir par ailleurs.
+        review = getattr(item, "human_review", None)
+        if review is not None:
+            exp_y += 11
+            page.insert_text(
+                fitz.Point(MARGIN_LEFT + 12, exp_y),
+                self._fit(
+                    f"REVUE HUMAINE : {str(review.decision).upper()}"
+                    + (f" par {review.reviewer_display_name}" if review.reviewer_display_name else "")
+                    + (f" — {review.rationale or review.comment}" if (review.rationale or review.comment) else ""),
+                    fontsize=7,
+                    start_x=MARGIN_LEFT + 12,
+                ),
+                fontsize=7,
+                color=COLOR_PRIMARY_BLUE,
+                fontname="helv",
+            )
+            est_height += 11
+
+        # Ligne 8: Clause de remédiation
         if self.include_remediation_clauses and remediation_text:
             page.insert_text(
                 fitz.Point(MARGIN_LEFT + 12, exp_y + 5),
@@ -373,7 +547,7 @@ class RegulatoryPdfReportGenerator:
                 color=COLOR_PRIMARY_BLUE,
                 fontname="helv",
             )
-            wrapped_rem = textwrap.wrap(remediation_text, width=95)
+            wrapped_rem = textwrap.wrap(remediation_text, width=118)
             for rem_line in wrapped_rem[:2]:
                 exp_y += 10
                 page.insert_text(
@@ -406,32 +580,109 @@ class RegulatoryPdfReportGenerator:
         )
         self.current_y += 24
 
-        source_bytes = self.report.extracted_source_text.encode("utf-8")
-        source_sha256 = hashlib.sha256(source_bytes).hexdigest()
+        # The generator must never compute a hash. A freshly computed SHA-256 looks
+        # like cryptographic proof while only proving the generator saw some text;
+        # that is exactly how a report asserting "0 allégations" ended up carrying
+        # a genuine-looking fingerprint. Only stored values are printed.
+        trail = self.report.audit_trail
+        lines: list[tuple[str, Any]] = [
+            ("Version du moteur", str(trail.engine_version)),
+            ("Empreinte du Rule Book", str(trail.rulebook_version)),
+            ("Empreinte du résultat d'analyse (SHA-256)", str(trail.report_sha256) or "NON DISPONIBLE"),
+            ("Empreinte du manifeste d'entrée (SHA-256)", str(trail.source_sha256) or "NON DISPONIBLE"),
+            ("Empreinte du registre de preuves (SHA-256)", str(trail.evidence_manifest_sha256) or "NON DISPONIBLE"),
+            ("Scellement de la piste d'audit", str(trail.record_hash) or "NON DISPONIBLE"),
+        ]
 
-        box_rect = fitz.Rect(MARGIN_LEFT, self.current_y, MARGIN_RIGHT, self.current_y + 45)
+        box_height = 14 + 12 * len(lines) + 24
+        self._ensure_space(box_height)
+        page = self.current_page
+        assert page is not None
+        box_rect = fitz.Rect(MARGIN_LEFT, self.current_y, MARGIN_RIGHT, self.current_y + box_height)
         page.draw_rect(box_rect, color=COLOR_BORDER, fill=COLOR_BG_CARD, width=0.8)
 
+        for offset, (label, value) in enumerate(lines):
+            y = self.current_y + 14 + 12 * offset
+            page.insert_text(
+                fitz.Point(MARGIN_LEFT + 10, y),
+                f"{label} :",
+                fontsize=6.5,
+                color=COLOR_TEXT_MUTED,
+                fontname="helv",
+            )
+            page.insert_text(
+                fitz.Point(MARGIN_LEFT + 200, y),
+                str(value)[:80],
+                fontsize=6.5,
+                color=COLOR_PRIMARY_DARK,
+                fontname="helv",
+            )
+
         page.insert_text(
-            fitz.Point(MARGIN_LEFT + 10, self.current_y + 14),
-            f"Empreinte SHA-256 du contenu extrait : {source_sha256}",
-            fontsize=7,
-            color=COLOR_PRIMARY_DARK,
-            fontname="helv",
-        )
-        page.insert_text(
-            fitz.Point(MARGIN_LEFT + 10, self.current_y + 26),
-            f"Horodatage certifié de génération : {datetime.now(timezone.utc).isoformat()}",
-            fontsize=7,
-            color=COLOR_TEXT_MUTED,
-            fontname="helv",
-        )
-        page.insert_text(
-            fitz.Point(MARGIN_LEFT + 10, self.current_y + 38),
-            "Chaîne de scellement audit_records : Scellé au niveau de l'organisation avec RLS PostgreSQL active.",
-            fontsize=6.5,
+            fitz.Point(MARGIN_LEFT + 10, self.current_y + box_height - 12),
+            "Cette empreinte atteste l'intégrité du document produit, pas la véracité juridique des allégations analysées.",
+            fontsize=6,
             color=COLOR_TEXT_MUTED,
             fontname="helv",
         )
 
+        self.current_y += box_height + 14
+        self._render_verification_block()
+
+    def _render_verification_block(self) -> None:
+        """Print the public handle and signature a third party needs to check us."""
+        lines: list[tuple[str, str]] = [
+            (
+                "Référence de vérification",
+                self.signature_reference or "NON DISPONIBLE",
+            ),
+            (
+                "Signature HMAC-SHA-256",
+                self.signature_value or "NON DISPONIBLE",
+            ),
+            (
+                "Identifiant de clé",
+                self.signature_key_id or "NON DISPONIBLE",
+            ),
+        ]
+        height = 14 + 11 * len(lines) + 26
+        self._ensure_space(height)
+        page = self.current_page
+        assert page is not None
+
+        rect = fitz.Rect(MARGIN_LEFT, self.current_y, MARGIN_RIGHT, self.current_y + height)
+        page.draw_rect(rect, color=COLOR_BORDER, fill=COLOR_BG_CARD, width=0.8)
+
+        for offset, (label, value) in enumerate(lines):
+            y = self.current_y + 14 + 11 * offset
+            page.insert_text(
+                fitz.Point(MARGIN_LEFT + 10, y),
+                f"{label} :",
+                fontsize=6.5,
+                color=COLOR_TEXT_MUTED,
+                fontname="helv",
+            )
+            page.insert_text(
+                fitz.Point(MARGIN_LEFT + 200, y),
+                self._fit(str(value), fontsize=6.5, start_x=MARGIN_LEFT + 200),
+                fontsize=6.5,
+                color=COLOR_PRIMARY_DARK,
+                fontname="helv",
+            )
+
+        for offset, note in enumerate(
+            (
+                "Vérification publique : GET /api/v1/reports/verify/{référence}.",
+                "La signature atteste la correspondance avec une analyse persistée non modifiée; "
+                "elle ne certifie ni la véracité juridique ni l'identité de l'émetteur.",
+            )
+        ):
+            page.insert_text(
+                fitz.Point(MARGIN_LEFT + 10, self.current_y + height - 20 + 9 * offset),
+                self._fit(note, fontsize=6, start_x=MARGIN_LEFT + 10),
+                fontsize=6,
+                color=COLOR_TEXT_MUTED,
+                fontname="helv",
+            )
+        self.current_y += height
         self.current_y += 55

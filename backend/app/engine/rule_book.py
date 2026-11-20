@@ -349,6 +349,47 @@ RULES: tuple[RegulatoryRule, ...] = (
             "Le moteur vérifie des métadonnées et ne valide pas la méthodologie, les jeux de données ni le contenu du rapport.",
         ),
     ),
+    RegulatoryRule(
+        rule_id="RULE_EVIDENCE_SUSTAINABILITY_LABEL",
+        title="Allégation de certification ou de label environnemental: schéma, preuve et périmètre",
+        legal_reference=(
+            "Directive (UE) 2024/825 du 28 février 2024 modifiant la directive 2005/29/CE, annexe I point 2 bis "
+            "(afficher un label de développement durable qui n'est pas fondé sur un système de certification ou qui "
+            "n'a pas été mis en place par des autorités publiques) et point 4 bis (allégation environnementale générique "
+            "sans performance environnementale excellente reconnue). Transposition nationale exigée au plus tard le "
+            "27 mars 2026 et application par les États membres à partir du 27 septembre 2026 (article 4)."
+        ),
+        source_urls=(
+            "https://eur-lex.europa.eu/eli/dir/2024/825/oj/fra",
+            "https://eur-lex.europa.eu/legal-content/FR/TXT/HTML/?uri=OJ:L_202400825",
+        ),
+        claim_types=frozenset({ClaimType.CERTIFICATION}),
+        legal_force=LegalForce.EU_DIRECTIVE_DATE_GATED,
+        severity=Severity.HIGH,
+        rule_kind=RuleKind.EVIDENCE_GATE,
+        scope=(
+            "Allégation de certification, de label ou de référence à un schéma (ECOLABEL, FSC, PEFC, ISO 14xxx, "
+            "biosourcé, Cradle to Cradle…) détectée dans le texte fourni."
+        ),
+        required_evidence=(
+            "Nom exact du schéma de certification et organisme émetteur, tels qu'ils figurent sur le certificat.",
+            "Numéro de certificat et période de validité couvrant la date de diffusion de l'allégation.",
+            "Périmètre du certificat: produit, site, catégorie ou gamme réellement couverts.",
+            "Reconnaissance du schéma: label public, système de certification ou autorité publique, selon le point 2 bis.",
+        ),
+        surfaces=CONSUMER_MARKETING,
+        effective_from=date(2026, 9, 27),
+        priority=45,
+        notes=(
+            "Le moteur constate la présence d'une allégation de certification; il ne vérifie ni l'existence réelle du "
+            "certificat, ni la reconnaissance du schéma, ni la conformité du produit au référentiel.",
+            "L'absence de certificat dans le dossier de preuves est un blocage de publication interne, pas la preuve "
+            "qu'aucun certificat n'existe: le client peut en détenir un hors plateforme.",
+            "Références vérifiées sur le texte publié au Journal officiel de l'UE (chunk EUR-Lex, annexe I points 2 bis "
+            "et 4 bis, article 4 pour les dates). L'état de la transposition française n'est pas constaté par ce moteur "
+            "et doit être revu par un juriste (chantier C19 du plan).",
+        ),
+    ),
 )
 
 RULE_BY_ID = {rule.rule_id: rule for rule in RULES}
@@ -381,6 +422,6 @@ def _canonical_rule(rule: RegulatoryRule) -> dict[str, object]:
     }
 
 
-RULEBOOK_VERSION = "2026-09-24+" + hashlib.sha256(
+RULEBOOK_VERSION = "2026-09-30+" + hashlib.sha256(
     json.dumps([_canonical_rule(rule) for rule in RULES], sort_keys=True, ensure_ascii=False).encode("utf-8")
 ).hexdigest()[:12]

@@ -1,0 +1,275 @@
+{
+  "schema_version": "vericlaim-demo-cases-v1",
+  "generated_by": "audit/produce_demo_cases.py (pipeline réel : API + worker + verdicts persistés)",
+  "context": {
+    "surface": "packaging",
+    "jurisdiction": "FR",
+    "note": "Les verdicts dépendent du support, de la juridiction et de la date figés dans l'analyse. La démonstration utilise le support « emballage », en France."
+  },
+  "engine": {
+    "lexicon_version": "lexicon-2026-09-30.1",
+    "rulebook_version": "2026-09-30+fb7d21612765"
+  },
+  "cases": [
+    {
+      "id": "documented_recycled_content",
+      "label": "Allégation documentée",
+      "text": "Emballage 100 % de matière recyclée certifiée FSC n° FSC-C012345 par Ecocert, évaluation du cycle de vie selon ISO 14044.",
+      "comment": "Le moteur détecte le contenu recyclé ET la certification, avec le schéma, le numéro et l'organisme extraits verbatim. Sans certificat enregistré dans votre espace, la publication est bloquée : l'absence de preuve n'est pas une conformité.",
+      "claims": [
+        {
+          "claim_type": "recyclable",
+          "claim_text": "Emballage 100 % de matière recyclée certifiée FSC n° FSC-C012345 par Ecocert, évaluation du cycle de vie selon ISO 14044.",
+          "status": "detected",
+          "confidence_score": 0.65,
+          "confidence_level": "medium",
+          "review_reasons": []
+        },
+        {
+          "claim_type": "certification",
+          "claim_text": "Emballage 100 % de matière recyclée certifiée FSC n° FSC-C012345 par Ecocert, évaluation du cycle de vie selon ISO 14044.",
+          "status": "review_required",
+          "confidence_score": 0.55,
+          "confidence_level": "human_review_required",
+          "review_reasons": [
+            "verdict_requires_review"
+          ]
+        }
+      ],
+      "verdicts": [
+        {
+          "claim_type": "recyclable",
+          "claim_text": "Emballage 100 % de matière recyclée certifiée FSC n° FSC-C012345 par Ecocert, évaluation du cycle de vie selon ISO 14044.",
+          "rule_id": "RULE_ISO_RECYCLABLE_PERCENTAGE",
+          "rule_title": "Allégation « recyclable »: disponibilité réelle de collecte, tri et traitement",
+          "verdict": "CONDITIONAL_REJECT",
+          "severity": "MEDIUM",
+          "is_legal_violation": false,
+          "legal_force": "VOLUNTARY_STANDARD",
+          "law_reference": "Contrôle d'alignement sur ISO 14021:2016 (édition demandée, retirée depuis la publication d'ISO 14021:2026); les obligations légales françaises de recyclabilité peuvent aussi s'appliquer selon la catégorie du produit"
+        },
+        {
+          "claim_type": "certification",
+          "claim_text": "Emballage 100 % de matière recyclée certifiée FSC n° FSC-C012345 par Ecocert, évaluation du cycle de vie selon ISO 14044.",
+          "rule_id": "RULE_EVIDENCE_SUSTAINABILITY_LABEL",
+          "rule_title": "Allégation de certification ou de label environnemental: schéma, preuve et périmètre",
+          "verdict": "REVIEW_REQUIRED",
+          "severity": "HIGH",
+          "is_legal_violation": false,
+          "legal_force": "EU_DIRECTIVE_DATE_GATED",
+          "law_reference": "Directive (UE) 2024/825 du 28 février 2024 modifiant la directive 2005/29/CE, annexe I point 2 bis (afficher un label de développement durable qui n'est pas fondé sur un système de certification ou qui n'a pas été mis en place par des autorités publiques) et point 4 bis (allégation environnementale "
+        }
+      ],
+      "overall_compliance": "CONDITIONAL_REJECT",
+      "risk_score": 72,
+      "review_required_claim_count": 1
+    },
+    {
+      "id": "certification_without_evidence",
+      "label": "Label sans preuve déclarée",
+      "text": "Certifié ECOLABEL et neutre en carbone.",
+      "comment": "Une allégation de label et une allégation de neutralité carbone. Le moteur ne vérifie pas l'existence du certificat : il exige la preuve et marque l'allégation pour revue.",
+      "claims": [
+        {
+          "claim_type": "certification",
+          "claim_text": "Certifié ECOLABEL et neutre en carbone.",
+          "status": "review_required",
+          "confidence_score": 0.5,
+          "confidence_level": "human_review_required",
+          "review_reasons": [
+            "verdict_requires_review"
+          ]
+        },
+        {
+          "claim_type": "carbon_neutrality",
+          "claim_text": "Certifié ECOLABEL et neutre en carbone.",
+          "status": "review_required",
+          "confidence_score": 0.6,
+          "confidence_level": "human_review_required",
+          "review_reasons": [
+            "verdict_requires_review"
+          ]
+        }
+      ],
+      "verdicts": [
+        {
+          "claim_type": "certification",
+          "claim_text": "Certifié ECOLABEL et neutre en carbone.",
+          "rule_id": "RULE_EVIDENCE_SUSTAINABILITY_LABEL",
+          "rule_title": "Allégation de certification ou de label environnemental: schéma, preuve et périmètre",
+          "verdict": "REVIEW_REQUIRED",
+          "severity": "HIGH",
+          "is_legal_violation": false,
+          "legal_force": "EU_DIRECTIVE_DATE_GATED",
+          "law_reference": "Directive (UE) 2024/825 du 28 février 2024 modifiant la directive 2005/29/CE, annexe I point 2 bis (afficher un label de développement durable qui n'est pas fondé sur un système de certification ou qui n'a pas été mis en place par des autorités publiques) et point 4 bis (allégation environnementale "
+        },
+        {
+          "claim_type": "carbon_neutrality",
+          "claim_text": "Certifié ECOLABEL et neutre en carbone.",
+          "rule_id": "RULE_FR_CARBON_NEUTRAL_DISCLOSURE",
+          "rule_title": "Allégation publicitaire de neutralité carbone: dossier public exigé en droit français",
+          "verdict": "CONDITIONAL_REJECT",
+          "severity": "HIGH",
+          "is_legal_violation": false,
+          "legal_force": "BINDING_FR",
+          "law_reference": "Articles L. 229-68 et L. 229-69 du Code de l'environnement; textes réglementaires d'application"
+        },
+        {
+          "claim_type": "carbon_neutrality",
+          "claim_text": "Certifié ECOLABEL et neutre en carbone.",
+          "rule_id": "RULE_EU_CARBON_NEUTRAL_COMPENSATION",
+          "rule_title": "Allégation produit de neutralité, réduction ou impact positif fondée sur la compensation carbone",
+          "verdict": "REVIEW_REQUIRED",
+          "severity": "CRITICAL",
+          "is_legal_violation": false,
+          "legal_force": "EU_DIRECTIVE_DATE_GATED",
+          "law_reference": "Directive (UE) 2024/825, annexe modifiant l'annexe I de la directive 2005/29/CE, point 4c; application prévue à compter du 27 septembre 2026"
+        }
+      ],
+      "overall_compliance": "CONDITIONAL_REJECT",
+      "risk_score": 93,
+      "review_required_claim_count": 2
+    },
+    {
+      "id": "prohibited_biodegradable",
+      "label": "Allégation interdite (AGEC)",
+      "text": "Cet emballage est biodégradable et respectueux de la planète.",
+      "comment": "« Biodégradable » sur un produit est une prohibition ferme au sens de la loi AGEC : le verdict est STRICTLY_PROHIBITED, avec la référence de la règle appliquée.",
+      "claims": [
+        {
+          "claim_type": "biodegradable",
+          "claim_text": "Cet emballage est biodégradable et respectueux de la planète.",
+          "status": "detected",
+          "confidence_score": 0.45,
+          "confidence_level": "low",
+          "review_reasons": []
+        },
+        {
+          "claim_type": "nature_friendly",
+          "claim_text": "Cet emballage est biodégradable et respectueux de la planète.",
+          "status": "review_required",
+          "confidence_score": 0.6,
+          "confidence_level": "human_review_required",
+          "review_reasons": [
+            "verdict_requires_review"
+          ]
+        }
+      ],
+      "verdicts": [
+        {
+          "claim_type": "biodegradable",
+          "claim_text": "Cet emballage est biodégradable et respectueux de la planète.",
+          "rule_id": "RULE_AGEC_BIODEGRADABLE",
+          "rule_title": "Mention « biodégradable » sur produit ou emballage",
+          "verdict": "STRICTLY_PROHIBITED",
+          "severity": "CRITICAL",
+          "is_legal_violation": true,
+          "legal_force": "BINDING_FR",
+          "law_reference": "Articles L. 541-9-1 et R. 541-230 du Code de l'environnement (produit ou emballage neuf destiné au consommateur)"
+        },
+        {
+          "claim_type": "nature_friendly",
+          "claim_text": "Cet emballage est biodégradable et respectueux de la planète.",
+          "rule_id": "RULE_AGEC_NATURE_FRIENDLY",
+          "rule_title": "Mention équivalente à « respectueux de l'environnement »",
+          "verdict": "STRICTLY_PROHIBITED",
+          "severity": "CRITICAL",
+          "is_legal_violation": true,
+          "legal_force": "BINDING_FR",
+          "law_reference": "Articles L. 541-9-1 et R. 541-230 du Code de l'environnement (produit ou emballage neuf destiné au consommateur)"
+        },
+        {
+          "claim_type": "nature_friendly",
+          "claim_text": "Cet emballage est biodégradable et respectueux de la planète.",
+          "rule_id": "RULE_EU_GENERIC_CLAIM",
+          "rule_title": "Allégation environnementale générique sans excellente performance reconnue pertinente",
+          "verdict": "REVIEW_REQUIRED",
+          "severity": "HIGH",
+          "is_legal_violation": false,
+          "legal_force": "EU_DIRECTIVE_DATE_GATED",
+          "law_reference": "Directive (UE) 2024/825 modifiant la directive 2005/29/CE, notamment définition de l'allégation générique et annexe I, point 4a; application prévue à compter du 27 septembre 2026"
+        }
+      ],
+      "overall_compliance": "NON_COMPLIANT",
+      "risk_score": 100,
+      "review_required_claim_count": 1
+    },
+    {
+      "id": "bare_recyclable",
+      "label": "Mention faible et chiffrée",
+      "text": "Notre flacon contient 100 % de matière recyclée.",
+      "comment": "Détection de contenu recyclé : le moteur exige le taux, la méthode et la preuve de filière, et refuse de confondre « recyclable » et « contient du recyclé ».",
+      "claims": [
+        {
+          "claim_type": "recyclable",
+          "claim_text": "Notre flacon contient 100 % de matière recyclée.",
+          "status": "detected",
+          "confidence_score": 0.65,
+          "confidence_level": "medium",
+          "review_reasons": []
+        }
+      ],
+      "verdicts": [
+        {
+          "claim_type": "recyclable",
+          "claim_text": "Notre flacon contient 100 % de matière recyclée.",
+          "rule_id": "RULE_ISO_RECYCLABLE_PERCENTAGE",
+          "rule_title": "Allégation « recyclable »: disponibilité réelle de collecte, tri et traitement",
+          "verdict": "CONDITIONAL_REJECT",
+          "severity": "MEDIUM",
+          "is_legal_violation": false,
+          "legal_force": "VOLUNTARY_STANDARD",
+          "law_reference": "Contrôle d'alignement sur ISO 14021:2016 (édition demandée, retirée depuis la publication d'ISO 14021:2026); les obligations légales françaises de recyclabilité peuvent aussi s'appliquer selon la catégorie du produit"
+        }
+      ],
+      "overall_compliance": "CONDITIONAL_REJECT",
+      "risk_score": 37,
+      "review_required_claim_count": 0
+    },
+    {
+      "id": "corporate_commitment",
+      "label": "Engagement d'entreprise",
+      "text": "Nous agissons pour le climat.",
+      "comment": "Cas volontairement limite : cette phrase est un engagement d'entreprise, pas une caractéristique produit. Le moteur demande une revue au lieu de conclure, et la décision de fond (faut-il la traiter comme une allégation produit ?) est documentée comme point ouvert dans nos notes d'audit.",
+      "claims": [
+        {
+          "claim_type": "nature_friendly",
+          "claim_text": "Nous agissons pour le climat.",
+          "status": "review_required",
+          "confidence_score": 0.6,
+          "confidence_level": "human_review_required",
+          "review_reasons": [
+            "verdict_requires_review"
+          ]
+        }
+      ],
+      "verdicts": [
+        {
+          "claim_type": "nature_friendly",
+          "claim_text": "Nous agissons pour le climat.",
+          "rule_id": "RULE_AGEC_NATURE_FRIENDLY",
+          "rule_title": "Mention équivalente à « respectueux de l'environnement »",
+          "verdict": "STRICTLY_PROHIBITED",
+          "severity": "CRITICAL",
+          "is_legal_violation": true,
+          "legal_force": "BINDING_FR",
+          "law_reference": "Articles L. 541-9-1 et R. 541-230 du Code de l'environnement (produit ou emballage neuf destiné au consommateur)"
+        },
+        {
+          "claim_type": "nature_friendly",
+          "claim_text": "Nous agissons pour le climat.",
+          "rule_id": "RULE_EU_GENERIC_CLAIM",
+          "rule_title": "Allégation environnementale générique sans excellente performance reconnue pertinente",
+          "verdict": "REVIEW_REQUIRED",
+          "severity": "HIGH",
+          "is_legal_violation": false,
+          "legal_force": "EU_DIRECTIVE_DATE_GATED",
+          "law_reference": "Directive (UE) 2024/825 modifiant la directive 2005/29/CE, notamment définition de l'allégation générique et annexe I, point 4a; application prévue à compter du 27 septembre 2026"
+        }
+      ],
+      "overall_compliance": "NON_COMPLIANT",
+      "risk_score": 99,
+      "review_required_claim_count": 1
+    }
+  ]
+}

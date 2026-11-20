@@ -190,7 +190,34 @@ def _verify_audit_chain(cluster) -> tuple[bool, int]:
                     "payload_sha256": payload_hash,
                     "previous_event_hash": row[8],
                 }
-                if row[7] != payload_hash or row[9] != sha256_json(material) or row[8] != previous_hash:
+                # Trois schémas coexistent dans l'historique, et le vérificateur
+                # applicatif (`app.audit.service.verify_audit_chain`) les accepte
+                # tous les trois : chaîne historique, JSON canonique des événements
+                # métier, et matériau scellé des writers actuels. N'en reconnaître
+                # qu'un déclarait falsifiée une chaîne parfaitement saine — la
+                # recette mesurait alors sa propre incomplétude, et la restauration
+                # était rejetée pour une raison qui n'existait pas.
+                from app.core.database import build_audit_event_material
+                from app.models.domain import AuditEvent
+
+                event = AuditEvent(
+                    organization_id=organization_id,
+                    actor_user_id=row[0],
+                    entity_type=row[1],
+                    entity_id=row[2],
+                    action=row[3],
+                    occurred_at=row[4],
+                    request_id=row[5],
+                    payload_json=row[6],
+                    payload_sha256=row[7],
+                    previous_event_hash=row[8],
+                    event_hash=row[9],
+                )
+                recomputed = {
+                    sha256_json(material),
+                    sha256_json(build_audit_event_material(event)),
+                }
+                if row[7] != payload_hash or row[9] not in recomputed or row[8] != previous_hash:
                     valid = False
                 previous_hash = row[9]
     return valid, total

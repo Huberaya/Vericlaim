@@ -70,7 +70,11 @@ un échec.**
 
 ## 3. Le point dur : aucune exécution périodique en Preview
 
-`vercel.json` ne déclare **aucun `crons`**. Les deux workers n'exposent que
+`vercel.json` déclare **trois `crons` quotidiens** (un par file), depuis le
+19 novembre 2026. La première version, introduite avec l'intégration de la PR #7,
+était en `* * * * *` — refusée par Vercel sur un plan Hobby avant même la
+compilation, ce qui faisait échouer chaque Preview en 0 s. Voir A-06. Les trois
+workers n'exposent que
 `run_forever()`. `docker-compose.yml` les lance comme services séparés (c'est le
 déploiement de référence, celui qui fonctionne). Un déploiement Vercel, en
 revanche, ne peut pas faire tourner de processus long.
@@ -191,6 +195,13 @@ fatale, `max_iterations` pour un usage ponctuel.
 
 ### 7.5 Sur `vercel.json`
 
-Aucune clé `crons` n'a été ajoutée. Ajouter une planification vers une route
-inexistante aurait produit un échec silencieux toutes les N minutes — pire que
-l'absence actuelle, qui est au moins visible.
+La planification déclarée appelle une route qui existe
+(`/api/v1/internal/workers/{kind}/tick`) et qui **échoue visiblement** : sans
+`CRON_SECRET`, elle répond 503 au lieu de ne rien faire. C'est la condition qui
+rend un planificateur acceptable — un échec silencieux toutes les N minutes
+serait pire que l'absence de planification.
+
+Reste vrai, et il ne faut pas le confondre avec un traitement en continu : un
+environnement sans serveur n'exécute une fonction que pendant la requête. Un
+cycle traite ce qu'il peut dans son budget, puis s'arrête. Le traitement continu
+d'une file demande l'option 2 (worker hors Vercel).

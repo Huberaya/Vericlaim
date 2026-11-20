@@ -34,6 +34,9 @@ class MalwareScanResult:
 class MalwareScanner(Protocol):
     def scan(self, payload: bytes) -> MalwareScanResult: ...
 
+    def probe(self) -> tuple[bool, str]:
+        """Sonde de joignabilité (C16) : ``(joignable, code court)``. N'échoue jamais."""
+
     def healthcheck(self) -> str | None:
         """Retourne ``None`` si le moteur répond, sinon la raison du refus.
 
@@ -52,6 +55,12 @@ class DisabledMalwareScanner:
         del payload
         raise MalwareScannerUnavailableError("Le service antivirus documentaire n’est pas configuré.")
 
+    def probe(self) -> tuple[bool, str]:
+        # Appelable même quand la configuration force un mode de test : la sonde
+        # répond « pas de moteur », elle ne lève pas. Lever ici transformerait une
+        # readiness en erreur 500 au lieu d'un 503 explicite.
+        return False, "scanner_disabled"
+
     def healthcheck(self) -> str | None:
         return "scanner_disabled"
 
@@ -65,6 +74,9 @@ class TestCleanMalwareScanner:
         if b"EICAR-STANDARD-ANTIVIRUS-TEST-FILE" in payload:
             return MalwareScanResult(is_clean=False, engine="test-eicar")
         return MalwareScanResult(is_clean=True, engine="test-only")
+
+    def probe(self) -> tuple[bool, str]:
+        return True, "test_scanner"
 
     def healthcheck(self) -> str | None:
         return None
@@ -127,6 +139,18 @@ class ClamAvMalwareScanner:
         if response.strip(b"\x00 \r\n") != b"PONG":
             return "scanner_unexpected_reply"
         return None
+
+    def probe(self) -> tuple[bool, str]:
+        """Adaptateur C16 de ``healthcheck`` : une seule implémentation réseau.
+
+        C16 attend ``(joignable, code court)`` là où A-07 expose une raison ou
+        ``None``. Les deux lisent le même PING clamd ; dupliquer la sonde aurait
+        créé deux vérités sur la même capacité.
+        """
+        reason = self.healthcheck()
+        if reason is None:
+            return True, "ping: pong"
+        return False, f"ping: {reason}"
 
     @staticmethod
     def _remaining_timeout(deadline: float) -> float:

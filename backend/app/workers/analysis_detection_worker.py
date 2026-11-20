@@ -9,6 +9,7 @@ regulatory prototype evaluator.
 from __future__ import annotations
 
 import logging
+import time
 import os
 import socket
 from pathlib import Path
@@ -28,6 +29,8 @@ from app.analyses.service import (
 )
 from app.core.config import Settings, settings
 from app.core.database import SessionLocal
+from app.core.logging import bind_log_context
+from app.core.metrics import record_job_outcome
 from app.identity.service import set_db_request_context
 from app.models.domain import Organization, OrganizationStatus
 from app.workers.runtime import WorkerRuntime
@@ -119,8 +122,26 @@ class AnalysisDetectionWorker:
                     user_id=WORKER_CONTEXT_USER_ID,
                     organization_id=claim.organization_id,
                 )
-                completion = process_claimed_analysis_detection(db, claim=claim)
-                db.commit()
+                # C16 : chaque ligne de journal de ce travail porte le contexte de
+                # corrélation, et l'issue est comptée — un worker qui échoue en
+                # silence était invisible.
+                bind_log_context(job_id=str(claim.id), organization_id=str(claim.organization_id))
+                started = time.perf_counter()
+                outcome = "processed"
+                try:
+                    completion = process_claimed_analysis_detection(
+                        db, settings=self.settings, claim=claim
+                    )
+                    db.commit()
+                except BaseException:
+                    outcome = "failed"
+                    raise
+                finally:
+                    record_job_outcome(
+                        job_kind="analysis_detection",
+                        outcome=outcome,
+                        duration_seconds=time.perf_counter() - started,
+                    )
                 logger.info(
                     "Analysis claim detection completed",
                     extra={
@@ -133,9 +154,31 @@ class AnalysisDetectionWorker:
                 )
             except AnalysisDetectionTerminalError as exc:
                 db.rollback()
+                logger.error(
+                    "Claim detection failed definitively",
+                    extra={
+                        "event": "job_failed",
+                        "job_id": str(claim.id),
+                        "organization_id": str(claim.organization_id),
+                        "analysis_version_id": str(claim.analysis_version_id),
+                        "error_code": exc.code,
+                        "retryable": False,
+                    },
+                )
                 self._record_failure(claim, error_code=exc.code, retryable=False)
             except AnalysisDetectionRetryableError as exc:
                 db.rollback()
+                logger.warning(
+                    "Claim detection failed, will be retried",
+                    extra={
+                        "event": "job_failed",
+                        "job_id": str(claim.id),
+                        "organization_id": str(claim.organization_id),
+                        "analysis_version_id": str(claim.analysis_version_id),
+                        "error_code": exc.code,
+                        "retryable": True,
+                    },
+                )
                 self._record_failure(claim, error_code=exc.code, retryable=True)
             except AnalysisConflictError:
                 # Another worker may legitimately have recovered a lease. Do
@@ -144,7 +187,15 @@ class AnalysisDetectionWorker:
                 logger.warning("Analysis detection lease was lost", extra={"job_id": str(claim.id)})
             except Exception:
                 db.rollback()
-                logger.exception("Unexpected analysis-detection worker error", extra={"job_id": str(claim.id)})
+                logger.exception(
+                    "Unexpected analysis-detection worker error",
+                    extra={
+                        "event": "job_failed",
+                        "job_id": str(claim.id),
+                        "organization_id": str(claim.organization_id),
+                        "retryable": True,
+                    },
+                )
                 self._record_failure(claim, error_code="unexpected_worker_error", retryable=True)
 
     def run_once(self) -> bool:

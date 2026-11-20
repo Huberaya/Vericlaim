@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings, settings_of
 from app.api.v1.pagination import decode_page_cursor as _decode_page_cursor, encode_page_cursor
+from app.billing.http import require_active_subscription
 from app.core.database import get_db
 from app.documents.extraction import (
     DocumentExtractionConflictError,
@@ -77,6 +78,13 @@ version_router = APIRouter(prefix="/api/v1/document-versions", tags=["documents"
 DATABASE_DEPENDENCY = Depends(get_db, scope="function")
 DOCUMENTS_MANAGE_DEPENDENCY = Depends(require_permission("documents:manage", csrf_protected=True))
 DOCUMENTS_READ_DEPENDENCY = Depends(require_permission("documents:read"))
+# C13 — garde d'abonnement : ces routes produisent un artefact payant ou une
+# dépense réelle (OCR, rapport signé). Voir app/billing/http.py.
+# La fabrique doit être **appelée** : `Depends(require_active_subscription)` passerait la
+# fabrique elle-même, qui ne porte pas le marqueur de garde et reçoit des arguments
+# qui ne sont pas les siens. `Depends(require_active_subscription())` monte la
+# dépendance réelle, celle que `route_has_billing_gate` reconnaît.
+SUBSCRIPTION_GATE = Depends(require_active_subscription())
 DOCUMENTS_READ_CSRF_DEPENDENCY = Depends(require_permission("documents:read", csrf_protected=True))
 
 
@@ -180,7 +188,7 @@ def _raise_document_error(exc: Exception) -> None:
     raise exc
 
 
-@router.post("", response_model=DocumentResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=DocumentResponse, status_code=status.HTTP_201_CREATED, dependencies=[SUBSCRIPTION_GATE])
 def create_document_endpoint(
     body: DocumentCreateRequest,
     request: Request,
@@ -277,7 +285,7 @@ def get_document_endpoint(
     return _detail_response(document, versions, uploads)
 
 
-@router.post("/{document_id}/versions", response_model=DocumentUploadInstructionResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/{document_id}/versions", response_model=DocumentUploadInstructionResponse, status_code=status.HTTP_201_CREATED, dependencies=[SUBSCRIPTION_GATE])
 def request_document_version_upload(
     document_id: str,
     body: DocumentVersionUploadRequest,
@@ -390,7 +398,7 @@ def get_document_version_segments(
     )
 
 
-@version_router.post("/{version_id}/extraction/retry", response_model=DocumentExtractionRetryResponse)
+@version_router.post("/{version_id}/extraction/retry", response_model=DocumentExtractionRetryResponse, dependencies=[SUBSCRIPTION_GATE])
 def retry_document_version_extraction(
     version_id: str,
     request: Request,

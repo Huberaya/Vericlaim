@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,6 +14,8 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sess
 from sqlalchemy.pool import StaticPool
 
 from app.core.config import settings
+
+logger = logging.getLogger("vericlaim.database")
 
 
 # Stable names make Alembic diffs and production database diagnostics readable.
@@ -63,6 +66,72 @@ if settings.database_url.startswith("sqlite"):
 
 engine = create_engine(settings.database_url, **_engine_kwargs)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
+
+# --- Accès système -------------------------------------------------------- #
+#
+# Certaines opérations n'ont pas d'organisation par construction : inscription
+# (elle la crée), vérification d'adresse, réinitialisation de mot de passe,
+# webhook prestataire (il la résout depuis le message). Une RLS stricte les
+# interdit, et une RLS permissive pour les faire passer laisse fuiter les lignes
+# des autres organisations — c'est exactement le défaut mesuré avant cette
+# correction.
+#
+# La séparation est donc faite par identité, pas par politique : un second
+# moteur, connecté avec un rôle dédié (`vericlaim_system`) qui contourne la RLS
+# et dont les droits sont accordés *par colonne* (migration c5f1a8e37b910). Il ne
+# peut pas lire le corps d'un e-mail, ni une table applicative.
+#
+# Sans `SYSTEM_DATABASE_URL`, on retombe sur le moteur applicatif : c'est
+# légitime sous SQLite et dans les tests (pas de RLS), et en production le
+# démarrage refuse cet état (voir `_assert_system_access_configured`).
+_system_engine_kwargs: dict[str, Any] = {"pool_pre_ping": True}
+if settings.system_database_url:
+    if settings.system_database_url.startswith("sqlite"):
+        _system_engine_kwargs["connect_args"] = {"check_same_thread": False}
+    SystemEngine = create_engine(settings.system_database_url, **_system_engine_kwargs)
+else:
+    SystemEngine = engine
+
+SystemSessionLocal = sessionmaker(
+    bind=SystemEngine, autoflush=False, autocommit=False, expire_on_commit=False
+)
+
+
+def system_session() -> Iterator[Session]:
+    """Session pour les parcours transverses, sur une connexion qui reste ouverte.
+
+    À utiliser en gestionnaire de contexte. Le commit et le rollback sont la
+    responsabilité de l'appelant : la plupart de ces parcours participent à une
+    transaction plus large (l'inscription crée l'utilisateur, l'organisation et le
+    jeton dans le même appel).
+    """
+    db = SystemSessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+def _assert_system_access_configured() -> None:
+    """Refuser de démarrer une production où les parcours système ne peuvent pas fonctionner.
+
+    Sans rôle système distinct, l'inscription écrit dans des tables soumises à la
+    RLS sans contexte : elle échoue à l'exécution, en production seulement, et
+    seulement pour les nouveaux comptes. Un refus au démarrage est visible ; une
+    inscription cassée ne l'est pas.
+    """
+    if not settings.is_shared_environment:
+        return
+    if settings.database_url.startswith("sqlite"):
+        return
+    if settings.system_database_url:
+        return
+    raise RuntimeError(
+        "SYSTEM_DATABASE_URL est absente : les parcours d'identité sans organisation "
+        "(inscription, vérification d'adresse, réinitialisation, webhook prestataire) "
+        "échoueraient sous RLS. Configurer le rôle vericlaim_system "
+        "(infra/neon/04_system_role.sql) avant de servir du trafic."
+    )
 
 
 @event.listens_for(Session, "after_begin")
@@ -212,6 +281,41 @@ def canonical_json(value: Any) -> str:
 
 def sha256_json(value: Any) -> str:
     return hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()
+
+
+def canonical_event_occurred_at(value: datetime) -> str:
+    """Canonical UTC rendering of an audit timestamp.
+
+    Write and verify paths must produce the exact same string, otherwise every
+    recomputed chain hash is wrong. A naive datetime read back from the driver
+    is treated as UTC rather than rendered differently from an aware one.
+    """
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    else:
+        value = value.astimezone(timezone.utc)
+    return value.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def build_audit_event_material(event: Any) -> dict[str, Any]:
+    """Single source of truth for the sealed material of an AuditEvent.
+
+    Both ``append_audit_event`` (writer) and ``verify_audit_chain`` (verifier)
+    must use this exact structure; divergence silently invalidates the chain.
+    """
+    payload = event.payload_json if isinstance(event.payload_json, dict) else {}
+    return {
+        "organization_id": str(event.organization_id),
+        "actor_user_id": str(event.actor_user_id) if event.actor_user_id else None,
+        "entity_type": event.entity_type,
+        "entity_id": str(event.entity_id) if event.entity_id else None,
+        "action": event.action,
+        "occurred_at": canonical_event_occurred_at(event.occurred_at),
+        "request_id": event.request_id,
+        "payload": json.loads(canonical_json(payload)),
+        "payload_sha256": event.payload_sha256,
+        "previous_event_hash": event.previous_event_hash,
+    }
 
 
 def append_audit_record(

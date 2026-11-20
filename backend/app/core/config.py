@@ -7,7 +7,10 @@ from urllib.parse import urlparse
 
 
 PRODUCTION_LIKE_ENVIRONMENTS = frozenset({"staging", "production"})
-KNOWN_ENVIRONMENTS = frozenset({"development", "test", *PRODUCTION_LIKE_ENVIRONMENTS})
+# Preview is a shared, HTTPS-only runtime with PostgreSQL/RLS and dedicated
+# secrets, but without pretending production-only external services are provisioned.
+SHARED_ENVIRONMENTS = frozenset({"preview", *PRODUCTION_LIKE_ENVIRONMENTS})
+KNOWN_ENVIRONMENTS = frozenset({"development", "test", *SHARED_ENVIRONMENTS})
 
 
 def _ephemeral_dev_session_secret() -> str:
@@ -21,6 +24,35 @@ def _ephemeral_dev_session_secret() -> str:
 
 
 DEV_SESSION_SECRET = _ephemeral_dev_session_secret()
+# A report signature attests that a PDF was produced from a given immutable
+# analysis version. A development key cannot provide that guarantee outside a
+# local machine, so production-like environments must supply a real one.
+DEV_REPORT_SIGNING_KEY = "development-only-report-signing-key-not-a-guarantee"
+# C13 — le prestataire de paiement « local » signe ses événements comme un vrai
+# prestataire, mais avec un secret de développement. Il est refusé hors de
+# development/test : un plan accordé sans encaissement ne doit pas pouvoir
+# arriver chez un client.
+DEV_BILLING_WEBHOOK_SECRET = "development-only-billing-webhook-secret"
+
+# Déploiement — un cycle de travail déclenché par le planificateur de la plateforme
+# ne peut pas durer plus longtemps que ce qu'une fonction sans serveur accepte. Le
+# budget est un plafond dur : au-delà, le cycle est coupé et le travail réclamé par
+# un bail redevient disponible, plutôt que de laisser croire à un succès.
+MAX_INTERNAL_WORKER_BUDGET_SECONDS = 240
+
+# Serverless platforms inject their own environment indicator. ``APP_ENV`` has a
+# permissive default ("development") which is never the right answer on a shared
+# host: it re-enables the credential-less pilot route, defaults to SQLite,
+# disables secure cookies and accepts localhost CORS. When the platform tells us
+# which environment is being served, APP_ENV must be set explicitly and agree.
+PLATFORM_ENVIRONMENT_VARIABLE = "VERCEL_ENV"
+# Vercel also sets VERCEL=1; used only to detect "on the platform at all".
+PLATFORM_PRESENCE_VARIABLES = ("VERCEL", "VERCEL_ENV")
+APP_ENV_FOR_PLATFORM_ENVIRONMENT = {
+    "production": frozenset({"production"}),
+    "preview": frozenset({"preview", "staging", "production"}),
+    "development": frozenset({"development", "test"}),
+}
 MAX_DOCUMENT_BYTES = 50 * 1024 * 1024
 MAX_DOCUMENT_UPLOAD_TTL_SECONDS = 60 * 60
 MAX_DOCUMENT_DOWNLOAD_TTL_SECONDS = 15 * 60
@@ -30,14 +62,22 @@ MAX_DOCUMENT_OCR_TIMEOUT_SECONDS = 60
 MAX_DOCUMENT_IMAGE_PIXELS = 80_000_000
 MAX_ANALYSIS_DETECTION_ATTEMPTS = 10
 MAX_ANALYSIS_DETECTION_LEASE_SECONDS = 15 * 60
+MAX_REPORT_ATTEMPTS = 10
+MAX_REPORT_LEASE_SECONDS = 30 * 60
 
 
 @dataclass(frozen=True)
 class Settings:
-    app_name: str = "VeriClaim AI — Regulatory Rule Engine"
+    app_name: str = "VeriClaim — Regulatory Rule Engine"
     environment: str = "development"
     database_url: str = "sqlite:///./vericlaim.db"
+    # Rôle distinct pour les opérations transverses (inscription, vérification
+    # d'adresse, réinitialisation, webhook). Vide en développement et sous
+    # SQLite : le rôle applicatif y est alors le seul existant, ce qui est sans
+    # conséquence puisque la RLS n'existe pas sur ce moteur.
+    system_database_url: str | None = None
     auto_create_schema: bool = True
+    allow_local_sqlite_fallback: bool = False
     cors_origins: tuple[str, ...] = ("http://localhost:3000",)
     frontend_url: str = "http://localhost:3000"
     eu_2024_825_fr_transposition_status: str = "unknown"
@@ -58,6 +98,21 @@ class Settings:
     analysis_detection_retry_base_seconds: int = 30
     analysis_detection_lease_seconds: int = 5 * 60
     analysis_detection_poll_seconds: int = 2
+    # --- C22 — file de génération des rapports ------------------------------- #
+    # La génération PDF/ZIP ne se fait plus dans la requête HTTP : elle est
+    # réclamée par un worker dédié, avec bail, reprise après incident et
+    # contre-pression. Ces valeurs sont publiées par /api/v1/reports/queue.
+    report_max_attempts: int = 3
+    report_retry_base_seconds: int = 60
+    report_lease_seconds: int = 10 * 60
+    report_poll_seconds: int = 3
+    # Contre-pression : au-delà, la demande est refusée (429) au lieu d'empiler
+    # indéfiniment des travaux qu'aucun worker ne rattrapera.
+    report_max_pending_per_organization: int = 25
+    # Équité : un locataire ne peut pas occuper tous les workers à la fois.
+    report_max_running_per_organization: int = 3
+    # Plafond de lecture du binaire stocké (garde-fou anti-fuite mémoire).
+    report_download_max_bytes: int = 64 * 1024 * 1024
     document_storage_backend: str = "disabled"
     # ``endpoint`` is used by the API container. ``public_endpoint`` is used
     # only while signing browser URLs and can differ in Compose (minio vs
@@ -77,25 +132,109 @@ class Settings:
     document_clamav_host: str | None = None
     document_clamav_port: int = 3310
     document_clamav_timeout_seconds: int = 30
+    # --- Déploiement : workers portés par le planificateur de la plateforme ----
+    # Sur un hôte sans processus permanent, les trois workers ne peuvent plus tourner
+    # en boucle : le planificateur appelle une route qui exécute un cycle. Cette route
+    # est une **commande**, pas une opération utilisateur ; elle attend le secret que
+    # la plateforme injecte elle-même (`CRON_SECRET`, envoyé en `Authorization: Bearer`).
+    # Un secret absent ne bloque pas le démarrage — il rend la file inerte et la route
+    # répond 503. Refuser de démarrer pour cela empêcherait l'API de servir le reste.
+    internal_worker_secret: str | None = None
+    internal_worker_budget_seconds: int = 45
     auth_session_secret: str = DEV_SESSION_SECRET
     # The pilot bypass mints an administrator session without any credential.
     # It is opt-in even locally, and always refused in production-like runs.
     auth_dev_login_enabled: bool = False
+    report_signing_key: str = DEV_REPORT_SIGNING_KEY
+    #: Adresse à laquelle les demandes d'exercice des droits sont reçues. Vide par
+    #: défaut : l'API publie alors ``null`` au lieu d'inventer une adresse.
+    data_rights_contact_email: str = ""
+    #: Adresse de support publiée. Vide par défaut : l'API publie alors ``null`` et le
+    #: formulaire dans l'application reste le canal — aucune adresse plausible inventée.
+    support_contact_email: str = ""
     auth_session_ttl_seconds: int = 8 * 60 * 60
     auth_cookie_secure: bool = False
+    # Local pilot helper that mints an owner session with no credentials. It is
+    # enabled automatically only in development/test and can never be enabled in
+    # a shared environment (see the check in ``get_settings``).
+    enable_dev_login: bool = True
     oidc_issuer: str | None = None
     oidc_client_id: str | None = None
     oidc_client_secret: str | None = None
     oidc_redirect_uri: str | None = None
     oidc_discovery_url: str | None = None
 
+    # --- C13: plans, quotas et facturation ------------------------------------
+    # ``billing_provider`` dit QUI encaisse, et l'API le publie tel quel.
+    #   "local"    → prestataire de développement : aucune carte, aucun débit ;
+    #                les événements sont signés par un secret local. Refusé dans
+    #                un environnement de production (contrôle dans ``get_settings``).
+    #   "stripe"   → vrai prestataire ; exige une clé secrète *et* un secret de webhook.
+    #   "disabled" → aucune souscription possible : les organisations gardent leur
+    #                essai puis sont bloquées, faute de pouvoir payer. Un produit
+    #                qui ne peut pas encaisser doit le dire, pas le simuler.
+    billing_provider: str = "local"
+    billing_local_webhook_secret: str = DEV_BILLING_WEBHOOK_SECRET
+    billing_checkout_ttl_seconds: int = 60 * 60
+    stripe_secret_key: str | None = None
+    stripe_webhook_secret: str | None = None
+    stripe_api_base: str = "https://api.stripe.com"
+    # Correspondance plan ↔ tarif du prestataire : {"starter": "price_...", ...}.
+    stripe_price_ids_json: str = "{}"
+
+    # --- C14: self-service identity and transactional e-mail ------------------
+    # ``email_backend`` is explicit about what the deployment can actually do.
+    #   "outbox"   → messages are recorded, nothing leaves the instance (dev/test)
+    #   "smtp"     → messages are really handed to an SMTP server
+    #   "disabled" → the product refuses to pretend: no message is recorded as sent
+    # There is no default that silently claims delivery.
+    email_backend: str = "outbox"
+    email_from_address: str = "no-reply@vericlaim.invalid"
+    email_from_name: str = "VeriClaim"
+    smtp_host: str | None = None
+    smtp_port: int = 587
+    smtp_username: str | None = None
+    smtp_password: str | None = None
+    smtp_use_starttls: bool = True
+    email_verification_ttl_seconds: int = 24 * 60 * 60
+    password_reset_ttl_seconds: int = 60 * 60
+    invitation_ttl_seconds: int = 7 * 24 * 60 * 60
+    password_login_max_failures: int = 8
+    password_login_lockout_seconds: int = 15 * 60
+
     @property
     def oidc_configured(self) -> bool:
         return bool(self.oidc_issuer and self.oidc_client_id and self.oidc_redirect_uri and self.oidc_discovery_url)
 
     @property
+    def billing_collects_money(self) -> bool:
+        """Vrai si le prestataire configuré encaisse réellement de l'argent."""
+
+        return self.billing_provider == "stripe" and bool(self.stripe_secret_key)
+
+    @property
     def is_production_like(self) -> bool:
         return self.environment in PRODUCTION_LIKE_ENVIRONMENTS
+
+    @property
+    def is_shared_environment(self) -> bool:
+        """A deployed, multi-user runtime that must retain database and session controls."""
+        return self.environment in SHARED_ENVIRONMENTS
+
+    def describe_runtime(self) -> dict[str, str | bool | None]:
+        """Non-secret summary of the resolved runtime, for structured startup logs."""
+        return {
+            "environment": self.environment,
+            "database_backend": self.database_url.split(":", 1)[0],
+            "database_host": _safe_database_host(self.database_url),
+            "auto_create_schema": self.auto_create_schema,
+            "dev_login_enabled": self.auth_dev_login_enabled,
+            "document_storage_backend": self.document_storage_backend,
+            "document_scanner_mode": self.document_scanner_mode,
+            "oidc_configured": self.oidc_configured,
+            "billing_provider": self.billing_provider,
+            "secure_cookies": self.auth_cookie_secure,
+        }
 
 
 def settings_of(app: object, *, fallback: Settings | None = None) -> Settings:
@@ -143,6 +282,12 @@ def _optional_env(name: str) -> str | None:
     return value or None
 
 
+def _safe_database_host(database_url: str) -> str | None:
+    """Host of the configured database, without credentials or query parameters."""
+    parsed = urlparse(database_url)
+    return parsed.hostname or parsed.path or None
+
+
 def _normalise_base_url(value: str) -> str:
     return value.rstrip("/")
 
@@ -163,19 +308,82 @@ def _validate_url(name: str, value: str, *, require_https: bool) -> str:
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise RuntimeError(f"{name} must be an absolute http(s) URL.")
     if require_https and parsed.scheme != "https":
-        raise RuntimeError(f"{name} must use HTTPS in staging/production.")
+        raise RuntimeError(f"{name} must use HTTPS in shared environments.")
     return value
 
 
+def _is_strong_secret(value: str) -> bool:
+    """Reject secrets that are long but not random.
+
+    A length check alone accepts ``changeme`` repeated to 40 characters, and even
+    ``k`` * 48. Both are guesses an attacker makes first, and a report signed with
+    such a key can be forged by anyone. This is a heuristic, not a proof of
+    randomness: it raises the floor, it does not establish entropy.
+    """
+    if len(value) < 32:
+        return False
+    if value == DEV_REPORT_SIGNING_KEY:
+        return False
+    lowered = value.lower()
+    markers = (
+        "replace-",
+        "replace_",
+        "change-me",
+        "changeme",
+        "change_me",
+        "change-",
+        "dev-",
+        "dev_",
+        "example",
+        "placeholder",
+        "your-",
+        "your_",
+        "secret",
+        "password",
+        "vericlaim",
+        "todo",
+    )
+    if any(marker in lowered for marker in markers):
+        return False
+    return len(set(value)) >= 16
+
+
 def get_settings() -> Settings:
-    environment = os.getenv("APP_ENV", "development").strip().lower() or "development"
+    # --- Platform coherence must be decided before anything else: the default
+    # environment is permissive, so an unset APP_ENV on a shared platform would
+    # silently reopen the credential-less pilot route and use a local database.
+    raw_app_env = os.getenv("APP_ENV", "").strip()
+    app_env_is_explicit = bool(raw_app_env)
+    platform_environment = os.getenv(PLATFORM_ENVIRONMENT_VARIABLE, "").strip().lower()
+    on_shared_platform = any(os.getenv(name) for name in PLATFORM_PRESENCE_VARIABLES)
+
+    if platform_environment:
+        allowed = APP_ENV_FOR_PLATFORM_ENVIRONMENT.get(platform_environment)
+        if allowed is None:
+            raise RuntimeError(
+                f"{PLATFORM_ENVIRONMENT_VARIABLE} has an unsupported value "
+                f"'{platform_environment}'; expected one of "
+                f"{sorted(APP_ENV_FOR_PLATFORM_ENVIRONMENT)}."
+            )
+        # APP_ENV vide n'est pas une *incohérence*, c'est une omission : le
+        # message doit dire quoi faire (définir APP_ENV), et non constater qu'une
+        # chaîne vide diffère de « production ». Les deux cas restent bloquants.
+        if raw_app_env and raw_app_env.lower() not in allowed:
+            raise RuntimeError(
+                f"APP_ENV='{raw_app_env}' is inconsistent with "
+                f"{PLATFORM_ENVIRONMENT_VARIABLE}='{platform_environment}'. "
+                f"Expected one of {sorted(allowed)}."
+            )
+
+    environment = raw_app_env.lower() or "development"
     if environment not in KNOWN_ENVIRONMENTS:
-        raise RuntimeError("APP_ENV must be one of development, test, staging or production.")
+        raise RuntimeError("APP_ENV must be one of development, test, preview, staging or production.")
     is_production_like = environment in PRODUCTION_LIKE_ENVIRONMENTS
+    is_shared_environment = environment in SHARED_ENVIRONMENTS
     frontend_url = _validate_url(
         "FRONTEND_URL",
         _normalise_base_url(os.getenv("FRONTEND_URL", "http://localhost:3000").strip()),
-        require_https=is_production_like,
+        require_https=is_shared_environment,
     )
     origins = tuple(
         origin.strip()
@@ -185,7 +393,7 @@ def get_settings() -> Settings:
     if not origins or "*" in origins:
         raise RuntimeError("CORS_ORIGINS must contain explicit origins; wildcard origins are unsafe with session cookies.")
     for origin in origins:
-        _validate_url("CORS_ORIGINS", origin, require_https=is_production_like)
+        _validate_url("CORS_ORIGINS", origin, require_https=is_shared_environment)
     status = os.getenv("EU_2024_825_FR_TRANSPOSITION_STATUS", "unknown").strip().lower()
     if status not in {"unknown", "implemented", "not_implemented"}:
         status = "unknown"
@@ -202,7 +410,33 @@ def get_settings() -> Settings:
             "AUTO_CREATE_SCHEMA may only be enabled in development/test; run Alembic migrations in shared environments."
         )
 
-    database_url = _optional_env("DATABASE_URL")
+    # Local-only resilience aid. When the configured database is unreachable and
+    # this flag is true, the API falls back to a throwaway SQLite file. It is
+    # strictly forbidden outside development/test because it silently bypasses
+    # PostgreSQL RLS and loses data on an ephemeral filesystem.
+    allow_local_sqlite_fallback = _bool_from_env(
+        os.getenv("ALLOW_LOCAL_SQLITE_FALLBACK"),
+        default=False,
+    )
+
+    # L'URL du rôle système, distinct de `DATABASE_URL`. Elle n'est pas
+    # obligatoire : sans elle, les parcours sans organisation (inscription,
+    # vérification d'adresse, réinitialisation, webhook) doivent retomber sur le
+    # rôle applicatif — ce qui n'est correct que là où la RLS n'existe pas
+    # (SQLite, tests). En production, son absence est signalée au démarrage.
+    # A branch-scoped override avoids Neon integration-managed DATABASE_URL values
+    # silently replacing the isolated PR Preview connection. It is intentionally
+    # honored only in Preview; staging/production keep their established variables.
+    preview_system_database_url = _optional_env("VERICLAIM_PREVIEW_SYSTEM_DATABASE_URL") if environment == "preview" else None
+    system_database_url = preview_system_database_url or _optional_env("SYSTEM_DATABASE_URL")
+    if system_database_url:
+        if system_database_url.startswith("postgres://"):
+            system_database_url = "postgresql+psycopg://" + system_database_url[len("postgres://"):]
+        elif system_database_url.startswith("postgresql://") and not system_database_url.startswith("postgresql+"):
+            system_database_url = "postgresql+psycopg://" + system_database_url[len("postgresql://"):]
+
+    preview_database_url = _optional_env("VERICLAIM_PREVIEW_DATABASE_URL") if environment == "preview" else None
+    database_url = preview_database_url or _optional_env("DATABASE_URL")
     if not database_url:
         # A process running on a managed platform (Vercel sets ``VERCEL=1``) is a
         # deployment, whatever APP_ENV claims. Falling back to the SQLite
@@ -229,9 +463,30 @@ def get_settings() -> Settings:
             "tenant RLS is only enforceable on PostgreSQL."
         )
 
-    if is_production_like and not database_url.startswith(("postgresql://", "postgresql+")):
+    # Priorité des diagnostics : un déploiement dont la **source de données** est
+    # inutilisable est le défaut le plus grave, et c'est celui qu'il faut lire
+    # d'abord. Vient ensuite l'omission d'APP_ENV, qui n'a de sens à signaler que
+    # si la base est par ailleurs utilisable.
+    if on_shared_platform and not app_env_is_explicit:
         raise RuntimeError(
-            "DATABASE_URL must use PostgreSQL in staging/production so tenant RLS is enforceable."
+            f"APP_ENV must be set explicitly on {PLATFORM_ENVIRONMENT_VARIABLE} deployments. "
+            "The 'development' default would enable the credential-less pilot login route, a local "
+            "SQLite database and non-secure cookies. Set APP_ENV=production (or staging)."
+        )
+
+
+    if is_shared_environment and not database_url.startswith(("postgresql://", "postgresql+")):
+        raise RuntimeError(
+            "DATABASE_URL must use PostgreSQL in preview/staging/production so tenant RLS is enforceable."
+        )
+    if allow_local_sqlite_fallback and environment not in {"development", "test"}:
+        raise RuntimeError(
+            "ALLOW_LOCAL_SQLITE_FALLBACK may only be enabled in development/test: it silently "
+            "substitutes a throwaway database and disables PostgreSQL row-level security."
+        )
+    if on_shared_platform and allow_local_sqlite_fallback:
+        raise RuntimeError(
+            "ALLOW_LOCAL_SQLITE_FALLBACK must not be enabled on a shared platform."
         )
 
     document_storage_backend = (_optional_env("DOCUMENT_STORAGE_BACKEND") or ("s3" if is_production_like else "disabled")).lower()
@@ -244,14 +499,14 @@ def get_settings() -> Settings:
         document_storage_endpoint = _validate_url(
             "DOCUMENT_STORAGE_ENDPOINT",
             _normalise_base_url(document_storage_endpoint),
-            require_https=is_production_like,
+            require_https=is_shared_environment,
         )
     document_storage_public_endpoint = _optional_env("DOCUMENT_STORAGE_PUBLIC_ENDPOINT")
     if document_storage_public_endpoint:
         document_storage_public_endpoint = _validate_url(
             "DOCUMENT_STORAGE_PUBLIC_ENDPOINT",
             _normalise_base_url(document_storage_public_endpoint),
-            require_https=is_production_like,
+            require_https=is_shared_environment,
         )
     # The storage adapter speaks the S3 protocol, but the selected deployment
     # infrastructure is MinIO. Requiring explicit endpoints outside local/test
@@ -316,17 +571,97 @@ def get_settings() -> Settings:
     document_clamav_port = _positive_int_from_env("DOCUMENT_CLAMAV_PORT", 3310, 1)
     document_clamav_timeout_seconds = _positive_int_from_env("DOCUMENT_CLAMAV_TIMEOUT_SECONDS", 30, 1)
 
+    # Déploiement — secret du déclencheur de travaux. Vercel lit `CRON_SECRET` lui-même
+    # et l'envoie en `Authorization: Bearer` ; le nom de la variable est donc imposé par
+    # la plateforme, pas choisi ici.
+    internal_worker_secret = _optional_env("CRON_SECRET")
+    if internal_worker_secret is not None and len(internal_worker_secret) < 32:
+        raise RuntimeError(
+            "CRON_SECRET must be at least 32 characters: this value authorises the "
+            "command that drains the work queues."
+        )
+    internal_worker_budget_seconds = _positive_int_from_env("INTERNAL_WORKER_BUDGET_SECONDS", 45, 5)
+    if internal_worker_budget_seconds > MAX_INTERNAL_WORKER_BUDGET_SECONDS:
+        raise RuntimeError(
+            "INTERNAL_WORKER_BUDGET_SECONDS must not exceed "
+            f"{MAX_INTERNAL_WORKER_BUDGET_SECONDS} seconds."
+        )
+
+    data_rights_contact_email = (os.getenv("DATA_RIGHTS_CONTACT_EMAIL") or "").strip()
+    support_contact_email = (os.getenv("SUPPORT_CONTACT_EMAIL") or "").strip()
+    report_signing_key = _optional_env("REPORT_SIGNING_KEY")
+    if not report_signing_key:
+        if is_shared_environment:
+            raise RuntimeError(
+                "REPORT_SIGNING_KEY must be configured in preview/staging/production: without it a report "
+                "cannot be bound to the analysis it describes."
+            )
+        report_signing_key = DEV_REPORT_SIGNING_KEY
+    if is_shared_environment and not _is_strong_secret(report_signing_key):
+        raise RuntimeError(
+            "REPORT_SIGNING_KEY must be a random value of at least 32 characters, with no "
+            "placeholder marker and at least 16 distinct characters, in preview/staging/production."
+        )
+
+    email_backend = (_optional_env("EMAIL_BACKEND") or "outbox").strip().lower()
+    if email_backend not in {"outbox", "smtp", "disabled"}:
+        raise RuntimeError("EMAIL_BACKEND must be one of: outbox, smtp, disabled.")
+    smtp_host = _optional_env("SMTP_HOST")
+    if email_backend == "smtp" and not smtp_host:
+        raise RuntimeError("EMAIL_BACKEND=smtp requires SMTP_HOST to be configured.")
+    if email_backend == "smtp" and is_shared_environment and not _optional_env("SMTP_USERNAME"):
+        raise RuntimeError(
+            "EMAIL_BACKEND=smtp requires SMTP_USERNAME in staging/production: an "
+            "unauthenticated relay is not an acceptable production transport."
+        )
+
     auth_session_secret = _optional_env("AUTH_SESSION_SECRET")
     if not auth_session_secret:
-        if is_production_like:
-            raise RuntimeError("AUTH_SESSION_SECRET must be configured in staging/production.")
+        if is_shared_environment:
+            raise RuntimeError("AUTH_SESSION_SECRET must be configured in preview/staging/production.")
         auth_session_secret = DEV_SESSION_SECRET
-    if is_production_like and (
+    if is_shared_environment and (
         len(auth_session_secret) < 32 or auth_session_secret.lower().startswith(("replace-", "change-", "dev-"))
     ):
         raise RuntimeError(
-            "AUTH_SESSION_SECRET must be a non-placeholder value of at least 32 characters in staging/production."
+            "AUTH_SESSION_SECRET must be a non-placeholder value of at least 32 characters in preview/staging/production."
         )
+
+    # --- C13: qui encaisse ----------------------------------------------------
+    # Le prestataire « local » accorde des plans sans qu'aucun euro n'entre : il
+    # n'a rien à faire dans un environnement partagé, où un client pourrait
+    # souscrire. Même traitement que la route de développement : une erreur au
+    # démarrage, jamais une exposition silencieuse.
+    # Défaut : le prestataire de développement en développement/test, et **aucune
+    # vente** dans un environnement partagé — jamais un encaissement simulé.
+    default_billing_provider = "local" if environment in {"development", "test"} else "disabled"
+    billing_provider = (os.getenv("BILLING_PROVIDER") or default_billing_provider).strip().lower()
+    if billing_provider not in {"local", "stripe", "disabled"}:
+        raise RuntimeError(
+            "BILLING_PROVIDER must be one of local, stripe or disabled "
+            f"(received {billing_provider!r})."
+        )
+    if is_shared_environment and billing_provider == "local":
+        raise RuntimeError(
+            "BILLING_PROVIDER=local is refused in shared environments: no payment is ever collected "
+            "while plans are granted. Set BILLING_PROVIDER=stripe, or 'disabled' to stop selling."
+        )
+    stripe_secret_key = _optional_env("STRIPE_SECRET_KEY")
+    stripe_webhook_secret = _optional_env("STRIPE_WEBHOOK_SECRET")
+    if billing_provider == "stripe" and not (stripe_secret_key and stripe_webhook_secret):
+        raise RuntimeError(
+            "BILLING_PROVIDER=stripe requires STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET. Without "
+            "the webhook secret, an unauthenticated caller could change anyone's subscription."
+        )
+    stripe_api_base = _validate_url(
+        "STRIPE_API_BASE",
+        _normalise_base_url(os.getenv("STRIPE_API_BASE", "https://api.stripe.com").strip()),
+        require_https=is_shared_environment,
+    )
+    billing_local_webhook_secret = (
+        _optional_env("BILLING_LOCAL_WEBHOOK_SECRET") or DEV_BILLING_WEBHOOK_SECRET
+    )
+    billing_checkout_ttl_seconds = _positive_int_from_env("BILLING_CHECKOUT_TTL_SECONDS", 60 * 60, 60)
 
     oidc_issuer = _normalise_base_url(_optional_env("OIDC_ISSUER") or "") or None
     oidc_client_id = _optional_env("OIDC_CLIENT_ID")
@@ -336,11 +671,11 @@ def get_settings() -> Settings:
     if oidc_issuer and not oidc_discovery_url:
         oidc_discovery_url = f"{oidc_issuer}/.well-known/openid-configuration"
     if oidc_issuer:
-        oidc_issuer = _validate_url("OIDC_ISSUER", oidc_issuer, require_https=is_production_like)
+        oidc_issuer = _validate_url("OIDC_ISSUER", oidc_issuer, require_https=is_shared_environment)
     if oidc_discovery_url:
-        oidc_discovery_url = _validate_url("OIDC_DISCOVERY_URL", oidc_discovery_url, require_https=is_production_like)
+        oidc_discovery_url = _validate_url("OIDC_DISCOVERY_URL", oidc_discovery_url, require_https=is_shared_environment)
     if oidc_redirect_uri:
-        oidc_redirect_uri = _validate_url("OIDC_REDIRECT_URI", oidc_redirect_uri, require_https=is_production_like)
+        oidc_redirect_uri = _validate_url("OIDC_REDIRECT_URI", oidc_redirect_uri, require_https=is_shared_environment)
         if urlparse(oidc_redirect_uri).hostname != urlparse(frontend_url).hostname:
             raise RuntimeError(
                 "OIDC_REDIRECT_URI must use the frontend host so session and CSRF cookies remain same-origin."
@@ -355,16 +690,16 @@ def get_settings() -> Settings:
     if is_production_like and not all(configured_identity_fields):
         raise RuntimeError("OIDC SSO must be configured in staging/production.")
 
-    auth_cookie_secure = _bool_from_env(os.getenv("AUTH_COOKIE_SECURE"), default=is_production_like)
-    if is_production_like and not auth_cookie_secure:
-        raise RuntimeError("AUTH_COOKIE_SECURE cannot be disabled in staging/production.")
+    auth_cookie_secure = _bool_from_env(os.getenv("AUTH_COOKIE_SECURE"), default=is_shared_environment)
+    if is_shared_environment and not auth_cookie_secure:
+        raise RuntimeError("AUTH_COOKIE_SECURE cannot be disabled in preview/staging/production.")
 
     # Default-off credential-free login. Refuse the configuration outright in
     # production-like environments instead of silently ignoring it, so a
     # misconfigured deployment fails at startup rather than at request time.
     auth_dev_login_enabled = _bool_from_env(os.getenv("AUTH_DEV_LOGIN_ENABLED"), default=False)
-    if is_production_like and auth_dev_login_enabled:
-        raise RuntimeError("AUTH_DEV_LOGIN_ENABLED cannot be enabled in staging/production.")
+    if is_shared_environment and auth_dev_login_enabled:
+        raise RuntimeError("AUTH_DEV_LOGIN_ENABLED cannot be enabled in preview/staging/production.")
 
     max_upload_bytes = _positive_int_from_env("MAX_UPLOAD_BYTES", 15 * 1024 * 1024, 1024)
     if max_upload_bytes > MAX_DOCUMENT_BYTES:
@@ -417,11 +752,33 @@ def get_settings() -> Settings:
         )
     analysis_detection_poll_seconds = _positive_int_from_env("ANALYSIS_DETECTION_POLL_SECONDS", 2, 1)
 
+    report_max_attempts = _positive_int_from_env("REPORT_MAX_ATTEMPTS", 3, 1)
+    if report_max_attempts > MAX_REPORT_ATTEMPTS:
+        raise RuntimeError(f"REPORT_MAX_ATTEMPTS must not exceed {MAX_REPORT_ATTEMPTS}.")
+    report_retry_base_seconds = _positive_int_from_env("REPORT_RETRY_BASE_SECONDS", 60, 1)
+    report_lease_seconds = _positive_int_from_env("REPORT_LEASE_SECONDS", 10 * 60, 30)
+    if report_lease_seconds > MAX_REPORT_LEASE_SECONDS:
+        raise RuntimeError(
+            f"REPORT_LEASE_SECONDS must not exceed {MAX_REPORT_LEASE_SECONDS} seconds."
+        )
+    report_poll_seconds = _positive_int_from_env("REPORT_POLL_SECONDS", 3, 1)
+    report_max_pending_per_organization = _positive_int_from_env(
+        "REPORT_MAX_PENDING_PER_ORGANIZATION", 25, 1
+    )
+    report_max_running_per_organization = _positive_int_from_env(
+        "REPORT_MAX_RUNNING_PER_ORGANIZATION", 3, 1
+    )
+    report_download_max_bytes = _positive_int_from_env(
+        "REPORT_DOWNLOAD_MAX_BYTES", 64 * 1024 * 1024, 1024
+    )
+
     return Settings(
-        app_name=os.getenv("APP_NAME", "VeriClaim AI — Regulatory Rule Engine"),
+        app_name=os.getenv("APP_NAME", "VeriClaim — Regulatory Rule Engine"),
         environment=environment,
         database_url=database_url,
+        system_database_url=system_database_url,
         auto_create_schema=auto_create_schema,
+        allow_local_sqlite_fallback=allow_local_sqlite_fallback,
         cors_origins=origins,
         frontend_url=frontend_url,
         eu_2024_825_fr_transposition_status=status,
@@ -442,6 +799,13 @@ def get_settings() -> Settings:
         analysis_detection_retry_base_seconds=analysis_detection_retry_base_seconds,
         analysis_detection_lease_seconds=analysis_detection_lease_seconds,
         analysis_detection_poll_seconds=analysis_detection_poll_seconds,
+        report_max_attempts=report_max_attempts,
+        report_retry_base_seconds=report_retry_base_seconds,
+        report_lease_seconds=report_lease_seconds,
+        report_poll_seconds=report_poll_seconds,
+        report_max_pending_per_organization=report_max_pending_per_organization,
+        report_max_running_per_organization=report_max_running_per_organization,
+        report_download_max_bytes=report_download_max_bytes,
         document_storage_backend=document_storage_backend,
         document_storage_endpoint=document_storage_endpoint,
         document_storage_public_endpoint=document_storage_public_endpoint,
@@ -458,8 +822,17 @@ def get_settings() -> Settings:
         document_clamav_host=document_clamav_host,
         document_clamav_port=document_clamav_port,
         document_clamav_timeout_seconds=document_clamav_timeout_seconds,
+        internal_worker_secret=internal_worker_secret,
+        internal_worker_budget_seconds=internal_worker_budget_seconds,
+        # Ces deux contacts sont publiés par l'API (droits RGPD, support).
+        # Ils étaient lus puis jetés : l'endpoint répondait toujours une
+        # adresse vide, ce qui rend une demande de droits impossible à
+        # adresser.
+        data_rights_contact_email=data_rights_contact_email,
+        support_contact_email=support_contact_email,
         auth_session_secret=auth_session_secret,
         auth_dev_login_enabled=auth_dev_login_enabled,
+        report_signing_key=report_signing_key,
         auth_session_ttl_seconds=_positive_int_from_env("AUTH_SESSION_TTL_SECONDS", 8 * 60 * 60, 300),
         auth_cookie_secure=auth_cookie_secure,
         oidc_issuer=oidc_issuer,
@@ -467,6 +840,32 @@ def get_settings() -> Settings:
         oidc_client_secret=oidc_client_secret,
         oidc_redirect_uri=oidc_redirect_uri,
         oidc_discovery_url=oidc_discovery_url,
+        billing_provider=billing_provider,
+        billing_local_webhook_secret=billing_local_webhook_secret,
+        billing_checkout_ttl_seconds=billing_checkout_ttl_seconds,
+        stripe_secret_key=stripe_secret_key,
+        stripe_webhook_secret=stripe_webhook_secret,
+        stripe_api_base=stripe_api_base,
+        stripe_price_ids_json=(_optional_env("STRIPE_PRICE_IDS_JSON") or "{}"),
+        email_backend=email_backend,
+        email_from_address=(_optional_env("EMAIL_FROM_ADDRESS") or "no-reply@vericlaim.invalid"),
+        email_from_name=(_optional_env("EMAIL_FROM_NAME") or "VeriClaim"),
+        smtp_host=smtp_host,
+        smtp_port=_positive_int_from_env("SMTP_PORT", 587, 1),
+        smtp_username=_optional_env("SMTP_USERNAME"),
+        smtp_password=_optional_env("SMTP_PASSWORD"),
+        smtp_use_starttls=_bool_from_env(os.getenv("SMTP_USE_STARTTLS"), default=True),
+        email_verification_ttl_seconds=_positive_int_from_env(
+            "EMAIL_VERIFICATION_TTL_SECONDS", 24 * 60 * 60, 300
+        ),
+        password_reset_ttl_seconds=_positive_int_from_env(
+            "PASSWORD_RESET_TTL_SECONDS", 60 * 60, 300
+        ),
+        invitation_ttl_seconds=_positive_int_from_env("INVITATION_TTL_SECONDS", 7 * 24 * 60 * 60, 3600),
+        password_login_max_failures=_positive_int_from_env("PASSWORD_LOGIN_MAX_FAILURES", 8, 3),
+        password_login_lockout_seconds=_positive_int_from_env(
+            "PASSWORD_LOGIN_LOCKOUT_SECONDS", 15 * 60, 60
+        ),
     )
 
 

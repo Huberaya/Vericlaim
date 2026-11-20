@@ -62,10 +62,21 @@ Le compte propriétaire Neon ne doit pas être configuré comme `DATABASE_URL` d
 
    ```bash
    DATABASE_URL_APP="$DATABASE_URL_APP" \
-     python infra/neon/verify_runtime.py --expected-revision a7d4c9e2b510
+     python infra/neon/verify_runtime.py --expected-revision d6b4f2c81a73
    ```
 
-6. Vérifier que la révision est `a7d4c9e2b510` (head Alembic actuel), que RLS est activé/forcé et que l’API ne démarre qu’avec le rôle runtime.
+6. Vérifier que la révision est `d6b4f2c81a73` (head Alembic actuel), que RLS est activé/forcé et que l’API ne démarre qu’avec le rôle runtime.
+
+7. **Provisionner le rôle système** — obligatoire avant la migration `c5f1a8e37b910`, qui refuse de s'appliquer sans lui :
+
+   ```bash
+   PGPASSWORD="$NEON_OWNER_PASSWORD" psql "$NEON_OWNER_DSN" \
+     -v target_database=vericlaim \
+     -v system_password="$VERICLAIM_SYSTEM_PASSWORD" \
+     -f infra/neon/04_system_role.sql
+   ```
+
+   Puis renseigner `SYSTEM_DATABASE_URL` (connexion `vericlaim_system`) dans l'environnement de l'API. Sans cette variable, l'API **refuse de démarrer hors développement** : c'est volontaire, sinon l'inscription échouerait silencieusement en production sous RLS stricte.
 
 ## Préflight obligatoire avant migration staging
 
@@ -88,6 +99,7 @@ PGPASSWORD="$NEON_OWNER_PASSWORD" psql "$NEON_OWNER_DSN" \
 ## Posture de sécurité
 
 - `vericlaim_app` ne reçoit pas `BYPASSRLS` ;
+- `vericlaim_system` le reçoit, mais ne dispose que de privilèges **par colonne** : il ne peut pas lire le corps d'un e-mail, ni aucune table applicative (documents, analyses, factures), ni réécrire un événement d'audit ;
 - les tables d’audit ne reçoivent pas `UPDATE` ou `DELETE` pour le rôle runtime ;
 - les grants sont revalidés après chaque migration qui ajoute une table, séquence ou fonction ;
 - toute migration est d’abord répétée sur une base staging vierge ;

@@ -41,6 +41,8 @@ SYSTEM_ROLES: Final[tuple[SystemRole, ...]] = (
             "audit:read",
             "rules:read",
             "rules:manage",
+            "billing:read",
+            "billing:manage",
         ),
     ),
     SystemRole(
@@ -65,6 +67,7 @@ SYSTEM_ROLES: Final[tuple[SystemRole, ...]] = (
             "audit:read",
             "rules:read",
             "rules:manage",
+            "billing:read",
         ),
     ),
     SystemRole(

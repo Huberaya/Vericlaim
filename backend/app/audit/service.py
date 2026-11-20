@@ -14,6 +14,7 @@ from app.models.audit_schemas import (
     AuditEventResponse,
     AuditIntegrityCertificateResponse,
 )
+from app.core.database import build_audit_event_material, sha256_json
 from app.models.domain import AuditEvent, Organization
 
 
@@ -57,6 +58,17 @@ def compute_event_hash(
         previous_event_hash or "GENESIS",
     ])
     return hashlib.sha256(raw_signature.encode("utf-8")).hexdigest()
+
+
+def compute_stored_event_hash(event: AuditEvent) -> str:
+    """Recalcule le hash scellé d'un événement persisté avec le matériau du writer (C6).
+
+    Utilisé par les tests de non-régression de la chaîne. La vérification réelle
+    (`verify_audit_chain`) reste, elle, capable de reconnaître **les deux**
+    schémas : les événements historiques écrits avec l'ancien hash
+    « deux-points » ne doivent jamais être déclarés falsifiés.
+    """
+    return sha256_json(build_audit_event_material(event))
 
 
 def record_audit_event(
@@ -189,7 +201,15 @@ def verify_audit_chain(
             "payload_sha256": ev.payload_sha256,
             "previous_event_hash": ev.previous_event_hash,
         })
-        if ev.event_hash not in {expected_event_hash, canonical_event_hash}:
+        # Troisième schéma, celui des writers actuels : `append_audit_event`
+        # scelle via ``build_audit_event_material`` (occurred_at canonique en
+        # ``...Z`` avec microsecondes fixes, payload ``json_safe``). Sans lui,
+        # tout événement récent était déclaré falsifié — c'est précisément ce que
+        # la fusion a révélé. Le matériau est reconstruit depuis la ligne
+        # persistée, jamais depuis une valeur transmise par le client.
+        from app.core.database import build_audit_event_material
+        sealed_event_hash = sha256_json(build_audit_event_material(ev))
+        if ev.event_hash not in {expected_event_hash, canonical_event_hash, sealed_event_hash}:
             return AuditChainVerificationResponse(
                 is_valid=False,
                 organization_id=organization_id,

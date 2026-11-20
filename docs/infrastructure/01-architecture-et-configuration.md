@@ -33,13 +33,18 @@ ou hors d'atteinte.
 |---|---|---|---|---|
 | Développement local | SQLite autorisé | OIDC optionnel, `dev-login` opt-in | désactivé par défaut | conforme |
 | CI | SQLite jetable + PostgreSQL 16 jetable | aucun IdP | aucun | conforme |
-| Recette / Preview | **doit** être PostgreSQL | OIDC **obligatoire** | S3 **obligatoire** | voir §3 |
+| Preview Vercel | PostgreSQL isolé + rôle système distinct | mot de passe ; OIDC optionnel | stockage documentaire et antivirus désactivés explicitement | profil de test API/auth ; import documentaire indisponible |
+| Staging | PostgreSQL | OIDC obligatoire | S3/MinIO + ClamAV obligatoires | qualification complète des services externes |
 | Production | PostgreSQL | OIDC | S3 | non modifié |
 
-Les gardes de `backend/app/core/config.py` sont réelles et fail-closed :
-`APP_ENV=staging|production` refuse le SQLite, refuse `AUTO_CREATE_SCHEMA=true`,
-refuse `AUTH_DEV_LOGIN_ENABLED=true`, refuse un `AUTH_SESSION_SECRET` de
-substitution, exige HTTPS sur toutes les URLs et exige OIDC + S3 + ClamAV.
+Les gardes de `backend/app/core/config.py` distinguent désormais les profils :
+- `APP_ENV=preview` refuse SQLite, exige PostgreSQL, HTTPS, cookies sécurisés,
+  un secret de session dédié et une clé de signature dédiée. Le raccourci
+  `AUTH_DEV_LOGIN_ENABLED` est interdit. Le rôle système distinct reste requis
+  pour les parcours d'identité sous RLS. OIDC, stockage et antivirus ne sont pas
+  simulés : ils restent explicitement indisponibles dans ce profil.
+- `APP_ENV=staging|production` conserve les exigences complètes OIDC + S3/MinIO
+  + ClamAV et chiffrement du stockage.
 
 ### Défaut corrigé : une Preview sans base ne s'arrêtait pas
 
@@ -53,15 +58,22 @@ explicite. Le développement local garde son défaut documenté.
 
 ## 3. Variables nécessaires (noms seuls, jamais de valeurs)
 
-**Obligatoires en recette**
+**Preview Vercel — profil API/auth isolé**
 
-`APP_ENV`, `DATABASE_URL`, `AUTH_SESSION_SECRET`, `AUTH_COOKIE_SECURE=true`,
-`FRONTEND_URL`, `CORS_ORIGINS`, `OIDC_ISSUER`, `OIDC_CLIENT_ID`,
-`OIDC_REDIRECT_URI`, `OIDC_DISCOVERY_URL` (dérivée si absente),
-`DOCUMENT_STORAGE_BACKEND=s3`, `DOCUMENT_STORAGE_ENDPOINT`,
-`DOCUMENT_STORAGE_PUBLIC_ENDPOINT`, `DOCUMENT_STORAGE_ACCESS_KEY`,
-`DOCUMENT_STORAGE_SECRET_KEY`, `DOCUMENT_STORAGE_SSE_MODE` (non `none`),
-`DOCUMENT_SCANNER_MODE=clamav`, `DOCUMENT_CLAMAV_HOST`.
+`APP_ENV=preview`, `DATABASE_URL` PostgreSQL dédié, `SYSTEM_DATABASE_URL`
+avec le rôle `vericlaim_system`, `AUTH_SESSION_SECRET` et `REPORT_SIGNING_KEY`
+dédiés, `AUTH_COOKIE_SECURE=true`, `FRONTEND_URL` et `CORS_ORIGINS` HTTPS.
+`AUTO_CREATE_SCHEMA=false`, `BILLING_PROVIDER=disabled`, `AUTH_DEV_LOGIN_ENABLED=false`.
+Stockage désactivé et antivirus désactivé : les imports de documents doivent
+rester refusés (503), jamais déclarés opérationnels.
+
+**Staging / production — services complets**
+
+En plus des secrets et URLs HTTPS ci-dessus : OIDC (`OIDC_ISSUER`,
+`OIDC_CLIENT_ID`, `OIDC_REDIRECT_URI`, `OIDC_DISCOVERY_URL`), S3/MinIO
+(`DOCUMENT_STORAGE_BACKEND=s3`, endpoints privé/public, identifiants,
+buckets distincts, chiffrement non `none`) et ClamAV
+(`DOCUMENT_SCANNER_MODE=clamav`, `DOCUMENT_CLAMAV_HOST`).
 
 **Optionnelles à surveiller**
 
@@ -97,7 +109,11 @@ rewrites. Il ne peut pas déclarer de **processus long**. Or :
 1. `app/workers/document_extraction_worker.py` et
    `app/workers/analysis_detection_worker.py` n'ont qu'un point d'entrée
    `run_forever()`, lancé par `docker-compose.yml` comme services séparés.
-2. `vercel.json` ne déclare **aucun `crons`**.
+2. `vercel.json` déclare **trois `crons` quotidiens** vers la route de cycle
+   (`/api/v1/internal/workers/{kind}/tick`, fermée sans `CRON_SECRET`). Un cycle
+   ne dure que le temps de la requête : c'est un rattrapage, pas un traitement
+   continu. La version initiale (chaque minute) était refusée par Vercel sur un
+   plan Hobby **avant compilation**, d'où l'échec de chaque Preview en 0 s.
 3. Sur Vercel, une fonction serverless est gelée après sa réponse.
 
 **Conséquence vérifiée** : sur un déploiement Vercel, un document importé reste
