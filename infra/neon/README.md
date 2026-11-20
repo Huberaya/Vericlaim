@@ -62,10 +62,10 @@ Le compte propriétaire Neon ne doit pas être configuré comme `DATABASE_URL` d
 
    ```bash
    DATABASE_URL_APP="$DATABASE_URL_APP" \
-     python infra/neon/verify_runtime.py --expected-revision c5f1a8e37b910
+     python infra/neon/verify_runtime.py --expected-revision d6b4f2c81a73
    ```
 
-6. Vérifier que la révision est `c5f1a8e37b910` (head Alembic actuel), que RLS est activé/forcé et que l’API ne démarre qu’avec le rôle runtime.
+6. Vérifier que la révision est `d6b4f2c81a73` (head Alembic actuel), que RLS est activé/forcé et que l’API ne démarre qu’avec le rôle runtime.
 
 7. **Provisionner le rôle système** — obligatoire avant la migration `c5f1a8e37b910`, qui refuse de s'appliquer sans lui :
 

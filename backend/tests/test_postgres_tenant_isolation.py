@@ -347,7 +347,9 @@ def _seed(cluster: Cluster) -> Tenants:
     # Les lignes sans organisation ne sont plus écrivables par le rôle applicatif :
     # la politique est stricte. Elles sont créées ici par le rôle système, comme
     # en production (inscription, webhook), ce qui vérifie au passage que ce rôle
-    # en est bien capable.
+    # en est bien capable : PostgreSQL autorise l'``INSERT`` sans qu'un ``SELECT``
+    # soit nécessaire sur les colonnes de la ligne insérée (mesuré, y compris
+    # pour ``payload_json``, que le rôle ne peut pas relire).
     with _connect(cluster.system_dsn) as system, system.cursor() as cursor:
         cursor.execute(
             "INSERT INTO email_messages "
