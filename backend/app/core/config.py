@@ -308,7 +308,7 @@ def _validate_url(name: str, value: str, *, require_https: bool) -> str:
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise RuntimeError(f"{name} must be an absolute http(s) URL.")
     if require_https and parsed.scheme != "https":
-        raise RuntimeError(f"{name} must use HTTPS in staging/production.")
+        raise RuntimeError(f"{name} must use HTTPS in shared environments.")
     return value
 
 
@@ -638,7 +638,7 @@ def get_settings() -> Settings:
         )
     if is_shared_environment and billing_provider == "local":
         raise RuntimeError(
-            "BILLING_PROVIDER=local is refused in staging/production: no payment is ever collected "
+            "BILLING_PROVIDER=local is refused in shared environments: no payment is ever collected "
             "while plans are granted. Set BILLING_PROVIDER=stripe, or 'disabled' to stop selling."
         )
     stripe_secret_key = _optional_env("STRIPE_SECRET_KEY")
