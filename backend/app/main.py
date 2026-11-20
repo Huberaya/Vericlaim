@@ -55,7 +55,13 @@ from app.billing.enforcement import (
     QuotaExceededError,
     SubscriptionInactiveError,
 )
-from app.core.database import DatabaseUnavailableError, SessionLocal, create_tables, probe_database
+from app.core.database import (
+    DatabaseUnavailableError,
+    SessionLocal,
+    _assert_system_access_configured,
+    create_tables,
+    probe_database,
+)
 from app.core.logging import bind_log_context, configure_logging, new_request_id, normalize_request_id
 from app.core.readiness import build_readiness_report
 from app.core.metrics import REGISTRY, record_http_request, record_worker_heartbeat, render_metrics
@@ -88,6 +94,11 @@ async def lifespan(app: FastAPI):
     # L'API est un processus qui doit apparaître dans la surface d'observabilité :
     # sans ce battement, `workers_status` n'avait rien à rapporter.
     record_worker_heartbeat(worker_kind="api", worker_id=f"pid-{os.getpid()}")
+    # Identity operations without a tenant context (signup, verification,
+    # password reset) must use the separately provisioned least-privilege
+    # system role. Refuse startup rather than letting those requests fail later
+    # under PostgreSQL RLS.
+    _assert_system_access_configured()
     # ADR-003: the schema is a deployment precondition, not a runtime
     # best-effort. Swallowing this failure used to let the API advertise a
     # healthy process against an absent or un-migrated database, whose requests
