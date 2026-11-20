@@ -196,8 +196,12 @@ approbation.
    principal, et il ne dépend pas de moi.
 2. **Preview non ouverte** — statut Vercel `success`, contenu invérifiable
    depuis cet environnement (TLS réinitialisé, connecteur sans permission).
-3. **Capacités résiduelles du rôle système** — `count(*)` sur `audit_events`,
-   `INSERT` sur `organizations`. Nécessaires, mais plus larges que « identité ».
+3. ~~**Capacités résiduelles du rôle système**~~ — **traité au §9.** Droits
+   réécrits au niveau colonne ; `memberships.organization_id`/`.role_id` et les
+   colonnes d'identité de `users` ne sont plus modifiables. Deux capacités
+   restent, assumées et documentées : `INSERT` sur `billing_provider_events`
+   (webhook sans contexte de tenant) et `status` sur `users` (activation d'un
+   compte invité).
 4. **A-06 (drainage des files)** — atténuée, non résolue : la planification
    quotidienne est un rattrapage, pas un traitement continu.
 5. **Neon non vérifié** — toute la preuve RLS vient d'une base construite
@@ -267,3 +271,87 @@ n'était pas un aléa de plateforme mais un défaut de déterminisme du rejeu, q
 pouvait aussi faire échouer une vérification d'audit en production. Il reste
 qu'un voyant vert obtenu par relance ne prouvait rien — c'est précisément ce qui
 a retardé le diagnostic.
+
+---
+
+## 9. Dernier bloqueur de la revue : les privilèges du rôle système
+
+Le point 2 des blocages (§6, « capacités résiduelles du rôle système ») est
+traité. Le périmètre touché est celui des `GRANT` uniquement : ni la RLS, ni
+`BYPASSRLS`, ni les politiques n'ont été modifiés, et le resserrement a été
+vérifié par lecture des attributs du rôle, pas seulement du SQL.
+
+### Ce qui était accordé, mesuré et non déduit
+
+Interrogation de PostgreSQL (`has_table_privilege`, `has_column_privilege`) sur
+une base construite par la chaîne Alembic réelle, avec les trois rôles de
+production :
+
+| Table | Avant | Après |
+| --- | --- | --- |
+| `users` | `SELECT` table, `INSERT`, **`UPDATE` table** | `SELECT` table, `INSERT`, `UPDATE` sur 6 colonnes |
+| `memberships` | `SELECT` table, `INSERT`, **`UPDATE` table** | `SELECT` table, `INSERT`, `UPDATE` sur 3 colonnes |
+| `identity_tokens` | `UPDATE` table | `UPDATE` sur 3 colonnes |
+| `email_messages` | `UPDATE` table | `UPDATE` sur 5 colonnes |
+| `billing_provider_events` | `UPDATE` table | **aucun** |
+| `password_login_attempts` | `SELECT`/`INSERT`/`UPDATE` table | `SELECT`/`UPDATE` table, plus d'`INSERT` |
+| `roles` | `SELECT` table | `SELECT` sur `id`, `code` |
+| `organizations` | `SELECT` table | `SELECT` sur 7 colonnes |
+
+Les colonnes retirées sont celles qui permettaient une élévation de privilège :
+`memberships.organization_id` et `.role_id` (déplacer une adhésion, changer son
+rôle), `users.email`, `.identity_provider`, `.external_subject` (faire passer un
+compte pour un autre), `identity_tokens.user_id`, `.purpose`, `.token_hash`,
+`.expires_at` (détourner ou prolonger un lien).
+
+### Trois constats que l'audit a produits
+
+1. **`GRANT UPDATE` de table ne se resserre pas par un `GRANT` de colonne.**
+   PostgreSQL ajoute les privilèges, il ne les réduit jamais. La migration
+   commence donc par `REVOKE ALL`, sans quoi elle aurait l'air de resserrer en
+   laissant tout ouvert.
+2. **La lecture d'entité entière était le vrai obstacle, pas le privilège.**
+   Trois lectures chargeaient `organizations` ou `roles` pour n'utiliser qu'un
+   identifiant. Les borner par colonne faisait échouer l'inscription sur
+   « permission denied for table organizations ». Le correctif est dans le code
+   (projections minimales), pas dans un élargissement du droit.
+3. **Le webhook de facturation ne peut pas fonctionner sous le rôle
+   applicatif.** Mesuré : `INSERT` d'un événement sans organisation →
+   `new row violates row-level security policy`. Le droit d'insertion du rôle
+   système sur `billing_provider_events` est donc conservé, et le défaut de
+   routage consigné comme **défaut distinct, non corrigé** : le corriger suppose
+   de router le webhook vers l'identité système, ce qui est un changement de
+   parcours et un chantier de facturation exclu par la mission.
+
+### Ce que ces droits ne garantissent pas
+
+Le column-level dit quelles colonnes, jamais quelles valeurs ni quelles lignes.
+`GRANT UPDATE (status) ON users` autorise le rôle système à écrire n'importe
+quelle valeur de `status` sur n'importe quel utilisateur. Les parcours ne le font
+que sur la ligne du jeton consommé, mais la base ne l'impose pas. Restreindre ce
+point demanderait des politiques conditionnelles par parcours : c'est un
+durcissement séparé, et il est écrit dans la migration plutôt que passé sous
+silence.
+
+### Preuves
+
+| Vérification | Résultat |
+| --- | --- |
+| Parcours d'identité sous les rôles réels (`test_postgres_identity_flows.py`) | **9 passed** |
+| Privilèges effectifs, positif et négatif (`test_postgres_system_role_privileges.py`) | **40 passed** |
+| Isolation tenant (`test_postgres_tenant_isolation.py`) | **15 passed** |
+| Suite complète SQLite | **688 passed / 108 skipped** |
+| Suite complète PostgreSQL | **768 passed / 28 skipped** |
+| Downgrade → upgrade | droits de table restaurés puis retirés |
+
+Mutations vérifiées, chacune fait échouer au moins un test : `UPDATE` de table
+rétabli sur `users`/`memberships` (11 échecs) ; tous les `UPDATE` de colonne
+retirés (20 échecs) ; `GRANT SELECT` global rétabli sur `roles`/`organizations`
+(1 échec) ; `password_hash` retiré des colonnes accordées (1 échec).
+
+### Effet sur le verdict
+
+Ce bloqueur est levé. Le verdict reste **NO-GO** pour les raisons humaines du
+§7 — relecture indépendante, label `security-reviewed`, ouverture de la Preview —
+et pour le défaut de routage du webhook signalé ci-dessus, qui est un défaut de
+parcours, pas de privilège.
