@@ -163,7 +163,11 @@ def _create_organization_for_user(
     """
     for attempt in range(3):
         slug = _slugify(name, attempt=attempt)
-        if db.scalar(select(Organization).where(Organization.slug == slug)) is None:
+        # Projection minimale : cette lecture ne teste qu'une existence, elle
+        # n'a pas à charger toute l'entité (ni ``billing_plan_code``, que le rôle
+        # système n'a pas à lire).
+        existence = db.scalar(select(Organization.id).where(Organization.slug == slug))
+        if existence is None:
             break
     else:
         raise SelfServiceError("slug_exhausted", "Nom d'organisation déjà pris.", status_code=409)
@@ -174,7 +178,7 @@ def _create_organization_for_user(
     membership = Membership(
         organization_id=organization.id,
         user_id=user.id,
-        role_id=_owner_role(db).id,
+        role_id=_owner_role_id(db),
         status=MembershipStatus.ACTIVE,
         activated_at=utcnow(),
     )
@@ -183,11 +187,18 @@ def _create_organization_for_user(
     return organization, membership
 
 
-def _owner_role(db: Session) -> Role:
-    role = db.scalar(select(Role).where(Role.code == "owner"))
-    if role is None:
+def _owner_role_id(db: Session) -> UUID:
+    """Résoudre le rôle fondateur par son code.
+
+    Une projection d'identifiant suffit : l'appelant ne se sert que de ``.id``
+    pour créer l'adhésion. Charger l'entité entière ferait lire
+    ``permissions_json`` au rôle système, qui n'en a pas besoin — et le priverait
+    de cette lecture serait alors justifié, donc inutile.
+    """
+    role_id = db.scalar(select(Role.id).where(Role.code == "owner"))
+    if role_id is None:
         raise SelfServiceError("role_missing", "Le rôle « owner » n'est pas provisionné.", status_code=500)
-    return role
+    return role_id
 
 
 def _issue_token(
@@ -861,8 +872,15 @@ def _accept_invitation(
     user = db.get(User, record.user_id)
     if user is None:
         raise SelfServiceError("user_missing", "Invitation introuvable.", status_code=404)
-    organization = db.get(Organization, record.organization_id) if record.organization_id else None
-    if organization is None:
+    # Seul l'identifiant sert ici (recherche de l'adhésion, rattachement de
+    # l'audit) : une projection minimale évite de faire lire au rôle système des
+    # colonnes commerciales de l'organisation, qu'il n'a pas à connaître.
+    organization_id = (
+        db.scalar(select(Organization.id).where(Organization.id == record.organization_id))
+        if record.organization_id
+        else None
+    )
+    if organization_id is None:
         raise SelfServiceError("organization_missing", "Organisation introuvable.", status_code=404)
     policy_errors = password_policy_errors(password, email=user.email)
     if policy_errors:
@@ -870,7 +888,7 @@ def _accept_invitation(
 
     membership = db.scalar(
         select(Membership).where(
-            Membership.organization_id == organization.id, Membership.user_id == user.id
+            Membership.organization_id == organization_id, Membership.user_id == user.id
         )
     )
     if membership is None:
@@ -895,19 +913,27 @@ def _accept_invitation(
     db.flush()
     append_audit_event(
         db,
-        organization_id=organization.id,
+        organization_id=organization_id,
         actor_user_id=user.id,
         entity_type="membership",
         entity_id=membership.id,
         action="identity.invitation_accepted",
-        payload={"role_code": membership.role.code if membership.role else None},
+        # Le code du rôle est la seule information d'audit utile ici. Passer par
+        # la relation chargerait l'entité entière, donc ``permissions_json`` :
+        # une projection explicite garde la lecture du rôle système bornée.
+        payload={"role_code": _role_code(db, membership.role_id)},
     )
     return InvitationOutcome(
         user_id=user.id,
         email=user.email,
         display_name=user.display_name,
-        organization_id=organization.id,
+        organization_id=organization_id,
     )
+
+
+def _role_code(db: Session, role_id: UUID) -> str | None:
+    """Code d'un rôle, par projection : jamais l'entité entière."""
+    return db.scalar(select(Role.code).where(Role.id == role_id))
 
 
 def count_users_with_password(db: Session, *, organization_id: UUID) -> int:
