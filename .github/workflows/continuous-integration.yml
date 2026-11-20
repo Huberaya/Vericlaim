@@ -207,6 +207,38 @@ jobs:
             tests/test_postgres_operational_integrity.py tests/test_postgres_purge_concurrency.py \
             tests/test_postgres_identity_flows.py tests/test_postgres_system_role_privileges.py
 
+      - name: Nommer les échecs PostgreSQL dans les annotations
+        # Les journaux et les artefacts de ce job ne sont pas récupérables depuis
+        # l'environnement d'audit (EOF sur les URL signées, stockage d'artefacts
+        # bloqué). Les annotations, elles, le sont : c'est ce canal qui a permis
+        # de nommer l'échec instable du job Backend. Sans cette étape, un test
+        # rouge ici ne laisse qu'un « exit code 1 » anonyme.
+        if: always()
+        run: |
+          set -uo pipefail
+          report=/tmp/postgres-junit.xml
+          if [ ! -f "$report" ]; then
+            echo "::error::Le rapport JUnit est absent : pytest n'a pas démarré."
+            exit 0
+          fi
+          python - "$report" <<'PY'
+          import sys, xml.etree.ElementTree as ET
+          root = ET.parse(sys.argv[1]).getroot()
+          cases = root.iter("testcase")
+          failures = 0
+          for case in cases:
+              for kind in ("failure", "error"):
+                  node = case.find(kind)
+                  if node is None:
+                      continue
+                  failures += 1
+                  name = f"{case.get('classname','?')}::{case.get('name','?')}"
+                  message = (node.get("message") or kind).strip().splitlines()[0][:300]
+                  print(f"::error title=PostgreSQL::{name} — {message}")
+          if not failures:
+              print("::warning title=PostgreSQL::Aucun test en échec dans le JUnit : l'échec vient d'ailleurs (migration, rôle, infrastructure).")
+          PY
+
       - name: Publier le rapport JUnit PostgreSQL
         # Les journaux de ce job ne sont pas récupérables depuis l'environnement
         # d'audit (EOF sur l'URL signée) : sans ce fichier, un échec ici ne
