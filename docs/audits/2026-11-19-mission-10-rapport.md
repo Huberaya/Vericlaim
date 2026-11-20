@@ -342,6 +342,7 @@ silence.
 | Isolation tenant (`test_postgres_tenant_isolation.py`) | **15 passed** |
 | Suite complète SQLite | **688 passed / 108 skipped** |
 | Suite complète PostgreSQL | **768 passed / 28 skipped** |
+| Job CI « PostgreSQL tenant isolation (RLS) » | **success**, 80 tests |
 | Downgrade → upgrade | droits de table restaurés puis retirés |
 
 Mutations vérifiées, chacune fait échouer au moins un test : `UPDATE` de table
@@ -355,3 +356,29 @@ Ce bloqueur est levé. Le verdict reste **NO-GO** pour les raisons humaines du
 §7 — relecture indépendante, label `security-reviewed`, ouverture de la Preview —
 et pour le défaut de routage du webhook signalé ci-dessus, qui est un défaut de
 parcours, pas de privilège.
+
+### Un angle mort de plus, trouvé en branchant la preuve
+
+En ajoutant ces fichiers au job CI qui possède le service PostgreSQL, deux
+défauts sont apparus, tous deux invisibles jusque-là :
+
+1. **Les tests d'identité n'étaient exécutés nulle part en CI.**
+   `test_postgres_identity_flows.py` (9 tests, existant depuis la mission 10) et
+   `test_postgres_system_role_privileges.py` (40) sont ignorés sans
+   `VERICLAIM_TEST_POSTGRES_URL`, que seul le job PostgreSQL définit — et ce job
+   ne les listait pas. Ils étaient « skipped », donc verts sans rien prouver :
+   exactement l'angle mort qui avait laissé passer les trois défauts d'identité
+   corrigés en mission 10.
+2. **Leur fixture forçait un DSN d'administration sans mot de passe**
+   (`password=""`), ce qui ne fonctionne que sur un serveur en `trust`. En CI,
+   `postgres:16` exige `scram-sha-256` : les neuf tests d'identité échouaient en
+   erreur de fixture (`fe_sendauth: no password supplied`). Reproduit localement
+   avec un serveur `initdb --auth-host=scram-sha-256` : 9 erreurs avant,
+   49 passed après.
+
+Le premier défaut explique le second : tant que les tests n'étaient pas
+exécutés, leur configuration de connexion n'était jamais confrontée à un serveur
+réel. Le job est désormais **vert** avec les deux fichiers branchés, et il publie
+un rapport JUnit ainsi que les noms de tests en échec dans les annotations — les
+journaux de ce job renvoyant `EOF` depuis l'environnement d'audit, comme ceux du
+job Backend.
