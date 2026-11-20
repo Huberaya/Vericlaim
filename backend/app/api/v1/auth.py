@@ -79,7 +79,7 @@ def dev_login_allowed(current_settings: Settings | None = None) -> bool:
     """
 
     active = current_settings or settings
-    if active.is_production_like:
+    if active.is_shared_environment:
         return False
     return bool(active.auth_dev_login_enabled)
 
