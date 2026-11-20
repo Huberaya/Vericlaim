@@ -417,6 +417,7 @@ def test_dev_login_is_refused_unless_explicitly_opted_in(monkeypatch):
     # Never reachable when deployed, even with the flag forced on.
     assert auth_module.dev_login_allowed(replace(enabled, environment="staging")) is False
     assert auth_module.dev_login_allowed(replace(enabled, environment="production")) is False
+    assert auth_module.dev_login_allowed(replace(enabled, environment="preview")) is False
 
     staging_settings = replace(enabled, environment="staging")
     monkeypatch.setattr(auth_module, "settings", staging_settings)
