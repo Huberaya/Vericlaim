@@ -22,14 +22,15 @@ forts sont listés séparément : un rapport d'écarts qui ne dit pas ce qui tie
 
 | # | Écart | Sévérité | État |
 |---|---|---|---|
-| E-01 | Pillow 12.3.0 : 42 CVE connues ; la contrainte `Pillow>=11,<13` exclut la version corrigée | **haute** | **corrigé dans cette mission** |
-| E-02 | Aucun rate limiting effectif, alors que le modèle en prévoit un (`rate_limit_per_minute`) | moyenne | **ouvert** |
-| E-03 | Clés API créables mais jamais acceptées comme mode d'authentification | moyenne | **ouvert** |
-| E-04 | En-têtes de sécurité HTTP absents (nosniff, HSTS, frame-ancestors, Referrer-Policy) | faible | **ouvert** |
-| E-05 | `/docs`, `/openapi.json` et `/metrics` exposés sans restriction | faible | **ouvert** |
-| E-06 | Code mort après `return` dans `resolve_active_membership` | faible (qualité) | **corrigé dans cette mission** |
-| E-07 | `user_agent_hash` enregistré à la création de session, jamais vérifié | faible (qualité) | **ouvert** |
-| E-08 | Double format d'empreinte accepté pour le scellement de la chaîne d'audit | informationnel | **ouvert** |
+| E-01 | Pillow 12.3.0 : 42 CVE connues ; la contrainte `Pillow>=11,<13` exclut la version corrigée | **haute** | **corrigé** (mission précédente) |
+| E-02 | Aucun rate limiting effectif, alors que le modèle en prévoit un (`rate_limit_per_minute`) | moyenne | **corrigé dans cette mission** |
+| E-03 | Clés API créables mais jamais acceptées comme mode d'authentification | moyenne | **corrigé dans cette mission** |
+| E-04 | En-têtes de sécurité HTTP absents (nosniff, HSTS, frame-ancestors, Referrer-Policy) | faible | **corrigé dans cette mission** |
+| E-05 | `/docs`, `/openapi.json` et `/metrics` exposés sans restriction | faible | **corrigé dans cette mission** |
+| E-06 | Code mort après `return` dans `resolve_active_membership` | faible (qualité) | **corrigé** (mission précédente) |
+| E-07 | `user_agent_hash` enregistré à la création de session, jamais vérifié | faible (qualité) | **corrigé dans cette mission** |
+| E-08 | Double format d'empreinte accepté pour le scellement de la chaîne d'audit | informationnel | **corrigé dans cette mission** |
+| E-09 | **Divergence schéma migré / modèle ORM sur `api_keys` et `legal_holds`** — la fonctionnalité échoue sur toute base migrée | **haute** | **corrigé dans cette mission** (trouvé pendant le traitement de E-03) |
 
 Aucun écart de classe « critique » n'a été constaté sur les frontières examinées : les contrôles
 d'authentification, de périmètre tenant, d'ingestion documentaire et de fencing des workers sont
@@ -93,6 +94,17 @@ mutantes et sur `/evaluate`, avec un plafond par défaut et la valeur `rate_limi
 des clés API comme plafond par clé si E-03 est tranché dans le sens de l'implémentation.
 Ajouter au moins un test de non-régression (429 au-delà du seuil).
 
+**Traitement (21/11/2026) — corrigé.** `app/core/rate_limit.py` : limiteur à fenêtre fixe en
+mémoire (thread-safe) + middleware. Trois seaux cookie/anonymes (`API_RATE_LIMIT_AUTH_PER_MINUTE`=30,
+`API_RATE_LIMIT_EVALUATE_PER_MINUTE`=30, `API_RATE_LIMIT_WRITE_PER_MINUTE`=240, bornés en config),
+clé par jeton de session hashé ou IP ; les lectures GET et les pré-vols ne consomment rien.
+Réponses 429 avec `Retry-After` et `X-RateLimit-*`. La limite **par clé API** est contractuelle :
+toujours active, indépendante du commutateur global (`API_RATE_LIMIT_ENABLED`, off par défaut en
+APP_ENV=test). Limite assumée : état par processus — avec N réplicas, le plafond réel est
+multiplié (documenté au README). Preuve : `tests/test_e02_rate_limiting.py` (fenêtre glissante à
+l'unité, refus 429 sur les seaux auth/évaluation, commutateur off respecté) + 429 par clé dans
+`tests/test_e03_api_key_auth.py`.
+
 ---
 
 ## E-03 — Clés API créables mais jamais acceptées comme mode d'authentification
@@ -121,6 +133,33 @@ un sous-ensemble versionné de l'API (avec tests de vérification d'empreinte, d
 scopes et de révocation), ou (b) retirer/dégrader l'écran de création tant que le chemin
 d'authentification n'existe pas, pour ne pas promettre une capacité absente.
 
+**Traitement (21/11/2026) — corrigé, option (a).** `app/identity/api_keys.py` + intégration dans
+`app/identity/dependencies.py` :
+
+- **transport** — `X-API-Key: vc_live_...` ou `Authorization: Bearer vc_live_...` ; une requête
+  qui présente une clé n'est jamais réauthentifiée par cookie (pas de bascule silencieuse) ;
+- **vérification** — recherche par empreinte SHA-256 (temps constant sur la valeur), refus
+  uniforme clé inconnue/révoquée/expirée/organisation inactive ; `last_used_at` tenu à jour ;
+- **périmètres** — vocabulaire machine (`documents:*`, `catalog:*`, `evidence:*`, `audit:*`,
+  `rules:read`) ; les périmètres d'administration humaine (`organization:*`, `members:*`,
+  `validation:*`, `evidence_requests:*`) sont refusés à la création **et** neutralisés à l'usage
+  (intersection, jamais l'union) ;
+- **CSRF** — exigé pour les sessions cookie uniquement ; inapplicable aux requêtes porteur ;
+- **débit** — `rate_limit_per_minute` appliqué par clé (E-02), avec `Retry-After` ;
+- **audit** — les actions machine sont attribuées au membre créateur de la clé (jamais un
+  utilisateur fantôme), `actor_user_id` nullable.
+- **RLS** — la recherche par empreinte précède la connaissance de l'organisation : la migration
+  `b5c6d7e8f901` ouvre une politique de SELECT bornée par le réglage transactionnel
+  `app.api_key_lookup` (posé/effacé par la seule résolution). Preuve sous RLS réelle (rôle
+  applicatif, `NOBYPASSRLS`) : `test_api_key_lookup_is_the_only_unscoped_read_and_is_transaction_bound`
+  dans `tests/test_postgres_tenant_isolation.py` (exécuté par la CI PostgreSQL).
+
+Preuve applicative : `tests/test_e03_api_key_auth.py` (9 tests : authentification machine sans
+cookie ni CSRF, refus de scopes, clés invalides/révoquées/expirées, absence de repli cookie,
+périmètres humains refusés, isolation tenant, journalisation, `last_used_at`, 429 contractuel).
+Le traitement a **révélé E-09** (ci-dessous), sans lequel ce correctif resterait lettre morte sur
+toute base migrée.
+
 ---
 
 ## E-04 — En-têtes de sécurité HTTP absents
@@ -148,6 +187,17 @@ déclarer `headers()` côté Next.js (CSP progressive : `frame-ancestors 'none'`
 `base-uri 'self'` d'abord). Couvrir par un test qui vérifie la présence des en-têtes sur `/healthz`
 et sur une page frontend.
 
+**Traitement (21/11/2026) — corrigé.** `app/core/security_headers.py` : middleware au **plus
+externe** de la chaîne (les 429 du limiteur, les 503 d'infrastructure et les pré-vols CORS sont
+stempés comme les réponses métier) — `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`,
+`Referrer-Policy: strict-origin-when-cross-origin`, CSP `frame-ancestors 'none'; object-src
+'none'; base-uri 'none'`, et `Strict-Transport-Security` **seulement** quand
+`auth_cookie_secure` (jamais de HSTS menti en clair). `frontend/next.config.ts` : `headers()`
+équivalents sur toutes les routes (`nosniff`, `DENY`, `Referrer-Policy`, CSP partielle sans
+`script-src`, pour ne rien casser aux bundles Next.js). Preuve :
+`tests/test_e04_e05_security_surface.py` (présence sur `/healthz` et `/api/v1/auth/status`,
+HSTS conditionnel).
+
 ---
 
 ## E-05 — `/docs`, `/openapi.json` et `/metrics` exposés sans restriction
@@ -168,6 +218,20 @@ et sur une page frontend.
 `admin`/réseau interne) et restreindre `/metrics` au réseau de supervision (ou exiger une
 authentification). Garder l'ouverture éventuelle comme choix documenté de transparence, mais
 alors l'assumer explicitement dans la doc d'exploitation.
+
+**Traitement (21/11/2026) — corrigé.**
+
+- `/docs`, `/redoc`, `/openapi.json` : fermés par défaut en staging/production (`API_DOCS_ENABLED`
+  est l'opt-in explicite et assumé). Double garde : montage FastAPI conditionnel **et**
+  middleware `DocsLockdownMiddleware` (testable et réversible à l'exécution) ; la fermeture ne
+  touche jamais l'API elle-même.
+- `/metrics` : dès qu'un jeton est configuré (`METRICS_AUTH_TOKEN`), la route exige
+  `Authorization: Bearer <jeton>` (comparaison en temps constant). **Le jeton est obligatoire en
+  staging/production** (le démarrage refuse autrement — fail-closed comme le reste de la
+  configuration), optionnel en développement/test. À donner au scraper Prometheus.
+- Preuve : `tests/test_e04_e05_security_surface.py` (documentation fermée à l'exécution, jeton
+  requis/accepté/refusé, configuration de production fail-closed sur `METRICS_AUTH_TOKEN` et
+  `api_docs_enabled` défaut à false).
 
 ---
 
@@ -202,6 +266,14 @@ contrôle faible, contournable par un attaquant qui rejoue l'en-tête), soit le 
 forcer une reconnexion en cas de changement. Dans les deux cas, documenter la décision — un
 contrôle visible et inactif est pire qu'une absence assumée.
 
+**Traitement (21/11/2026) — corrigé, option « vérifier ».** `resolve_current_session` compare
+désormais l'empreinte stockée à celle du User-Agent courant (comparaison en temps constant,
+égalité stricte y compris l'absence) : tout écart rend le jeton inutilisable — le client se
+reconnecte. La liaison est faible et assumée comme défense en profondeur (un outil qui rejoue
+le cookie rejoue généralement l'en-tête) : elle ne remplace ni la rotation de session ni un
+contrôle de device. Preuve : `tests/test_e07_session_ua_binding.py` (résolution unitaire dans
+les deux sens, création sans UA, scénario HTTP « cookie volé → 401 »).
+
 ---
 
 ## E-08 — Double format d'empreinte accepté pour le scellement de la chaîne d'audit
@@ -221,9 +293,59 @@ une date de bascule, faire migrer/revérifier la chaîne, et conserver l'ancien 
 pour la lecture de l'historique. En l'état, l'écart est connu, commenté en code, et n'ouvre pas
 de contournement d'authentification.
 
+**Traitement (21/11/2026) — corrigé.** `verify_audit_chain` n'accepte plus le format historique
+(jointure `:`) que pour les événements **antérieurs au 21 novembre 2026**
+(`CANONICAL_HASH_ENFORCED_AFTER`, constante datée et testée) ; tout événement postérieur doit
+porter l'empreinte canonique. Le producteur n'écrivant plus que le format canonique depuis
+plusieurs versions, la règle ne casse aucune chaîne légitime ; les lignes historiques restent
+vérifiables sans réécriture. Preuve : `tests/test_e08_audit_hash_strictness.py` (legacy récent
+→ chaîne invalide ; canonique récent → valide ; date de bascule figée) et le test historique
+`test_historical_legacy_hashes_are_readable_without_rewriting`, dont la ligne fabriquée porte
+désormais réellement un horodatage historique.
+
 ---
 
-## Points forts constatés (à conserver)
+## E-09 — Le schéma migré et le modèle ORM divergent sur `api_keys` et `legal_holds`
+
+**Sévérité : haute** (classe A-01 : fonctionnalité entière absente en base réelle, invisible
+sur la suite SQLite).
+**État : corrigé dans cette mission.** Trouvé pendant le traitement de E-03.
+
+**Observation.** La migration `e8f9a1b2c3d4` crée `api_keys(hashed_secret, scopes, revoked_at)`
+et `legal_holds` sans `is_active`/`expires_at`/`updated_at`, alors que le modèle ORM
+(`app/models/domain.py`) et toute la couche applicative (`app/enterprise/service.py`, schémas
+Pydantic) utilisent `key_hash`, `scopes_json`, `is_active`, `last_used_at`, `updated_at`.
+Vérification systématique (schéma Alembic vs schéma `create_all`, diff des colonnes) : **exactement
+ces deux tables divergent**, dans les deux sens.
+
+**Conséquence.** Sur SQLite, `create_all` construit le schéma depuis le ORM : tout fonctionne et
+la suite reste verte. Sur **toute base construite par la chaîne Alembic** (staging, production,
+fixtures PostgreSQL de la CI), chaque opération ORM sur ces tables échoue sur une colonne
+inexistante (`UndefinedColumn`) : création, liste, révocation de clés API et gestion des legal
+holds sont **entièrement inopérantes**, et le seraient aussi de l'authentification par clé (E-03).
+Les tests PostgreSQL existants ne le voyaient pas : ils écrivaient en SQL brut avec les noms de
+la migration (cohérents entre eux), jamais via le ORM. C'est exactement le mécanisme d'A-01/A-04
+(SQLite permissif + tests qui n'exercent pas le chemin réel).
+
+**Correction.** Migration `c6d7e8f9a012` (après `b5c6d7e8f901`) qui aligne le schéma migré sur
+le modèle applicatif : renommages `hashed_secret`→`key_hash` (unicité ajoutée, conforme au ORM)
+et `scopes`→`scopes_json`, colonnes `is_active` (dérivée de `revoked_at IS NULL`), `last_used_at`,
+`updated_at` (remplie depuis `created_at` pour les lignes existantes), et ajout des mêmes
+colonnes manquantes sur `legal_holds`. `revoked_at` est conservé comme **trace historique**
+(l'application ne le lit ni ne l'écrit plus ; documenté dans la migration, y compris la limite
+du retour arrière). Les deux tables étant vides sur tout déploiement réel — l'écriture ORM y
+échouait — aucune donnée n'était à migrer.
+
+**Preuve.** Round-trip `upgrade head → downgrade → upgrade head` propre ; diff de schéma
+post-migration : plus aucune divergence hors `revoked_at` (conservé exprès) ; la suite
+complète **318 passed / 65 skipped** ; le seed SQL des tests PostgreSQL est aligné et la CI
+`recette-qualification` (PostgreSQL réel) exerce désormais la chaîne complète avec la nouvelle
+tête `c6d7e8f9a012` (épinglée dans la CI, le runbook Neon et les tests de migration).
+
+**Leçon.** Une table dont le schéma n'est exercé que par `create_all` (SQLite) et des seeds en
+SQL brut n'est jamais prouvée en base migrée. La vérification systématique « schéma des
+migrations vs schéma du ORM » utilisée pour détecter cet écart est reproductible en une
+dizaine de lignes ; elle gagnerait à être rejouée dans la CI.
 
 La revue a porté sur les frontières qui tombent mal le plus souvent. Elles tiennent :
 
@@ -275,10 +397,12 @@ La revue a porté sur les frontières qui tombent mal le plus souvent. Elles tie
 
 À ne pas lire comme un feu vert au-delà de ce qui est écrit :
 
-- **Exécution partielle locale.** 295 tests passés / 64 skipés : les tests RLS PostgreSQL
+- **Exécution partielle locale.** 318 tests passés / 65 skipés : les tests RLS PostgreSQL
   (`VERICLAIM_TEST_POSTGRES_URL`), OCR réel (Tesseract) et signature binaire n'ont pas tourné
-  sur le poste de revue. La preuve d'isolation tenant repose donc ici sur la lecture des
-  politiques RLS et des tests CI existants, pas sur une exécution locale.
+  sur le poste de revue — y compris la nouvelle preuve RLS de la recherche par clé (E-03/E-09),
+  qui doit être confirmée par le job `recette-qualification` de la CI (PostgreSQL réel). Les
+  corrections de migrations (E-09) ont été prouvées localement par round-trip Alembic et par la
+  comparaison systématique des schémas, pas contre un PostgreSQL réel.
 - **Aucun antivirus réel ni stockage managé réel** n'a été exercé (périmètre connu des registres
   A-07/A-08/A-10, inchangés par cette revue).
 - **Pas d'audit d'intrusion, pas de fuzzing** au-delà de la lecture ciblée des frontières ; pas
@@ -287,23 +411,55 @@ La revue a porté sur les frontières qui tombent mal le plus souvent. Elles tie
   son exactitude réglementaire — uniquement ses frontières de sécurité.
 - **Dépendances frontend** : `npm audit` = 0 vulnérabilité au 21/11/2026 ; le périmètre n'inclut
   pas l'analyse des scripts de build.
+- **Limites assumées des correctifs** : le limiteur de débit est par processus (multi-réplicas
+  = plafond multiplié) ; la liaison User-Agent est une défense en profondeur rejouable ; la
+  politique de recherche de clé ouvre la lecture de `api_keys` pendant une transaction portant
+  le réglage `app.api_key_lookup` (borné et testé, mais c'est une brèche RLS assumée).
 
 ## Annexes — commandes exécutées
 
 ```bash
-# Suite backend (baseline puis après correction Pillow)
-cd backend && APP_ENV=test DATABASE_URL=sqlite:////tmp/vericlaim-audit.db AUTO_CREATE_SCHEMA=true python -m pytest -q
-# → 295 passed, 64 skipped (avant et après)
+# Suite backend (baseline puis après chaque correction)
+cd backend && APP_ENV=test DATABASE_URL=sqlite:///<scratch>.db AUTO_CREATE_SCHEMA=true python -m pytest -q
+# → 295 passed / 64 skipped (baseline E-01) ; 318 passed / 65 skipped (après E-02→E-09)
 
 # Dépendances
-pip-audit -r backend/requirements.txt   # → 42 vulnérabilités pillow 12.3.0 (contrainte <13)
-cd frontend && npm audit --audit-level=low   # → 0 vulnérabilité
+pip-audit -r backend/requirements.txt   # → 42 vulnérabilités pillow 12.3.0 (E-01) ; 0 après
+cd frontend && npm audit --audit-level=low && npm run typecheck && npm run build   # → propres
 
 # Fumée image avec Pillow 13.0.0
 python -c "<inspect_document_bytes + extract_result sur PNG>"  # → inspection OK, OCR dégradé contrôlé
+
+# E-09 : diff systématique migration vs ORM (reproductible)
+python -c "<alembic upgrade head sur SQLite A ; create_all sur SQLite B ; diff des colonnes>"
+# → api_keys et legal_holds divergents avant ; uniquement revoked_at (trace) après
+
+# Chaîne de migrations : upgrade → downgrade → upgrade, tête unique
+alembic upgrade head && alembic downgrade b5c6d7e8f901 && alembic upgrade head && alembic heads
 ```
 
-**Corrections livrées par cette mission** (commits sur `main`, même base `6f2cade`) :
+**Corrections livrées sur `main`** (base `6f2cade`, PR #16) :
 
-1. `backend/requirements.txt` : `Pillow>=11,<13` → `Pillow>=13,<14` (E-01) ;
-2. `backend/app/identity/service.py` : suppression du code mort de `resolve_active_membership` (E-06).
+Mission 1 (E-01, E-06) : `backend/requirements.txt` `Pillow>=13,<14` ; suppression du code mort
+de `resolve_active_membership`.
+
+Mission 2 — traitement des écarts restants :
+
+1. **E-02** `app/core/rate_limit.py` + config `API_RATE_LIMIT_*` — limitation de débit à trois
+   seaux + limite contractuelle par clé ;
+2. **E-03** `app/identity/api_keys.py`, `app/identity/dependencies.py`, `app/enterprise/service.py`
+   (garde de périmètres), `app/api/v1/enterprise.py` — authentification machine réelle ;
+3. **E-04** `app/core/security_headers.py`, `frontend/next.config.ts` — en-têtes de sécurité
+   des deux côtés ;
+4. **E-05** `DocsLockdownMiddleware`, `/metrics` authentifié, `API_DOCS_ENABLED` /
+   `METRICS_AUTH_TOKEN` (fail-closed en production) ;
+5. **E-07** `app/identity/service.py` — liaison User-Agent contraignante ;
+6. **E-08** `app/audit/service.py` — scellement canonique seul après la bascule du 21/11/2026 ;
+7. **E-09** migrations `b5c6d7e8f901` (politique de recherche de clé) et `c6d7e8f9a012`
+   (réconciliation `api_keys`/`legal_holds`), seed et preuve RLS dans
+   `tests/test_postgres_tenant_isolation.py`, ré-épinglage de la tête (`c6d7e8f9a012`) dans la
+   CI, le runbook Neon et les tests de migration.
+
+Tests ajoutés : 23 (`test_e02_rate_limiting.py` 3, `test_e03_api_key_auth.py` 9,
+`test_e04_e05_security_surface.py` 5, `test_e07_session_ua_binding.py` 3,
+`test_e08_audit_hash_strictness.py` 3) + 1 test PostgreSQL gated (E-03/E-09).
