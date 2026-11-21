@@ -58,7 +58,7 @@ alembic current
 
 Le moteur n’est plus public : `POST /api/v1/engine/evaluate` exige une session SSO (ou une clé API — voir ci-dessous), une organisation active, la permission `audit:run` et, pour les sessions cookie, un en-tête CSRF. `GET /api/v1/engine/rules` exige la permission `rules:read`.
 
-En staging/production, définir obligatoirement un `AUTH_SESSION_SECRET` aléatoire non-placeholder (au moins 32 caractères), `AUTH_COOKIE_SECURE=true`, `FRONTEND_URL`, `CORS_ORIGINS`, `OIDC_ISSUER`, `OIDC_CLIENT_ID` et `OIDC_REDIRECT_URI`. Les URLs doivent être HTTPS, le callback OIDC doit utiliser l’hôte frontend et les wildcards CORS sont refusés. Aucun mot de passe local ni contournement de développement n’est fourni.
+En staging/production, définir obligatoirement un `AUTH_SESSION_SECRET` aléatoire non-placeholder (au moins 32 caractères), `AUTH_COOKIE_SECURE=true`, `FRONTEND_URL`, `CORS_ORIGINS`, `OIDC_ISSUER`, `OIDC_CLIENT_ID` et `OIDC_REDIRECT_URI`. Les URLs doivent être HTTPS, le callback OIDC doit utiliser l’hôte frontend et les wildcards CORS sont refusés. Aucun mot de passe local ni contournement de développement n’est fourni. La procédure de mise en service d’un tenant IdP réel (Clerk, Azure Entra ID, Keycloak, Auth0) et sa checklist sont décrites dans [`docs/operations/integration-tenant-idp-reel.md`](docs/operations/integration-tenant-idp-reel.md).
 
 Le flux et les routes sont détaillés dans [`docs/architecture/ch02-identity-tenancy.md`](docs/architecture/ch02-identity-tenancy.md). Une invitation crée un membership `invited`; l’envoi d’e-mail reste à connecter à un service externe et n’est pas prétendu comme effectué.
 

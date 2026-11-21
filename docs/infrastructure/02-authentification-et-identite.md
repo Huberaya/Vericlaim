@@ -97,6 +97,14 @@ exhaustive dans `backend/app/api`.
 
 ## 4. Ce qui n'a pas pu être testé
 
+> **Mise à jour du 21/11/2026** — la rotation de clés JWKS est désormais
+> automatisée (`backend/tests/test_oidc_idp_integration.py`), le binding
+> User-Agent est vérifié à chaque résolution (E-07, traité), et la procédure
+> d'intégration d'un tenant réel (Clerk, Entra, Keycloak, Auth0) est décrite
+> dans [`docs/operations/integration-tenant-idp-reel.md`](../operations/integration-tenant-idp-reel.md),
+> avec la checklist de mise en service. Les lignes ci-dessous restent le
+> registre de l'exécution de recette initiale.
+
 | Point | Raison | Conséquence |
 |---|---|---|
 | Tenant **Clerk** réel | `api.clerk.com` et `*.clerk.accounts.dev` non joignables | Le flux Clerk exact (claims, `azp`, rotation de clés) n'est pas certifié. Le contrat OIDC générique, lui, est prouvé. |
