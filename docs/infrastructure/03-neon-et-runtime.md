@@ -70,7 +70,7 @@ post-condition en SQL, ajoutée après observation).
 | RLS **forcé** (même pour le propriétaire) | `relforcerowsecurity` | **26** |
 | audit en écriture | `has_table_privilege(…,'audit_events','UPDATE')` | **false** (append-only) |
 | création d'objet dans `public` | `has_schema_privilege(…,'CREATE')` | **false** |
-| révision Alembic | `alembic_version` | **`a7d4c9e2b510`** (tête attendue par la CI) |
+| révision Alembic | `alembic_version` | **`c6d7e8f9a012`** (tête attendue par la CI) |
 | lignes visibles sans contexte tenant | `select count(*) from documents` | **0** |
 
 Les 26 tables incluent les tables tenant et les tables « globales ou tenant »
@@ -124,8 +124,8 @@ neutre, sans texte de driver ni chaîne de connexion. Le repli SQLite silencieux
 | N1 | Rappeler la base staging réellement utilisée par la Preview (`VeriClaim-Recette-Isolated`) et sa **région** | nom + région, aucun DSN | en attente |
 | N2 | Confirmer que le rôle runtime de la Preview est `vericlaim_app` et **non** le compte propriétaire | oui/non + preuve | en attente |
 | N3 | Confirmer `sslmode=require` sur les deux URLs (migrator, runtime) | oui/non | en attente |
-| N4 | Fournir la sortie de `verify_runtime.py --expected-revision a7d4c9e2b510` sur la base staging | succès/échec | en attente |
-| N5 | Dire si des migrations ont été appliquées depuis `a7d4c9e2b510` | oui/non | en attente |
+| N4 | Fournir la sortie de `verify_runtime.py --expected-revision c6d7e8f9a012` sur la base staging | succès/échec | en attente |
+| N5 | Dire si des migrations ont été appliquées depuis `c6d7e8f9a012` | oui/non | en attente |
 | N6 | Confirmer l'absence de données client réelles dans la base staging | oui/non | en attente |
 | N7 | Indiquer si la Preview utilise la **même** base que l'environnement Vercel `staging` | oui/non | en attente |
 
