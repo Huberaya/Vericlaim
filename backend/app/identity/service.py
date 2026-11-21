@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hmac
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -200,7 +201,13 @@ def create_auth_session(
     return raw_token, raw_csrf_token, session
 
 
-def resolve_current_session(db: Session, *, raw_token: str | None, settings: Settings) -> CurrentSession | None:
+def resolve_current_session(
+    db: Session,
+    *,
+    raw_token: str | None,
+    settings: Settings,
+    request_user_agent: str | None = None,
+) -> CurrentSession | None:
     if not raw_token:
         return None
     token_hash = token_hmac(raw_token, settings.auth_session_secret)
@@ -210,6 +217,23 @@ def resolve_current_session(db: Session, *, raw_token: str | None, settings: Set
         .where(AuthSession.token_hash == token_hash)
     )
     if auth_session is None or auth_session.revoked_at is not None or _as_utc(auth_session.expires_at) <= utcnow():
+        return None
+    # E-07 : l'empreinte User-Agent n'était enregistrée qu'à la création et
+    # jamais comparée — un contrôle mort. Elle est désormais contraignante :
+    # toute utilisation du jeton avec un User-Agent différent invalide la
+    # session (le client se reconnecte). C'est une liaison faible (l'en-tête
+    # est rejouable), assumée comme défense en profondeur contre l'usage d'un
+    # cookie exfiltré par un outil qui ne rejouerait pas l'en-tête d'origine.
+    # L'égalité est stricte, y compris l'absence : une session créée sans
+    # User-Agent n'est acceptée que sans User-Agent.
+    stored_agent_hash = auth_session.user_agent_hash or ""
+    request_agent_hash = user_agent_hash(request_user_agent) or ""
+    if not hmac.compare_digest(stored_agent_hash, request_agent_hash):
+        logger.warning(
+            "session user-agent mismatch: user=%s session=%s",
+            auth_session.user_id,
+            auth_session.id,
+        )
         return None
     user = auth_session.user
     if user.status != UserStatus.ACTIVE:

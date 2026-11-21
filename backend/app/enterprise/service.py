@@ -6,13 +6,13 @@ import hashlib
 import secrets
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Any
 from uuid import UUID, uuid4
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.engine.rule_book import RULEBOOK_VERSION
+from app.identity.api_keys import validate_requested_scopes
 from app.identity.service import append_audit_event
 from app.models.domain import (
     Analysis,
@@ -64,6 +64,11 @@ def create_organization_api_key(
     expires_in_days: int | None = 365,
     req_id: str | None = None,
 ) -> ApiKeyCreatedResponse:
+    # E-03 : tout chaîne était acceptée comme « scope ». Seul le vocabulaire
+    # machine est créable ; l'authentification applique de toute façon
+    # l'intersection, mais refuser à la création évite une clé qui promet
+    # plus qu'elle ne peut exercer.
+    scopes = validate_requested_scopes(scopes)
     raw_key, prefix, key_hash = generate_secure_api_key()
     now = datetime.now(timezone.utc)
     expires_at = now + timedelta(days=expires_in_days) if expires_in_days else None

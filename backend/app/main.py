@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hmac
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, status
@@ -33,10 +34,12 @@ from app.api.v1.review import (
     evidence_requests_router,
     validations_router,
 )
-from app.core.config import settings
+from app.core.config import settings, settings_of
 from app.core.database import DatabaseUnavailableError, SessionLocal, create_tables, probe_database
 from app.core.metrics import REGISTRY
 from app.core.metrics_middleware import MetricsMiddleware
+from app.core.rate_limit import RateLimitMiddleware
+from app.core.security_headers import DocsLockdownMiddleware, SecurityHeadersMiddleware
 from app.documents.scanner import DisabledMalwareScanner, build_malware_scanner
 from app.documents.storage import DisabledObjectStorage, build_object_storage
 from app.engine.inference_evaluator import InferenceEvaluator
@@ -69,6 +72,12 @@ app = FastAPI(
         "Moteur déterministe de détection, qualification et contrôle probatoire des allégations environnementales. "
         "Outil d'aide à la conformité, sans substitution à une revue juridique humaine."
     ),
+    # E-05 : la documentation interactive expose le schéma complet de l'API.
+    # Elle est refusée par défaut en staging/production ; API_DOCS_ENABLED=true
+    # est l'ouverture explicite et assumée (transparence documentée).
+    docs_url="/docs" if settings.api_docs_enabled else None,
+    redoc_url="/redoc" if settings.api_docs_enabled else None,
+    openapi_url="/openapi.json" if settings.api_docs_enabled else None,
     lifespan=lifespan,
 )
 app.state.settings = settings
@@ -86,11 +95,19 @@ app.state.evaluator = InferenceEvaluator(
     fr_2024_825_transposition_status=settings.eu_2024_825_fr_transposition_status,
 )
 
-# A-09 : mesure du trafic réel. Enregistré avant CORS pour que la mesure
-# couvre aussi les réponses de pré-vol, mais après les routes de santé, qui
-# sont exclues à l'intérieur du middleware.
-app.add_middleware(MetricsMiddleware)
-
+# Chaîne de middleware (le plus externe ajouté en dernier) :
+# SecurityHeaders → Metrics → RateLimit → DocsLockdown → CORS → routes.
+#
+# - SecurityHeaders (E-04) est le plus externe : chaque réponse — y compris les
+#   429 du limiteur, les 503 d'infrastructure et les pré-vols CORS — porte les
+#   en-têtes de sécurité ;
+# - Metrics (A-09) mesure le trafic réel, pré-vols CORS compris : c'était
+#   l'intention documentée, que l'ordre précédent (CORS ajouté après Metrics)
+#   ne satisfaisait pas réellement — CORS répond aux OPTIONS sans enchaîner ;
+# - RateLimit (E-02) borne les mutations et l'évaluation avant les routes ;
+# - DocsLockdown (E-05) ferme /docs et /openapi.json selon la configuration ;
+# - CORS reste le plus interne : les en-têtes de pré-vol ne sont ajoutés qu'aux
+#   réponses qui concernent le navigateur.
 if settings.cors_origins:
     app.add_middleware(
         CORSMiddleware,
@@ -99,8 +116,12 @@ if settings.cors_origins:
         allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
         # Cookie-authenticated mutations use this header for the double-submit
         # CSRF check. It must be admitted explicitly for browser preflights.
-        allow_headers=["Content-Type", "Authorization", "X-CSRF-Token", "X-Request-Id", "Idempotency-Key"],
+        allow_headers=["Content-Type", "Authorization", "X-CSRF-Token", "X-Request-Id", "Idempotency-Key", "X-API-Key"],
     )
+app.add_middleware(DocsLockdownMiddleware)
+app.add_middleware(RateLimitMiddleware)
+app.add_middleware(MetricsMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
 
 app.include_router(auth_router)
 app.include_router(organizations_router)
@@ -208,11 +229,28 @@ def readyz(request: Request) -> JSONResponse:
 def metrics(request: Request) -> Response:
     """Export Prometheus (A-09).
 
+    E-05 : l'export expose la profondeur des files et l'état des dépendances.
+    En staging/production, un jeton de scrape est **obligatoire** (config
+    ``METRICS_AUTH_TOKEN``) : la route refuse toute requête qui ne le porte
+    pas. En développement/test sans jeton configuré, la route reste ouverte.
+
     La profondeur des files est lue en base : elle reste exacte même quand
     aucun worker ne tourne, ce qui est précisément le moment où l'information
     compte. Une base injoignable ne fait pas échouer la route : les métriques
     déjà connues sont servies, et la sonde de base porte l'information.
     """
+
+    expected_token = settings_of(getattr(request, "app", None), fallback=settings).metrics_auth_token
+    if expected_token:
+        authorization = request.headers.get("Authorization") or ""
+        scheme, _, value = authorization.partition(" ")
+        provided = value.strip() if scheme.lower() == "bearer" else ""
+        if not hmac.compare_digest(provided, expected_token):
+            return JSONResponse(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                content={"detail": "Jeton de supervision requis."},
+                headers={"Cache-Control": "no-store"},
+            )
 
     queue_metrics: dict[str, object] = {}
     database_ok = probe_database()

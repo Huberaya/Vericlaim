@@ -59,6 +59,9 @@ def authenticate_client(client: TestClient, *, role_code: str = "analyst", email
     client.cookies.set(SESSION_COOKIE_NAME, raw_token)
     client.cookies.set(CSRF_COOKIE_NAME, raw_csrf_token)
     client.headers[CSRF_HEADER_NAME] = raw_csrf_token
+    # La liaison User-Agent de session (E-07) exige que les requêtes du client
+    # portent exactement le User-Agent avec lequel la session a été créée.
+    client.headers["User-Agent"] = "pytest"
     return TestIdentity(
         user_id=user.id,
         organization_id=organization.id,
@@ -90,5 +93,7 @@ def authenticate_client_without_membership(client: TestClient, *, email: str | N
     client.cookies.set(SESSION_COOKIE_NAME, raw_token)
     client.cookies.set(CSRF_COOKIE_NAME, raw_csrf_token)
     client.headers[CSRF_HEADER_NAME] = raw_csrf_token
+    # Voir authenticate_client : la liaison User-Agent de session (E-07).
+    client.headers["User-Agent"] = "pytest"
     # This sentinel is never sent to the API; callers assert onboarding state.
     return TestIdentity(user_id=user.id, organization_id=UUID(int=0), role_code="none", session_token=raw_token)

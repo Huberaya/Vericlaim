@@ -95,6 +95,9 @@ def test_schema_autocreation_is_opt_in_outside_local_and_test(monkeypatch):
     monkeypatch.setenv("DOCUMENT_STORAGE_PUBLIC_ENDPOINT", "https://objects.example")
     monkeypatch.setenv("DOCUMENT_QUARANTINE_BUCKET", "vericlaim-quarantine-test")
     monkeypatch.setenv("DOCUMENT_CLEAN_BUCKET", "vericlaim-clean-test")
+    # /metrics is authenticated in shared environments (E-05): production-like
+    # settings must provide the scraper token.
+    monkeypatch.setenv("METRICS_AUTH_TOKEN", "scraping-token-for-tests-0001")
     monkeypatch.delenv("AUTO_CREATE_SCHEMA", raising=False)
     assert get_settings().auto_create_schema is False
 

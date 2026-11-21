@@ -83,6 +83,20 @@ class Settings:
     auth_dev_login_enabled: bool = False
     auth_session_ttl_seconds: int = 8 * 60 * 60
     auth_cookie_secure: bool = False
+    # Limitation de débit (E-02). Active par défaut hors APP_ENV=test, où la
+    # suite enchaîne des centaines de requêtes depuis la même source. Les
+    # comptes par clé API (``rate_limit_per_minute``) restent toujours actifs :
+    # ils font partie du contrat de la clé, indépendamment de ce commutateur.
+    api_rate_limit_enabled: bool = True
+    api_rate_limit_auth_per_minute: int = 30
+    api_rate_limit_evaluate_per_minute: int = 30
+    api_rate_limit_write_per_minute: int = 240
+    # Documentation publique de l'API (E-05) : désactivée en staging/production
+    # sauf opt-in explicite, pour ne pas exposer le schéma complet par défaut.
+    api_docs_enabled: bool = True
+    # Jeton de scrape Prometheus pour ``/metrics`` (E-05) ; obligatoire en
+    # staging/production, optionnel (route ouverte) en développement/test.
+    metrics_auth_token: str | None = None
     oidc_issuer: str | None = None
     oidc_client_id: str | None = None
     oidc_client_secret: str | None = None
@@ -359,6 +373,32 @@ def get_settings() -> Settings:
     if is_production_like and not auth_cookie_secure:
         raise RuntimeError("AUTH_COOKIE_SECURE cannot be disabled in staging/production.")
 
+    # E-02 : limites de débit. Bornées, plafonnées, et globalement désactivables
+    # (les limites par clé API restant, elles, contractuelles).
+    api_rate_limit_enabled = _bool_from_env(
+        os.getenv("API_RATE_LIMIT_ENABLED"), default=(environment != "test")
+    )
+    api_rate_limit_auth_per_minute = _positive_int_from_env("API_RATE_LIMIT_AUTH_PER_MINUTE", 30, 1)
+    api_rate_limit_evaluate_per_minute = _positive_int_from_env(
+        "API_RATE_LIMIT_EVALUATE_PER_MINUTE", 30, 1
+    )
+    api_rate_limit_write_per_minute = _positive_int_from_env("API_RATE_LIMIT_WRITE_PER_MINUTE", 240, 1)
+
+    # E-05 : la documentation interactive expose le schéma complet de l'API.
+    # Refusée par défaut hors développement/test ; l'ouverture en production est
+    # un choix explicite et documenté (transparence assumée).
+    api_docs_enabled = _bool_from_env(
+        os.getenv("API_DOCS_ENABLED"), default=(environment not in PRODUCTION_LIKE_ENVIRONMENTS)
+    )
+    metrics_auth_token = _optional_env("METRICS_AUTH_TOKEN")
+    if is_production_like and not metrics_auth_token:
+        raise RuntimeError(
+            "METRICS_AUTH_TOKEN must be configured in staging/production; /metrics is authenticated "
+            "or the route must not be deployed. Give the same token to the Prometheus scraper."
+        )
+    if metrics_auth_token and len(metrics_auth_token) < 16:
+        raise RuntimeError("METRICS_AUTH_TOKEN must be at least 16 characters.")
+
     # Default-off credential-free login. Refuse the configuration outright in
     # production-like environments instead of silently ignoring it, so a
     # misconfigured deployment fails at startup rather than at request time.
@@ -462,6 +502,12 @@ def get_settings() -> Settings:
         auth_dev_login_enabled=auth_dev_login_enabled,
         auth_session_ttl_seconds=_positive_int_from_env("AUTH_SESSION_TTL_SECONDS", 8 * 60 * 60, 300),
         auth_cookie_secure=auth_cookie_secure,
+        api_rate_limit_enabled=api_rate_limit_enabled,
+        api_rate_limit_auth_per_minute=api_rate_limit_auth_per_minute,
+        api_rate_limit_evaluate_per_minute=api_rate_limit_evaluate_per_minute,
+        api_rate_limit_write_per_minute=api_rate_limit_write_per_minute,
+        api_docs_enabled=api_docs_enabled,
+        metrics_auth_token=metrics_auth_token,
         oidc_issuer=oidc_issuer,
         oidc_client_id=oidc_client_id,
         oidc_client_secret=oidc_client_secret,

@@ -11,10 +11,17 @@ from sqlalchemy.orm import Session
 
 from app.models.audit_schemas import (
     AuditChainVerificationResponse,
-    AuditEventResponse,
     AuditIntegrityCertificateResponse,
 )
-from app.models.domain import AuditEvent, Organization
+from app.models.domain import AuditEvent
+
+#: E-08 : date de bascule du scellement. Les événements antérieurs conservent
+#: l'ancrage historique (format canonique **ou** format à jointure `:`, écrits
+#: par les deux époques du producteur) ; tout événement postérieur doit porter
+#: l'empreinte canonique, seule désormais acceptée. La bascule est datée du
+#: jour où la règle a été énoncée : le producteur n'écrit plus que le format
+#: canonique depuis plusieurs versions.
+CANONICAL_HASH_ENFORCED_AFTER = datetime(2026, 11, 21, tzinfo=timezone.utc)
 
 
 def normalize_iso_datetime(dt: datetime) -> str:
@@ -174,7 +181,10 @@ def verify_audit_chain(
         )
         # Business events already persisted use canonical JSON with actor and
         # request metadata. Legacy audit events used the colon-delimited hash.
-        # Verify both without rewriting historical rows or trusting a new flag.
+        # E-08 : les deux formats restaient acceptés pour tout événement, ce qui
+        # doublait les préimages valides du scellement. Le format historique
+        # n'est plus accepté que pour les événements antérieurs à la bascule ;
+        # au-delà, seule l'empreinte canonique valide l'événement.
         from app.core.database import sha256_json
         canonical_event_hash = sha256_json({
             "organization_id": str(ev.organization_id),
@@ -189,7 +199,12 @@ def verify_audit_chain(
             "payload_sha256": ev.payload_sha256,
             "previous_event_hash": ev.previous_event_hash,
         })
-        if ev.event_hash not in {expected_event_hash, canonical_event_hash}:
+        event_occurred_at = ev.occurred_at if ev.occurred_at.tzinfo else ev.occurred_at.replace(tzinfo=timezone.utc)
+        if event_occurred_at >= CANONICAL_HASH_ENFORCED_AFTER:
+            accepted_hashes = {canonical_event_hash}
+        else:
+            accepted_hashes = {expected_event_hash, canonical_event_hash}
+        if ev.event_hash not in accepted_hashes:
             return AuditChainVerificationResponse(
                 is_valid=False,
                 organization_id=organization_id,
