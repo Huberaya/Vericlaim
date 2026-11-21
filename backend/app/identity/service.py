@@ -306,9 +306,6 @@ def resolve_active_membership(db: Session, current: CurrentSession) -> Membershi
     current.session.active_organization_id = None
     db.flush()
     return None
-    view = MembershipView(membership=row[0], organization=row[1], role=row[2])
-    set_db_request_context(db, user_id=current.user.id, organization_id=view.organization.id)
-    return view
 
 
 def set_active_organization(db: Session, current: CurrentSession, organization_id: UUID) -> MembershipView:
