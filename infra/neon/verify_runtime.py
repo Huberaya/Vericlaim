@@ -210,16 +210,25 @@ def collect_failures(connection: psycopg.Connection[object], expected_revision: 
                     failures,
                 )
                 for policy_name, qual, with_check in table_policies:
+                    # PostgreSQL n'évalue USING que pour la lecture/mise à jour
+                    # et WITH CHECK que pour l'écriture ; une politique SELECT
+                    # ne peut même pas porter de WITH CHECK (refusé par le
+                    # moteur). Chaque expression réellement présente doit donc
+                    # réaffirmer le helper tenant, et toute politique doit en
+                    # porter au moins une.
                     _required(
-                        bool(qual) and TENANT_POLICY_HELPER in (qual or ""),
-                        f"policy {policy_name} on {table_name} does not use the tenant helper",
+                        bool(qual) or bool(with_check),
+                        f"policy {policy_name} on {table_name} has no predicate",
                         failures,
                     )
-                    _required(
-                        bool(with_check) and TENANT_POLICY_HELPER in (with_check or ""),
-                        f"policy {policy_name} on {table_name} has no tenant WITH CHECK",
-                        failures,
-                    )
+                    for expression in (qual, with_check):
+                        if expression is None:
+                            continue
+                        _required(
+                            TENANT_POLICY_HELPER in expression,
+                            f"policy {policy_name} on {table_name} does not use the tenant helper",
+                            failures,
+                        )
         finally:
             cursor.execute("ROLLBACK")
     return failures

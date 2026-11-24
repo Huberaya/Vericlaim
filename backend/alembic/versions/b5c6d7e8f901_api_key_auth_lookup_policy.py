@@ -44,7 +44,10 @@ def upgrade() -> None:
         op.execute(
             '''CREATE POLICY "p_api_keys_auth_lookup" ON "api_keys"
                 FOR SELECT
-                USING (current_setting('app.api_key_lookup', true) = 'on')'''
+                USING (
+                    current_setting('app.api_key_lookup', true) = 'on'
+                    OR organization_id = vericlaim_current_organization_id()
+                )'''
         )
 
 

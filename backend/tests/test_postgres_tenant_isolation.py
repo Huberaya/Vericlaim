@@ -197,6 +197,8 @@ class Tenants:
     organization_b: uuid.UUID
     supplier_a: uuid.UUID
     supplier_b: uuid.UUID
+    key_hash_a: str
+    key_hash_b: str
 
 
 def _seed(cluster: Cluster) -> Tenants:
@@ -205,11 +207,14 @@ def _seed(cluster: Cluster) -> Tenants:
     product_a, product_b = uuid.uuid4(), uuid.uuid4()
     key_a, key_b = uuid.uuid4(), uuid.uuid4()
     hold_a, hold_b = uuid.uuid4(), uuid.uuid4()
+    # key_hash a une contrainte d'unicité globale : chaque seed doit porter des
+    # empreintes distinctes, la portée de la fixture étant la fonction.
+    key_hash_a, key_hash_b = uuid.uuid4().hex * 2, uuid.uuid4().hex * 2
 
     with _connect(cluster.migrator_dsn) as connection, connection.cursor() as cursor:
-        for organization, supplier, product, key, hold, label in (
-            (organization_a, supplier_a, product_a, key_a, hold_a, "A"),
-            (organization_b, supplier_b, product_b, key_b, hold_b, "B"),
+        for organization, supplier, product, key, hold, label, key_hash in (
+            (organization_a, supplier_a, product_a, key_a, hold_a, "A", key_hash_a),
+            (organization_b, supplier_b, product_b, key_b, hold_b, "B", key_hash_b),
         ):
             # FORCE RLS applies to the table owner as well: seeding must install
             # the same request context the application installs.
@@ -236,7 +241,7 @@ def _seed(cluster: Cluster) -> Tenants:
             cursor.execute(
                 "INSERT INTO api_keys (id, organization_id, name, prefix, key_hash, scopes_json, is_active, created_at, updated_at) "
                 "VALUES (%s, %s, %s, %s, %s, '[]', true, now(), now())",
-                (key, organization, f"Clé {label}", f"prefix{label}", label.lower() * 64),
+                (key, organization, f"Clé {label}", f"prefix{label}", key_hash),
             )
             cursor.execute(
                 "INSERT INTO legal_holds (id, organization_id, case_reference, reason, created_at, updated_at) "
@@ -250,6 +255,8 @@ def _seed(cluster: Cluster) -> Tenants:
         organization_b=organization_b,
         supplier_a=supplier_a,
         supplier_b=supplier_b,
+        key_hash_a=key_hash_a,
+        key_hash_b=key_hash_b,
     )
 
 
@@ -322,13 +329,13 @@ def test_api_key_lookup_is_the_only_unscoped_read_and_is_transaction_bound(
 
             # 1. Sans contexte ni réglage : aucune ligne, même connaisse-t-on
             #    l'empreinte exacte.
-            cursor.execute("SELECT count(*) FROM api_keys WHERE key_hash = %s", ("a" * 64,))
+            cursor.execute("SELECT count(*) FROM api_keys WHERE key_hash = %s", (tenants.key_hash_a,))
             assert cursor.fetchone()[0] == 0
 
             # 2. Le réglage de recherche ouvre la lecture de la clé exacte.
             cursor.execute("SELECT set_config('app.api_key_lookup', 'on', true)")
             cursor.execute(
-                "SELECT organization_id FROM api_keys WHERE key_hash = %s", ("a" * 64,)
+                "SELECT organization_id FROM api_keys WHERE key_hash = %s", (tenants.key_hash_a,)
             )
             rows = cursor.fetchall()
             assert len(rows) == 1
