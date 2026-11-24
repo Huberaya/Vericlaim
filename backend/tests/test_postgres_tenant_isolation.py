@@ -239,8 +239,8 @@ def _seed(cluster: Cluster) -> Tenants:
                 (key, organization, f"Clé {label}", f"prefix{label}", label.lower() * 64),
             )
             cursor.execute(
-                "INSERT INTO legal_holds (id, organization_id, case_reference, reason, created_at) "
-                "VALUES (%s, %s, %s, %s, now())",
+                "INSERT INTO legal_holds (id, organization_id, case_reference, reason, created_at, updated_at) "
+                "VALUES (%s, %s, %s, %s, now(), now())",
                 (hold, organization, f"CASE-{label}", f"Motif {label}"),
             )
         connection.commit()
