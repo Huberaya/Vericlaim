@@ -28,6 +28,17 @@ const nextConfig: NextConfig = {
         source: "/api/:path*",
         destination: `${backendUrl}/api/:path*`,
       },
+      // Sondes d'exploitation servies par le backend : sans ces règles, elles
+      // tombent sur le routeur Next.js (404 HTML) au lieu de remonter l'état
+      // réel du runtime (base, stockage, antivirus).
+      {
+        source: "/healthz",
+        destination: `${backendUrl}/healthz`,
+      },
+      {
+        source: "/readyz",
+        destination: `${backendUrl}/readyz`,
+      },
     ];
   },
 };
