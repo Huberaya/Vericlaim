@@ -36,7 +36,6 @@ from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import jwt
-from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 VALID_MODES = frozenset(
@@ -97,6 +96,16 @@ class OidcStub:
     token_requests: list[dict[str, str]] = field(default_factory=list, init=False, repr=False)
 
     def __post_init__(self) -> None:
+        self._key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        self._key_id = secrets.token_hex(8)
+
+    def rotate_keys(self) -> None:
+        """Rotate the signing key, exactly as a real IdP does periodically.
+
+        Only the new key is published afterwards: a client that cached the
+        previous JWKS must re-fetch it when it meets the unknown ``kid``.
+        """
+
         self._key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
         self._key_id = secrets.token_hex(8)
 

@@ -28,7 +28,7 @@ from psycopg import sql
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 BACKEND_ROOT = REPOSITORY_ROOT / "backend"
 NEON_ROOT = REPOSITORY_ROOT / "infra" / "neon"
-ALEMBIC_HEAD = "a7d4c9e2b510"
+ALEMBIC_HEAD = "c6d7e8f9a012"
 
 ADMIN_DSN = os.environ.get("VERICLAIM_TEST_POSTGRES_URL", "").strip()
 pytestmark = pytest.mark.skipif(
@@ -197,6 +197,8 @@ class Tenants:
     organization_b: uuid.UUID
     supplier_a: uuid.UUID
     supplier_b: uuid.UUID
+    key_hash_a: str
+    key_hash_b: str
 
 
 def _seed(cluster: Cluster) -> Tenants:
@@ -205,11 +207,14 @@ def _seed(cluster: Cluster) -> Tenants:
     product_a, product_b = uuid.uuid4(), uuid.uuid4()
     key_a, key_b = uuid.uuid4(), uuid.uuid4()
     hold_a, hold_b = uuid.uuid4(), uuid.uuid4()
+    # key_hash a une contrainte d'unicité globale : chaque seed doit porter des
+    # empreintes distinctes, la portée de la fixture étant la fonction.
+    key_hash_a, key_hash_b = uuid.uuid4().hex * 2, uuid.uuid4().hex * 2
 
     with _connect(cluster.migrator_dsn) as connection, connection.cursor() as cursor:
-        for organization, supplier, product, key, hold, label in (
-            (organization_a, supplier_a, product_a, key_a, hold_a, "A"),
-            (organization_b, supplier_b, product_b, key_b, hold_b, "B"),
+        for organization, supplier, product, key, hold, label, key_hash in (
+            (organization_a, supplier_a, product_a, key_a, hold_a, "A", key_hash_a),
+            (organization_b, supplier_b, product_b, key_b, hold_b, "B", key_hash_b),
         ):
             # FORCE RLS applies to the table owner as well: seeding must install
             # the same request context the application installs.
@@ -234,13 +239,13 @@ def _seed(cluster: Cluster) -> Tenants:
                 (product, organization, supplier, f"REF-{label}", f"Produit {label}"),
             )
             cursor.execute(
-                "INSERT INTO api_keys (id, organization_id, name, prefix, hashed_secret, scopes, created_at) "
-                "VALUES (%s, %s, %s, %s, %s, '[]', now())",
-                (key, organization, f"Clé {label}", f"prefix{label}", "0" * 64),
+                "INSERT INTO api_keys (id, organization_id, name, prefix, key_hash, scopes_json, is_active, created_at, updated_at) "
+                "VALUES (%s, %s, %s, %s, %s, '[]', true, now(), now())",
+                (key, organization, f"Clé {label}", f"prefix{label}", key_hash),
             )
             cursor.execute(
-                "INSERT INTO legal_holds (id, organization_id, case_reference, reason, created_at) "
-                "VALUES (%s, %s, %s, %s, now())",
+                "INSERT INTO legal_holds (id, organization_id, case_reference, reason, created_at, updated_at) "
+                "VALUES (%s, %s, %s, %s, now(), now())",
                 (hold, organization, f"CASE-{label}", f"Motif {label}"),
             )
         connection.commit()
@@ -250,6 +255,8 @@ def _seed(cluster: Cluster) -> Tenants:
         organization_b=organization_b,
         supplier_a=supplier_a,
         supplier_b=supplier_b,
+        key_hash_a=key_hash_a,
+        key_hash_b=key_hash_b,
     )
 
 
@@ -303,6 +310,59 @@ def test_no_tenant_rows_are_visible_without_context(cluster: Cluster, tenants: T
         _set_tenant(connection, None)
         for table in ("suppliers", "products", "analyses", "api_keys", "legal_holds"):
             assert _count(connection, table) == 0
+
+
+def test_api_key_lookup_is_the_only_unscoped_read_and_is_transaction_bound(
+    cluster: Cluster, tenants: Tenants
+) -> None:
+    """La recherche d'authentification par clé (E-03/E-09) sous RLS réelle.
+
+    ``api_keys`` est en RLS FORCE : la recherche par empreinte — qui précède la
+    connaissance de l'organisation — ne voit rien sans contexte. La politique
+    ``p_api_keys_auth_lookup``, bornée par le réglage transactionnel
+    ``app.api_key_lookup``, est la seule brèche assumée : elle doit ouvrir la
+    lecture pour la seule transaction qui la pose, et rien d'autre.
+    """
+    with _connect(cluster.app_dsn) as connection:
+        with connection.cursor() as cursor:
+            _set_tenant(connection, None)
+
+            # 1. Sans contexte ni réglage : aucune ligne, même connaisse-t-on
+            #    l'empreinte exacte.
+            cursor.execute("SELECT count(*) FROM api_keys WHERE key_hash = %s", (tenants.key_hash_a,))
+            assert cursor.fetchone()[0] == 0
+
+            # 2. Le réglage de recherche ouvre la lecture de la clé exacte.
+            cursor.execute("SELECT set_config('app.api_key_lookup', 'on', true)")
+            cursor.execute(
+                "SELECT organization_id FROM api_keys WHERE key_hash = %s", (tenants.key_hash_a,)
+            )
+            rows = cursor.fetchall()
+            assert len(rows) == 1
+            assert rows[0][0] == tenants.organization_a
+
+            # 3. Le réglage n'ouvre rien d'autre : les autres tables tenant
+            #    restent fermées sans contexte.
+            cursor.execute("SELECT count(*) FROM suppliers")
+            assert cursor.fetchone()[0] == 0
+
+        # 4. Transaction-scoped : la fin de la transaction referme la brèche.
+        connection.commit()
+        with connection.cursor() as cursor:
+            _set_tenant(connection, None)
+            cursor.execute("SELECT count(*) FROM api_keys")
+            assert cursor.fetchone()[0] == 0
+
+            # 5. Avec le contexte tenant, la politique classique reprend : la
+            #    clé de SON organisation, et rien d'autre.
+            _set_tenant(connection, tenants.organization_a)
+            cursor.execute("SELECT count(*) FROM api_keys")
+            assert cursor.fetchone()[0] == 1
+            cursor.execute(
+                "SELECT count(*) FROM api_keys WHERE organization_id = %s",
+                (tenants.organization_b,),
+            )
+            assert cursor.fetchone()[0] == 0
 
 
 def test_each_tenant_only_reads_its_own_rows(cluster: Cluster, tenants: Tenants, app_connection) -> None:

@@ -75,7 +75,7 @@ def get_audit_integrity_certificate(
     db: Session = DATABASE_DEPENDENCY,
 ) -> AuditIntegrityCertificateResponse:
     """Génère un certificat d'intégrité cryptographique scellé pour la piste d'audit."""
-    org_name = principal.membership_view.organization.name or "Organisation Abonnée"
+    org_name = principal.organization.name or "Organisation Abonnée"
     try:
         return generate_cryptographic_audit_certificate(
             db=db,

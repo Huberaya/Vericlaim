@@ -50,16 +50,19 @@ def create_api_key(
     db: Session = DATABASE_DEPENDENCY,
 ) -> ApiKeyCreatedResponse:
     """Generates a secure API key for programmatic B2B integration."""
-    return create_organization_api_key(
-        db,
-        organization_id=principal.organization_id,
-        actor_user_id=principal.user_id,
-        name=body.name,
-        scopes=body.scopes,
-        rate_limit_per_minute=body.rate_limit_per_minute,
-        expires_in_days=body.expires_in_days,
-        req_id=request_id_from_request(request),
-    )
+    try:
+        return create_organization_api_key(
+            db,
+            organization_id=principal.organization_id,
+            actor_user_id=principal.user_id,
+            name=body.name,
+            scopes=body.scopes,
+            rate_limit_per_minute=body.rate_limit_per_minute,
+            expires_in_days=body.expires_in_days,
+            req_id=request_id_from_request(request),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
 
 
 @router.get("/api-keys", response_model=list[ApiKeySummary])

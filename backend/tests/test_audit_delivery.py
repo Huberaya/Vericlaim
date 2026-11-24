@@ -32,10 +32,14 @@ def test_historical_legacy_hashes_are_readable_without_rewriting():
             identity = authenticate_client(client, role_code="analyst")
             with SessionLocal() as db:
                 timestamp = datetime.now(timezone.utc)
+                # E-08 : le format à jointure `:` n'est plus accepté que pour
+                # les événements antérieurs à la bascule ; la ligne historique
+                # fabriquée ici doit donc porter un horodatage historique.
+                historical_timestamp = datetime(2026, 1, 15, 12, 0, 0, tzinfo=timezone.utc)
                 payload_hash = compute_payload_sha256({})
-                legacy_hash = compute_event_hash(identity.organization_id, "historical", None, "old", normalize_iso_datetime(timestamp), payload_hash, None)
+                legacy_hash = compute_event_hash(identity.organization_id, "historical", None, "old", normalize_iso_datetime(historical_timestamp), payload_hash, None)
                 db.add(AuditEvent(organization_id=identity.organization_id, entity_type="historical", action="old",
-                    occurred_at=timestamp, payload_json={}, payload_sha256=payload_hash, event_hash=legacy_hash))
+                    occurred_at=historical_timestamp, payload_json={}, payload_sha256=payload_hash, event_hash=legacy_hash))
                 db.commit()
                 event = append_audit_event(db, organization_id=identity.organization_id, actor_user_id=identity.user_id,
                     entity_type="new", entity_id=None, action="new", payload={}, occurred_at=timestamp)

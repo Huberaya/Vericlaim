@@ -424,6 +424,7 @@ def test_production_like_configuration_refuses_to_start_with_dev_login_enabled(m
     monkeypatch.setenv("OIDC_ISSUER", "https://idp.example.test")
     monkeypatch.setenv("OIDC_CLIENT_ID", "vericlaim")
     monkeypatch.setenv("OIDC_REDIRECT_URI", "https://app.example.test/auth/callback")
+    monkeypatch.setenv("METRICS_AUTH_TOKEN", "scraping-token-for-tests-0002")
 
     with pytest.raises(RuntimeError, match="AUTH_DEV_LOGIN_ENABLED"):
         config_module.get_settings()

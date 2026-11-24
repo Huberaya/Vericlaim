@@ -79,7 +79,7 @@ def _member_view_from_mutation(
 ) -> OrganizationMemberView:
     return OrganizationMemberView(
         membership=membership,
-        organization=principal.membership_view.organization,
+        organization=principal.organization,
         role=role,
         user=user,
     )
@@ -122,7 +122,7 @@ def create_my_organization(
 def current_organization(
     principal: TenantPrincipal = Depends(require_permission("organization:read")),
 ) -> OrganizationResponse:
-    return present_organization(principal.membership_view.organization)
+    return present_organization(principal.organization)
 
 
 @router.patch("/current", response_model=OrganizationResponse)
@@ -132,7 +132,7 @@ def update_current_organization(
     principal: TenantPrincipal = Depends(require_permission("organization:manage", csrf_protected=True)),
     db: Session = Depends(get_db, scope="function"),
 ) -> OrganizationResponse:
-    organization = update_organization_name(db, principal.membership_view.organization, name=body.name)
+    organization = update_organization_name(db, principal.organization, name=body.name)
     append_audit_event(
         db,
         organization_id=principal.organization_id,

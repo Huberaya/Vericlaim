@@ -56,11 +56,19 @@ alembic current
 
 ### SSO, organisation et accès au moteur
 
-Le moteur n’est plus public : `POST /api/v1/engine/evaluate` exige une session SSO, une organisation active, la permission `audit:run` et un en-tête CSRF. `GET /api/v1/engine/rules` exige la permission `rules:read`.
+Le moteur n’est plus public : `POST /api/v1/engine/evaluate` exige une session SSO (ou une clé API — voir ci-dessous), une organisation active, la permission `audit:run` et, pour les sessions cookie, un en-tête CSRF. `GET /api/v1/engine/rules` exige la permission `rules:read`.
 
-En staging/production, définir obligatoirement un `AUTH_SESSION_SECRET` aléatoire non-placeholder (au moins 32 caractères), `AUTH_COOKIE_SECURE=true`, `FRONTEND_URL`, `CORS_ORIGINS`, `OIDC_ISSUER`, `OIDC_CLIENT_ID` et `OIDC_REDIRECT_URI`. Les URLs doivent être HTTPS, le callback OIDC doit utiliser l’hôte frontend et les wildcards CORS sont refusés. Aucun mot de passe local ni contournement de développement n’est fourni.
+En staging/production, définir obligatoirement un `AUTH_SESSION_SECRET` aléatoire non-placeholder (au moins 32 caractères), `AUTH_COOKIE_SECURE=true`, `FRONTEND_URL`, `CORS_ORIGINS`, `OIDC_ISSUER`, `OIDC_CLIENT_ID` et `OIDC_REDIRECT_URI`. Les URLs doivent être HTTPS, le callback OIDC doit utiliser l’hôte frontend et les wildcards CORS sont refusés. Aucun mot de passe local ni contournement de développement n’est fourni. La procédure de mise en service d’un tenant IdP réel (Clerk, Azure Entra ID, Keycloak, Auth0) et sa checklist sont décrites dans [`docs/operations/integration-tenant-idp-reel.md`](docs/operations/integration-tenant-idp-reel.md).
 
 Le flux et les routes sont détaillés dans [`docs/architecture/ch02-identity-tenancy.md`](docs/architecture/ch02-identity-tenancy.md). Une invitation crée un membership `invited`; l’envoi d’e-mail reste à connecter à un service externe et n’est pas prétendu comme effectué.
+
+### Authentification machine (clés API), limitation de débit et surface publique
+
+Les requêtes d’intégration s’authentifient par **clé API** (`X-API-Key: vc_live_...` ou `Authorization: Bearer vc_live_...`), créée via `POST /api/v1/enterprise/api-keys` (`organization:manage`). Une clé ne porte que des périmètres *machine* (`documents:*`, `catalog:*`, `evidence:*`, `audit:*`, `rules:read`) — jamais l’administration des membres, des validations humaines ou de l’organisation. Une requête qui présente une clé n’est jamais réauthentifiée par cookie ; le CSRF n’exige que les sessions cookie. La valeur `rate_limit_per_minute` de la clé est contractuelle et toujours appliquée.
+
+Les mutations et `POST /api/v1/engine/evaluate` sont en outre bornées par fenêtre (par session ou IP ; `API_RATE_LIMIT_*`, désactivable par `API_RATE_LIMIT_ENABLED=false`, hors test où la limitation est off par défaut). Limiteur en mémoire par processus : avec plusieurs réplicas, le plafond réel est multiplié par leur nombre.
+
+La documentation interactive (`/docs`, `/openapi.json`) est fermée par défaut en staging/production (`API_DOCS_ENABLED=true` pour l’ouvrir explicitement), et `/metrics` exige un jeton de scrape (`METRICS_AUTH_TOKEN`, obligatoire en staging/production). Voir [`docs/audits/2026-11-21-security-quality-audit.md`](docs/audits/2026-11-21-security-quality-audit.md).
 
 ### Parcours documentaire persistant sécurisé
 

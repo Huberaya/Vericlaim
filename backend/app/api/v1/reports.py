@@ -145,7 +145,7 @@ def export_pdf_report(
 ) -> Response:
     """Génère et télécharge un rapport d'audit réglementaire au format PDF."""
     eval_response = payload.evaluation_response
-    org_name = principal.membership_view.organization.name or "Organisation Abonnée"
+    org_name = principal.organization.name or "Organisation Abonnée"
 
     if eval_response is None:
         if not payload.analysis_id:
@@ -187,7 +187,7 @@ def export_regulatory_dossier(
 ) -> Response:
     """Génère l'archive ZIP complète du dossier probatoire (PDF + JSON + CSV + README)."""
     eval_response = payload.evaluation_response
-    org_name = principal.membership_view.organization.name or "Organisation Abonnée"
+    org_name = principal.organization.name or "Organisation Abonnée"
 
     if eval_response is None:
         if not payload.analysis_id:
