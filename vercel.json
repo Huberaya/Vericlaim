@@ -33,6 +33,12 @@
       }
     },
     {
+      "source": "/readyz",
+      "destination": {
+        "service": "backend"
+      }
+    },
+    {
       "source": "/docs",
       "destination": {
         "service": "backend"
