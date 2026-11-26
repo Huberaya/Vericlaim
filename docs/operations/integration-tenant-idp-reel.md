@@ -121,15 +121,25 @@ couverts en CI sur le fournisseur local) :
 3. ✔ Refus d'un e-mail non vérifié → `401`, aucune session créée.
 4. ✔ Un code d'autorisation rejoué est refusé ; PKCE vérifié côté fournisseur.
 5. ✔ Rotation de clés JWKS transparente (scénario automatisé).
-6. **Connexion depuis la Preview Vercel** (point ouvert de la recette) : exécuter le parcours réel sur `*.vercel.app`.
-7. **Spécificités du fournisseur réel** (point ouvert « tenant Clerk ») :
-   claims réellement émis (`email_verified`, `azp` si audience multiple),
-   `sub` stable, et test de deux comptes distincts.
-8. Journal d'audit : `membership.activated_by_sso` visible pour les
-   memberships activés.
-9. Entrer les identifiants tenant et la date d'exécution dans le registre de
-   recette (`docs/infrastructure/12-registre-anomalies.md` pour toute
-   anomalie constatée).
+6. ✔ **Connexion depuis Vercel** (point ouvert de la recette) — **fait le
+   26/11/2026** sur `https://vericlaim-nine.vercel.app` (déploiement
+   production, domaine `*.vercel.app`) : bouton SSO → Clerk → GitHub OAuth →
+   retour authentifié, session ouverte, organisation provisionnée. Les
+   variables OIDC sont posées pour *Preview* et *Production* ; une Preview de
+   branche n'a pas été exercée séparément.
+7. **Spécificités du fournisseur réel** (point ouvert « tenant Clerk ») —
+   **prouvé pour le compte pilote** : `sub` Clerk persisté
+   (`users.external_subject`, stable et unique contraint), `identity_provider`
+   = l'issuer réel, e-mail vérifié exigé au provisionnement. Le **test de deux
+   comptes distincts** n'est pas exécuté (décision du 26/11 : comptes
+   supplémentaires reportés à l'ouverture réelle).
+8. Journal d'audit — **partiel** : `organization.created` tracé sur le tenant
+   réel ; `membership.activated_by_sso` est prouvé en CI (E2E) et
+   apparaîtra au premier login d'un membre **pré-invité** (invitations
+   reportées à l'ouverture réelle). Voir `../operations/cloture-pilote-clerk.md`.
+9. ✔ Identifiants tenant et date d'exécution consignés — registre de clôture
+   `../operations/cloture-pilote-clerk.md` (26/11/2026) ; anomalies dans
+   `../infrastructure/12-registre-anomalies.md` (A-15).
 
 ## 6. Dépannage
 
