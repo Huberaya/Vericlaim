@@ -33,6 +33,7 @@ base d'un raisonnement : elle est close sur une observation.
 | A-12 | Le job CI de recette ne pouvait pas s'installer (python 3.13 vs wheels `pgserver`) | P1 | **corrigé** |
 | A-14 | Le harnais laissait un serveur Uvicorn orphelin après toute exception | P1 | **corrigé** |
 | A-13 | Échec CI intermittent du parcours de recette, avec un cas établi de **succès d'import non durable** | **P0** | **corrigée** — cause première : commit postérieur à la réponse (§ voir `15`) |
+| A-15 | `/readyz` inaccessible à travers le domaine Vercel (routage plateforme `vercel.json`) | P2 | **corrigé** — PR #19 (`28205ac`), preuve le 24/11/2026 |
 
 ---
 
@@ -739,6 +740,33 @@ plausible** de l'intermittence : un orphelin d'un run peut gêner le suivant. Il
 désormais impossible, et 10 runs consécutifs passent. Cela ne **prouve** pas que
 A-13 était causée par là — les échecs CI observés étaient sur des runners neufs,
 où aucun orphelin préalable n'existe. A-13 reste donc ouverte.
+
+---
+
+## A-15 — `/readyz` inaccessible à travers le domaine Vercel
+
+**Sévérité : P2 (sonde d'exploitation ; aucune fonctionnalité utilisateur).**
+**Statut : corrigé.**
+
+**Observation.** Le 24/11/2026, sur `https://vericlaim-nine.vercel.app`, `GET
+/readyz` renvoyait un **404 HTML Next.js** avec l'en-tête
+`x-vercel-error: DNS_HOSTNAME_RESOLVED_PRIVATE`, alors que `/healthz` et
+`/api/*` répondaient normalement.
+
+**Cause vérifiée.** Le routage plateforme `vercel.json` (topologie
+multi-services backend/frontend) n'expédie vers le backend que
+`/api/:path*`, `/healthz`, `/docs` et `/openapi.json` ; `/readyz` tombait dans
+le catch-all frontend, qui ne l'a pas. Le rewrite ajouté dans
+`next.config.ts` (mission 4) n'est jamais consulté sur Vercel — le routage
+plateforme passe en amont — il reste utile en `next dev` local.
+
+**Correction.** Entrée `{ "source": "/readyz", "destination": { "service":
+"backend" } }` dans `vercel.json`, avant le catch-all (PR **#19**, merge
+`28205ac`).
+
+**Preuve.** Après merge et déploiement :
+`GET https://vericlaim-nine.vercel.app/readyz` → `200` avec
+`{"status":"ready","database":"ok", ...}`.
 
 ## Ce qui n'a pas été testé du tout
 
